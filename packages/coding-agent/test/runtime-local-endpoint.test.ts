@@ -79,6 +79,46 @@ describe("LocalRuntimeEndpoint", () => {
 		}
 	});
 
+	test("insights places --insights before -l and materializes inline insight", async () => {
+		const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
+		const out = unwrapResponse<RuntimeExecResult>(
+			await ep.request(
+				createRequest("runtime/insights", { code: "1", language: "js", insight: "export default {}" }),
+			),
+		);
+		const insightsAt = out.stdout.indexOf("--insights=");
+		const langAt = out.stdout.indexOf(" -l ");
+		expect(insightsAt).toBeGreaterThan(-1);
+		expect(langAt).toBeGreaterThan(-1);
+		expect(insightsAt).toBeLessThan(langAt);
+		expect(out.stdout.slice(insightsAt, langAt)).toContain("insight.js");
+	});
+
+	test("profile places --profiler before -l", async () => {
+		const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
+		const out = unwrapResponse<RuntimeExecResult>(
+			await ep.request(createRequest("runtime/profile", { code: "1", language: "js", mode: "cpusampling" })),
+		);
+		const profilerAt = out.stdout.indexOf("--profiler=cpusampling");
+		const langAt = out.stdout.indexOf(" -l ");
+		expect(profilerAt).toBeGreaterThan(-1);
+		expect(langAt).toBeGreaterThan(-1);
+		expect(profilerAt).toBeLessThan(langAt);
+	});
+
+	test("version parsing strips a name prefix from --version output", async () => {
+		const prefixedBin = path.join(dir, "prefixed");
+		await fs.writeFile(
+			prefixedBin,
+			`#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Elide 9.9.9-fake (build abc)"; exit 0; fi\necho "ARGS:$@"\n`,
+			{ mode: 0o755 },
+		);
+		const ep = new LocalRuntimeEndpoint({ explicitPath: prefixedBin, autoDownload: false });
+		const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
+		expect(out.version).toBe("9.9.9-fake");
+		expect(out.version).not.toContain("Elide");
+	});
+
 	test("timeout kills the process and reports killed", async () => {
 		const slowBin = path.join(dir, "slow");
 		await fs.writeFile(slowBin, `#!/bin/sh\nsleep 5\n`, { mode: 0o755 });

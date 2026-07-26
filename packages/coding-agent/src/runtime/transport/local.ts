@@ -23,6 +23,7 @@ import type { RuntimeEndpoint } from "../service";
 export interface LocalEndpointOptions {
 	explicitPath?: string;
 	autoDownload?: boolean;
+	/** Environment used for binary resolution and for spawned runtime processes. Defaults to `process.env`. */
 	env?: NodeJS.ProcessEnv;
 	onProgress?: (message: string) => void;
 	/** Injectable for tests. */
@@ -92,7 +93,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			return { available: false, guidance: MISSING_GUIDANCE, protocolVersion: RUNTIME_PROTOCOL_VERSION };
 		}
 		const result = await this.spawn([found.binaryPath, "--version"], {});
-		const version = result.stdout.trim().split(/\s+/)[0] || undefined;
+		const version = parseVersion(result.stdout);
 		return {
 			available: result.exitCode === 0,
 			version,
@@ -192,13 +193,14 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		params: { stdin?: string; timeoutMs?: number; cwd?: string },
 		signal?: AbortSignal,
 	): Promise<RuntimeExecResult> {
+		if (signal?.aborted) throw new RuntimeRpcError("cancelled", "Runtime execution was cancelled.");
 		const start = performance.now();
 		const proc = Bun.spawn(argv, {
 			cwd: params.cwd,
 			stdin: params.stdin !== undefined ? new TextEncoder().encode(params.stdin) : undefined,
 			stdout: "pipe",
 			stderr: "pipe",
-			env: { ...process.env, NO_COLOR: "1" },
+			env: { ...(this.opts.env ?? process.env), NO_COLOR: "1" },
 		});
 		let killed = false;
 		const timers: ReturnType<typeof setTimeout>[] = [];
@@ -228,6 +230,14 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			signal?.removeEventListener("abort", onAbort);
 		}
 	}
+}
+
+/**
+ * Extract a semver-ish version from `--version` output, tolerating a name prefix
+ * (e.g. `Elide 9.9.9-fake (build abc)`) so no product name surfaces to users.
+ */
+function parseVersion(stdout: string): string | undefined {
+	return /\d+\.\d+[^\s]*/.exec(stdout)?.[0];
 }
 
 function inferLanguage(file: string): RuntimeLanguage {
