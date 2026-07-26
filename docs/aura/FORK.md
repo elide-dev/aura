@@ -1,0 +1,25 @@
+# Aura fork inventory
+
+This repository is a fork of [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)
+(`upstream` remote). `main` is aura's mainline; upstream is merged regularly.
+
+**Merge gate:** `bun run check:ts` and the TS test suite must be green before
+and after every upstream merge.
+
+## Upstream files modified by the fork
+
+| File | Why |
+|---|---|
+| (appended by each task that edits an upstream file) | |
+
+## Fork-added directories (additive, no merge risk)
+
+- `packages/coding-agent/src/runtime/` — runtime capability core
+- `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts`
+- `packages/coding-agent/src/tools/runtime-*.ts`, `src/prompts/tools/runtime-*.md`
+- `docs/aura/`, `docs/superpowers/`
+
+## Naming rule
+
+Elide is never user-facing; the noun is "the runtime". See
+`docs/superpowers/specs/2026-07-25-aura-omp-fork-design.md`.
