@@ -13,6 +13,7 @@ and after every upstream merge.
 | `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura; profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE |
 | `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE |
 | `packages/coding-agent/src/task/discovery.ts` | TASK_AGENT_CONFIG_SOURCE derives from CONFIG_DIR_NAME (was hardcoded ".omp"; stale value filtered out all project/user agent dirs after rebrand) |
+| packages/coding-agent/package.json | bin: aura alias alongside omp |
 
 ## Fork-added directories (additive, no merge risk)
 
