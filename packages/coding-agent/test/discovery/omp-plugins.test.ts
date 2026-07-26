@@ -32,7 +32,7 @@ import {
 	clearOmpExtensionCliRoots,
 	injectOmpExtensionCliRoots,
 } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
-import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 const PROVIDER_ID = "omp-plugins";
 
@@ -234,7 +234,7 @@ test("path-like command stays rooted at the plugin package root even with a subd
 test("installed plugins under `<plugins>/node_modules/` are surfaced (e.g. via `omp plugin link`/`install`)", async () => {
 	// Simulate what `plugin install` / `plugin link` produces: a plugins root
 	// with `package.json#dependencies` and a populated `node_modules/<pkg>/`.
-	const pluginsDir = path.join(home, ".omp", "plugins");
+	const pluginsDir = path.join(home, CONFIG_DIR_NAME, "plugins");
 	const nodeModules = path.join(pluginsDir, "node_modules");
 	const installed = path.join(nodeModules, "my-installed-ext");
 	fs.mkdirSync(installed, { recursive: true });
@@ -253,7 +253,7 @@ test("installed plugins under `<plugins>/node_modules/` are surfaced (e.g. via `
 });
 
 test("project-scoped installed plugins surface project-level sub-discovery", async () => {
-	const pluginsDir = path.join(project, ".omp", "plugins");
+	const pluginsDir = path.join(project, CONFIG_DIR_NAME, "plugins");
 	const installed = path.join(pluginsDir, "node_modules", "my-project-ext");
 	fs.mkdirSync(installed, { recursive: true });
 	fs.cpSync(ext, installed, { recursive: true });
@@ -274,7 +274,7 @@ test("project-scoped installed plugins surface project-level sub-discovery", asy
 });
 
 test("disabled installed plugins do not contribute sub-discovery", async () => {
-	const pluginsDir = path.join(home, ".omp", "plugins");
+	const pluginsDir = path.join(home, CONFIG_DIR_NAME, "plugins");
 	const installed = path.join(pluginsDir, "node_modules", "my-disabled-ext");
 	fs.mkdirSync(installed, { recursive: true });
 	fs.cpSync(ext, installed, { recursive: true });
@@ -298,7 +298,7 @@ test("linked plugins (only in lockfile, not in package.json#dependencies) are su
 	// still find the package — otherwise the documented `omp install
 	// ./local-extension` workflow leaves the sibling skills/hooks/tools
 	// invisible (see PR #1498 review).
-	const pluginsDir = path.join(home, ".omp", "plugins");
+	const pluginsDir = path.join(home, CONFIG_DIR_NAME, "plugins");
 	const nodeModules = path.join(pluginsDir, "node_modules");
 	fs.mkdirSync(nodeModules, { recursive: true });
 	const linkTarget = path.join(nodeModules, "my-linked-ext");

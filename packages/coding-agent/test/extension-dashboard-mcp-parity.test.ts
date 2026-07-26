@@ -20,6 +20,7 @@ import { initializeWithSettings, reset as resetDiscoveryCache } from "@oh-my-pi/
 import { readMCPConfigFile, setMcpServerEnabled, setServerDisabled } from "@oh-my-pi/pi-coding-agent/mcp/config-writer";
 import { loadAllExtensions } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/state-manager";
 import { __resetDirsFromEnvForTests, getMCPConfigPath, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
 
 describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 	let projectDir = "";
@@ -35,9 +36,9 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		// nor the denylist reader touches the real user profile.
 		setAgentDir(userAgentDir);
 
-		await fs.mkdir(path.join(projectDir, ".omp"), { recursive: true });
+		await fs.mkdir(path.join(projectDir, CONFIG_DIR_NAME), { recursive: true });
 		await fs.writeFile(
-			path.join(projectDir, ".omp", "mcp.json"),
+			path.join(projectDir, CONFIG_DIR_NAME, "mcp.json"),
 			JSON.stringify({
 				mcpServers: {
 					"denylisted-server": { command: "echo", args: ["denylisted"] },
@@ -115,7 +116,7 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		// toggle previously only removed it from the user-level denylist, so
 		// state-manager's `server.enabled === false` check kept it disabled.
 		// setMcpServerEnabled MUST overwrite the per-server flag.
-		const projectMcpPath = path.join(projectDir, ".omp", "mcp.json");
+		const projectMcpPath = path.join(projectDir, CONFIG_DIR_NAME, "mcp.json");
 
 		await setMcpServerEnabled({
 			userPath: getMCPConfigPath("user", projectDir),
@@ -135,7 +136,7 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 	test("dashboard re-enable also clears a stale denylist entry on a config-resident server", async () => {
 		// Manually disable `active-server` via BOTH the per-server flag and the
 		// denylist, simulating a server that's been toggled off multiple ways.
-		const projectMcpPath = path.join(projectDir, ".omp", "mcp.json");
+		const projectMcpPath = path.join(projectDir, CONFIG_DIR_NAME, "mcp.json");
 		const initial = await readMCPConfigFile(projectMcpPath);
 		await Bun.write(
 			projectMcpPath,
@@ -172,7 +173,7 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 			enabled: false,
 		});
 
-		const projectConfig = await readMCPConfigFile(path.join(projectDir, ".omp", "mcp.json"));
+		const projectConfig = await readMCPConfigFile(path.join(projectDir, CONFIG_DIR_NAME, "mcp.json"));
 		expect(projectConfig.mcpServers?.["active-server"]?.enabled).toBe(false);
 
 		// The denylist is reserved for discovered (config-less) servers; a
@@ -186,7 +187,7 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 	});
 
 	test("dashboard re-enable updates the row's non-primary source mcp.json before denylisting", async () => {
-		const alternatePath = path.join(projectDir, ".omp", ".mcp.json");
+		const alternatePath = path.join(projectDir, CONFIG_DIR_NAME, ".mcp.json");
 		await Bun.write(
 			alternatePath,
 			JSON.stringify({

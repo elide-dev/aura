@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getProjectAgentDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getProjectAgentDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -283,7 +283,7 @@ describe("Settings.reloadForCwd", () => {
 		});
 		it("does not copy unedited roles from other project settings providers", async () => {
 			await Bun.write(
-				path.join(scopedProject, ".omp", "settings.json"),
+				path.join(scopedProject, CONFIG_DIR_NAME, "settings.json"),
 				JSON.stringify({ modelRoles: { default: "anthropic/external" } }),
 			);
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });
@@ -360,7 +360,7 @@ describe("Settings.reloadForCwd", () => {
 		it("keeps JSON-backed project roles cleared across later assignments and reload", async () => {
 			await Bun.write(path.join(agentDir, "config.yml"), "modelRoles:\n  default: anthropic/global\n");
 			await Bun.write(
-				path.join(scopedProject, ".omp", "settings.json"),
+				path.join(scopedProject, CONFIG_DIR_NAME, "settings.json"),
 				JSON.stringify({ modelRoles: { default: "anthropic/project" } }),
 			);
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as url from "node:url";
 import {
 	__resetProfileSnapshotForTests,
+	APP_NAME,
 	getActiveProfile,
 	getAgentDbPath,
 	getAgentDir,
@@ -148,16 +149,16 @@ describe("profile directories", () => {
 		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
 		// Named profiles only adopt XDG when their *own* XDG path already exists,
 		// so the profile location stays stable across activations.
-		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "omp", "profiles", "work"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "omp", "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, APP_NAME, "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, APP_NAME, "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, APP_NAME, "profiles", "work"), { recursive: true });
 
 		setProfile("work");
 
-		expect(getAgentDbPath()).toBe(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work", "agent.db"));
-		expect(getSessionsDir()).toBe(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work", "sessions"));
+		expect(getAgentDbPath()).toBe(path.join(process.env.XDG_DATA_HOME, APP_NAME, "profiles", "work", "agent.db"));
+		expect(getSessionsDir()).toBe(path.join(process.env.XDG_DATA_HOME, APP_NAME, "profiles", "work", "sessions"));
 		expect(getPythonGatewayDir()).toBe(
-			path.join(process.env.XDG_STATE_HOME, "omp", "profiles", "work", "python-gateway"),
+			path.join(process.env.XDG_STATE_HOME, APP_NAME, "profiles", "work", "python-gateway"),
 		);
 	});
 
@@ -178,9 +179,9 @@ describe("profile directories", () => {
 		// Later, the base XDG app dir materializes (e.g. via `omp config init-xdg`
 		// migrating only the default-profile data). The named profile must stay
 		// in its original location until the user explicitly migrates it.
-		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "omp"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "omp"), { recursive: true });
-		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "omp"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, APP_NAME), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, APP_NAME), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, APP_NAME), { recursive: true });
 
 		setProfile(undefined);
 		setProfile("work");
@@ -253,17 +254,21 @@ describe("profile directories", () => {
 });
 
 describe("profile env + name validation", () => {
-	it("honors OMP_PROFILE precedence and treats empty/default as the default profile", () => {
-		// OMP_PROFILE is canonical and wins over the legacy PI_PROFILE fallback.
-		expect(resolveProfileEnv("work", "other")).toBe("work");
-		// PI_PROFILE is consulted only when OMP_PROFILE is undefined.
-		expect(resolveProfileEnv(undefined, "work")).toBe("work");
-		// An explicitly-empty OMP_PROFILE selects the default profile; it must NOT
-		// fall through to the lower-precedence PI_PROFILE.
-		expect(resolveProfileEnv("", "work")).toBeUndefined();
-		expect(resolveProfileEnv("   ", "work")).toBeUndefined();
-		expect(resolveProfileEnv("default", "work")).toBeUndefined();
-		expect(resolveProfileEnv(undefined, undefined)).toBeUndefined();
+	it("honors AURA_PROFILE > OMP_PROFILE > PI_PROFILE precedence and treats empty/default as the default profile", () => {
+		// AURA_PROFILE is canonical and wins over both legacy fallbacks.
+		expect(resolveProfileEnv("work", "other", "third")).toBe("work");
+		// OMP_PROFILE wins over PI_PROFILE when AURA_PROFILE is undefined.
+		expect(resolveProfileEnv(undefined, "work", "other")).toBe("work");
+		// PI_PROFILE is consulted only when AURA_PROFILE and OMP_PROFILE are undefined.
+		expect(resolveProfileEnv(undefined, undefined, "work")).toBe("work");
+		// An explicitly-empty AURA_PROFILE selects the default profile; it must NOT
+		// fall through to the lower-precedence OMP_PROFILE/PI_PROFILE.
+		expect(resolveProfileEnv("", "work", "other")).toBeUndefined();
+		expect(resolveProfileEnv("   ", "work", "other")).toBeUndefined();
+		expect(resolveProfileEnv("default", "work", "other")).toBeUndefined();
+		// Same explicit-empty-selects-default semantics one level down for OMP_PROFILE.
+		expect(resolveProfileEnv(undefined, "", "work")).toBeUndefined();
+		expect(resolveProfileEnv(undefined, undefined, undefined)).toBeUndefined();
 	});
 
 	it("rejects uppercase profile names so isolation is filesystem-independent", () => {
@@ -431,7 +436,7 @@ describe("dirs module import behavior", () => {
 			// import time — the exact ordering refreshDirsFromEnv() guards.
 			await Bun.write(path.join(agentDir, ".env"), `XDG_STATE_HOME=${xdgStateRoot}\n`);
 			// Named profiles only adopt XDG when their own XDG path already exists.
-			const xdgProfileRoot = path.join(xdgStateRoot, "omp", "profiles", "work");
+			const xdgProfileRoot = path.join(xdgStateRoot, APP_NAME, "profiles", "work");
 			await fs.mkdir(xdgProfileRoot, { recursive: true });
 
 			const probePath = path.join(root, "probe.ts");

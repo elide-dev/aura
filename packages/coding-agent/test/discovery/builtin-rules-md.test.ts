@@ -15,7 +15,7 @@ import { type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 // Importing discovery registers all providers as a side effect.
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 let tempDir: string;
 let home: string;
@@ -80,7 +80,7 @@ test("user ~/.omp/agent/RULES.md becomes an alwaysApply rule", async () => {
 });
 
 test("project .omp/RULES.md becomes an alwaysApply rule", async () => {
-	writeFile(path.join(project, ".omp", "RULES.md"), "# Project rule\nAlways say hi.\n");
+	writeFile(path.join(project, CONFIG_DIR_NAME, "RULES.md"), "# Project rule\nAlways say hi.\n");
 
 	const rules = await loadNativeRules({ cwd: project, home, repoRoot: project });
 
@@ -93,19 +93,19 @@ test("project .omp/RULES.md becomes an alwaysApply rule", async () => {
 test("project RULES.md is found walking up from a sub-package cwd", async () => {
 	const subPkg = path.join(project, "packages", "app");
 	fs.mkdirSync(subPkg, { recursive: true });
-	writeFile(path.join(project, ".omp", "RULES.md"), "# Repo-wide sticky rule\n");
+	writeFile(path.join(project, CONFIG_DIR_NAME, "RULES.md"), "# Repo-wide sticky rule\n");
 
 	const rules = await loadNativeRules({ cwd: subPkg, home, repoRoot: project });
 
 	const projectRule = rules.find(r => r._source.level === "project" && r.name === "RULES@project");
 	expect(projectRule).toBeDefined();
 	expect(projectRule?.alwaysApply).toBe(true);
-	expect(projectRule?.path).toBe(path.join(project, ".omp", "RULES.md"));
+	expect(projectRule?.path).toBe(path.join(project, CONFIG_DIR_NAME, "RULES.md"));
 });
 
 test("user and project sticky RULES.md both survive public capability dedup", async () => {
 	const userRulesPath = path.join(home, ".omp", "agent", "RULES.md");
-	const projectRulesPath = path.join(project, ".omp", "RULES.md");
+	const projectRulesPath = path.join(project, CONFIG_DIR_NAME, "RULES.md");
 	const userRuleText = "User sticky rule: keep the personal safety checklist active.\n";
 	const projectRuleText = "Project sticky rule: require repo-local release notes.\n";
 	writeFile(userRulesPath, userRuleText);
