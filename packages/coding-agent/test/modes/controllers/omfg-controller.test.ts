@@ -226,7 +226,9 @@ describe("OmfgController", () => {
 		expect(runEphemeralTurn.mock.calls[1]?.[0].promptText).toContain(
 			"No assistant history surface matched condition",
 		);
-		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-no-any.md")).exists()).toBe(true);
+		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-no-any.md")).exists()).toBe(
+			true,
+		);
 	});
 
 	it("asks before saving when validation never confirms a match", async () => {
@@ -248,7 +250,9 @@ describe("OmfgController", () => {
 		expect(runEphemeralTurn).toHaveBeenCalledTimes(3);
 		expect(harness.showHookConfirm.mock.calls[0]?.[0]).toBe("Validation");
 		expect(harness.showHookSelector).not.toHaveBeenCalled();
-		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "no-match.md")).exists()).toBe(false);
+		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "no-match.md")).exists()).toBe(
+			false,
+		);
 	});
 
 	it("lets the user amend from the save selector before writing the rule", async () => {
@@ -283,10 +287,12 @@ describe("OmfgController", () => {
 		expect(runEphemeralTurn.mock.calls[1]?.[0].promptText).toContain(
 			"Rename it and make the guidance stricter before saving.",
 		);
-		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-any-broad.md")).exists()).toBe(false);
-		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-no-explicit-any.md")).exists()).toBe(
-			true,
+		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-any-broad.md")).exists()).toBe(
+			false,
 		);
+		expect(
+			await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-no-explicit-any.md")).exists(),
+		).toBe(true);
 	});
 	it("returns to save selection when amendment input is cancelled", async () => {
 		const reply = createRule("ts-no-any", ": any|as any", "tool:edit(*.ts)");
@@ -353,6 +359,8 @@ describe("OmfgController", () => {
 		expect(harness.container.children).toHaveLength(0);
 		expect(signal?.aborted).toBe(true);
 		expect(controller.hasActiveRequest()).toBe(false);
-		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-no-any.md")).exists()).toBe(false);
+		expect(await Bun.file(path.join(harness.projectDir, CONFIG_DIR_NAME, "rules", "ts-no-any.md")).exists()).toBe(
+			false,
+		);
 	});
 });
