@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getAgentDir, isEnoent, LEGACY_CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { regexHasUnresolvableShortMatchFallback, type SecretEntry, sanitizeSecretFriendlyName } from "./obfuscator";
 import { compileSecretRegex } from "./regex";
@@ -108,13 +108,17 @@ export {
 /**
  * Load secrets from project-local and global secrets.yml files.
  * Project-local entries override global entries with matching content.
+ *
+ * The project file is `<cwd>/<CONFIG_DIR_NAME>/secrets.yml`. When that is absent
+ * the pre-rebrand `<cwd>/.omp/secrets.yml` is read instead so secrets configured
+ * before the rename keep redacting; the legacy path is read-only compatibility
+ * and the branded path always wins.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const projectPath = path.join(cwd, ".omp", "secrets.yml");
 	const globalPath = path.join(agentDir, "secrets.yml");
 
 	const globalEntries = await loadSecretsFile(globalPath);
-	const projectEntries = await loadSecretsFile(projectPath);
+	const projectEntries = await loadProjectSecretsFile(cwd);
 
 	if (globalEntries.length === 0) return projectEntries;
 	if (projectEntries.length === 0) return globalEntries;
@@ -143,6 +147,17 @@ export function collectEnvSecrets(): SecretEntry[] {
 		entries.push({ type: "plain", content: value, mode: "obfuscate" });
 	}
 	return entries;
+}
+
+/**
+ * Project secrets, branded path first and the read-only legacy `.omp` path as a
+ * fallback. A branded file that exists but parses to nothing still wins: the
+ * user rewrote it deliberately, so the legacy file must stay out of the way.
+ */
+async function loadProjectSecretsFile(cwd: string): Promise<SecretEntry[]> {
+	const brandedPath = path.join(cwd, CONFIG_DIR_NAME, "secrets.yml");
+	if (await Bun.file(brandedPath).exists()) return loadSecretsFile(brandedPath);
+	return loadSecretsFile(path.join(cwd, LEGACY_CONFIG_DIR_NAME, "secrets.yml"));
 }
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
