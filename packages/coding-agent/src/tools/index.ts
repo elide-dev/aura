@@ -59,6 +59,11 @@ import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
+import { RuntimeBuildTool } from "./runtime-build";
+import { RuntimeCheckTool } from "./runtime-check";
+import { RuntimeInsightsTool } from "./runtime-insights";
+import { RuntimeProfileTool } from "./runtime-profile";
+import { RuntimeRunTool } from "./runtime-run";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, XdevRegistry } from "./xdev";
@@ -418,6 +423,11 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	reflect: MemoryReflectTool.createIf,
 	learn: LearnTool.createIf,
 	manage_skill: ManageSkillTool.createIf,
+	run: RuntimeRunTool.createIf,
+	check: RuntimeCheckTool.createIf,
+	build: RuntimeBuildTool.createIf,
+	insights: RuntimeInsightsTool.createIf,
+	profile: RuntimeProfileTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
