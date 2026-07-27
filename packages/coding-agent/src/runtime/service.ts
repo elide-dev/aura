@@ -6,11 +6,13 @@ import {
 	type RuntimeInsightsParams,
 	type RuntimeJvmParams,
 	type RuntimeJvmResult,
+	type RuntimeLaunchDescriptor,
 	type RuntimeMethod,
 	type RuntimeProfileParams,
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
 	type RuntimeRunParams,
+	type RuntimeSpawnParams,
 	type RuntimeStatusResult,
 	unwrapResponse,
 } from "./protocol";
@@ -48,6 +50,14 @@ export class RuntimeService {
 	/** One of the six JVM flows; see {@link RuntimeJvmParams.action}. */
 	jvm(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
 		return this.call("runtime/jvm", params, signal);
+	}
+	/**
+	 * Compose the command line for a long-running flow (`debug`, `serve`) without
+	 * starting anything. The caller starts the returned descriptor through the
+	 * `hub` supervisor and owns its lifecycle; nothing here holds a process.
+	 */
+	spawn(params: RuntimeSpawnParams, signal?: AbortSignal): Promise<RuntimeLaunchDescriptor> {
+		return this.call("runtime/spawn", params, signal);
 	}
 	status(): Promise<RuntimeStatusResult> {
 		return this.call("runtime/status", undefined);

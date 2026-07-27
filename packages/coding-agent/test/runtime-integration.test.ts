@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { RuntimeService } from "../src/runtime/service";
 import { LocalRuntimeEndpoint } from "../src/runtime/transport/local";
+import { matchRuntimeEndpoint } from "../src/tools/runtime-launch";
 
 const realBin = process.env.AURA_RUNTIME_BIN ?? process.env.ELIDE_BIN ?? Bun.which("elide") ?? undefined;
 
@@ -144,5 +145,71 @@ describe.skipIf(!realBin)("runtime integration (real binary)", () => {
 			expect(r.exitCode).toBe(0);
 			expect(`${r.stdout}${r.stderr}`).toContain("java.base");
 		}, 300_000);
+	});
+
+	/**
+	 * The one live check of the `runtime/spawn` composition: that the argv the
+	 * endpoint composes actually starts a server on the pinned runtime, and that
+	 * the descriptor's own scraping rule matches the banner that runtime prints.
+	 * The process is spawned directly (not through `hub`) so this test owns the
+	 * handle and can guarantee it never leaks — the hub path is covered
+	 * separately, without a real runtime.
+	 */
+	describe("serve launch descriptor", () => {
+		test("the composed argv serves a directory and prints a scrapable endpoint", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-serve-live-"));
+			await fs.writeFile(path.join(dir, "index.html"), "<h1>aura</h1>\n");
+			// A high, unlikely-to-be-taken port; a collision shows up as a failed
+			// scrape with the runtime's own message, not as a hang.
+			const port = 41_000 + Math.floor(Math.random() * 2_000);
+			const descriptor = await svc.spawn({ mode: "serve", directory: dir, port, host: "127.0.0.1", cwd: dir });
+			expect(descriptor.argv.slice(1)).toEqual([
+				"serve",
+				dir,
+				"--no-tui",
+				"--port",
+				String(port),
+				"--host",
+				"127.0.0.1",
+			]);
+			const proc = Bun.spawn(descriptor.argv, {
+				cwd: descriptor.cwd,
+				env: { ...process.env, ...descriptor.env },
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			try {
+				// The banner lands on *stderr* on 1.4.x, which is exactly why the tool
+				// scrapes hub's merged log stream rather than one pipe. Both are read
+				// here so the test does not depend on which stream it is this release.
+				let output = "";
+				let endpoint: string | undefined;
+				const scan = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+					const decoder = new TextDecoder();
+					for await (const chunk of stream) {
+						output += decoder.decode(chunk, { stream: true });
+						endpoint ??= matchRuntimeEndpoint(output, descriptor.endpointPattern);
+						if (endpoint !== undefined) return;
+					}
+				};
+				// Raced, not awaited together: the stream that does *not* carry the
+				// banner stays open for the life of the server, so waiting on both
+				// would always burn the whole window.
+				await Promise.race([scan(proc.stdout), scan(proc.stderr), Bun.sleep(90_000)]);
+				expect(endpoint, `no endpoint scraped from:\n${output}`).toBe(`http://127.0.0.1:${port}`);
+				const res = await fetch(`http://127.0.0.1:${port}/index.html`);
+				expect(res.status).toBe(200);
+				expect(await res.text()).toContain("aura");
+			} finally {
+				// Belt and braces: a server left running would hold the port for the
+				// rest of the suite and beyond it.
+				proc.kill("SIGTERM");
+				const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(2_000).then(() => false)]);
+				if (!exited) proc.kill("SIGKILL");
+				await proc.exited;
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		}, 180_000);
 	});
 });

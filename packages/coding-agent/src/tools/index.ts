@@ -67,9 +67,11 @@ import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { RuntimeBuildTool } from "./runtime-build";
 import { RuntimeCheckTool } from "./runtime-check";
+import { RuntimeDebugTool } from "./runtime-debug";
 import { RuntimeInsightsTool } from "./runtime-insights";
 import { RuntimeProfileTool } from "./runtime-profile";
 import { RuntimeRunTool } from "./runtime-run";
+import { RuntimeServeTool } from "./runtime-serve";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, XdevRegistry } from "./xdev";
@@ -434,6 +436,8 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	build: RuntimeBuildTool.createIf,
 	insights: RuntimeInsightsTool.createIf,
 	profile: RuntimeProfileTool.createIf,
+	runtime_debug: RuntimeDebugTool.createIf,
+	serve: RuntimeServeTool.createIf,
 	jvm_run: JvmRunTool.createIf,
 	jvm_disassemble: JvmDisassembleTool.createIf,
 	jvm_format: JvmFormatTool.createIf,

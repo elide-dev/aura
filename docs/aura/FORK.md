@@ -16,8 +16,8 @@ and after every upstream merge.
 | `packages/coding-agent/package.json` | bin: aura alias alongside omp |
 | `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` theme in `BUILTIN_THEMES` (import + entry), mirroring `dark`/`light` |
 | `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`); `theme.light` unchanged; `runtime.*` settings (`runtime.enabled`, `runtime.autoDownload`, `runtime.path`) added to the `tools` tab |
-| `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`; imports the five `Runtime*Tool` classes and registers `run`/`check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates; also imports the six `Jvm*Tool` classes and registers `jvm_run`/`jvm_disassemble`/`jvm_format`/`jvm_jar`/`jvm_deps`/`jvm_javadoc` the same way (same `runtime.enabled` gate, all `discoverable`) |
-| `packages/coding-agent/src/tools/builtin-names.ts` | appended `run`, `check`, `build`, `insights`, `profile` and the six JVM names `jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc` to `BUILTIN_TOOL_NAMES` (no collision with the `search`→`grep` / `find`→`glob` legacy alias map; the `jvm_` prefix is the user-facing name, never a product name) |
+| `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`; imports the five `Runtime*Tool` classes and registers `run`/`check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates; also imports the six `Jvm*Tool` classes and registers `jvm_run`/`jvm_disassemble`/`jvm_format`/`jvm_jar`/`jvm_deps`/`jvm_javadoc` the same way (same `runtime.enabled` gate, all `discoverable`); plus `RuntimeDebugTool`/`RuntimeServeTool` registered as `runtime_debug`/`serve` on the same gate |
+| `packages/coding-agent/src/tools/builtin-names.ts` | appended `run`, `check`, `build`, `insights`, `profile` and the six JVM names `jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc` to `BUILTIN_TOOL_NAMES` (no collision with the `search`→`grep` / `find`→`glob` legacy alias map; the `jvm_` prefix is the user-facing name, never a product name), then `runtime_debug` and `serve` — `runtime_debug` is deliberately NOT `debug`, which upstream already owns for the interactive stepping debugger (`tools/debug.ts`) |
 | `packages/coding-agent/src/tools/essential-tools.ts` | added `run`, `check`, `build` to `ESSENTIAL_BUILTIN_TOOL_NAMES` so they stay top-level and a re-register cannot demote them (issue #5764 guard); `insights`/`profile` and all six `jvm_*` tools stay `discoverable` (they are reached through discovery, not the always-on schema) |
 | `packages/coding-agent/src/config/settings.ts` | project config resolves to `<cwd>/${CONFIG_DIR_NAME}/config.yml` (was a hardcoded `.omp`): `#projectConfigPath()` is the sole write target, `#loadProjectConfigYaml()` falls back to `<cwd>/.omp/config.yml` for reads (narrowed to the `modelRoles` slice at the `#loadProjectSettings` call site) and seeds the first branded write so legacy keys carry forward. Still required after the legacy-base work — it is the only path that reads a legacy `config.yml` at all |
 | `packages/coding-agent/src/discovery/omp-extension-roots.ts` | project extension roots read `<cwd>/${CONFIG_DIR_NAME}/settings.json` (was a hardcoded `.omp`) with a `.omp` read fallback via `readProjectSettingsExtensions`; `scopeDirs` folded into the call site. Still required after the legacy-base work: the legacy base contributes no settings documents, so this `extensions` slice remains the only `.omp/settings.json` compat |
@@ -68,7 +68,9 @@ read fallback, writes never legacy); keep those alongside upstream's.
 - `packages/coding-agent/src/runtime/` — runtime capability core
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts`
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts`
-- `packages/coding-agent/src/tools/runtime-*.ts`, `src/prompts/tools/runtime-*.md`
+- `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
+  starts runtime launch descriptors through the upstream `hub` supervisor rather than
+  keeping a process registry of its own), `src/prompts/tools/runtime-*.md`
 - `packages/coding-agent/src/modes/theme/aura.json` — the `aura` built-in theme
   registered by the `theme.ts` row above
 - `packages/coding-agent/test/runtime-*.test.ts`, `test/doctor-cli.test.ts`,
@@ -82,7 +84,7 @@ read fallback, writes never legacy); keep those alongside upstream's.
   non-empty `.aura/` never masks a legacy single-file surface, the legacy
   executable surfaces (`hooks/`, `tools/`) DO load by design, legacy settings
   documents never become live, writes stay branded
-- `docs/tools/{run,check,build,insights,profile}.md` — root docs pages required by the
+- `docs/tools/{run,check,build,insights,profile,runtime_debug,serve}.md` — root docs pages required by the
   `omp://` docs-coverage guard (`test/internal-urls/docs-tool-coverage.test.ts` asserts one
   `docs/tools/<name>.md` per entry in `BUILTIN_TOOL_NAMES`)
 - `docs/aura/`, `docs/superpowers/`

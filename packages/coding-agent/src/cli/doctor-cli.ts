@@ -582,8 +582,9 @@ export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint",
  * drift test can enumerate it and compare against the real registry.
  */
 const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | undefined> = {
-	// RuntimeRunTool/CheckTool/BuildTool/InsightsTool/ProfileTool + the six Jvm*Tool
-	// classes all gate on `runtime.enabled`.
+	// RuntimeRunTool/CheckTool/BuildTool/InsightsTool/ProfileTool, the two launch
+	// tools (RuntimeDebugTool/RuntimeServeTool), and the six Jvm*Tool classes all
+	// gate on `runtime.enabled`.
 	...Object.fromEntries(
 		[
 			"run",
@@ -591,6 +592,8 @@ const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | und
 			"build",
 			"insights",
 			"profile",
+			"runtime_debug",
+			"serve",
 			"jvm_run",
 			"jvm_disassemble",
 			"jvm_format",

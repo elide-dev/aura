@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,17 +10,21 @@ import {
 	okResponse,
 	RUNTIME_PROTOCOL_VERSION,
 	type RuntimeBuildParams,
+	type RuntimeDebugProtocol,
+	type RuntimeEndpointRule,
 	type RuntimeExecResult,
 	type RuntimeInsightsParams,
 	type RuntimeJvmAction,
 	type RuntimeJvmParams,
 	type RuntimeJvmResult,
 	type RuntimeLanguage,
+	type RuntimeLaunchDescriptor,
 	type RuntimeProfileParams,
 	RuntimeRpcError,
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
 	type RuntimeRunParams,
+	type RuntimeSpawnParams,
 	type RuntimeStatusResult,
 } from "../protocol";
 import { provisionRuntime } from "../provision";
@@ -302,6 +307,8 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 					return okResponse(req.id, await this.execProfile(req.params as RuntimeProfileParams, signal));
 				case "runtime/jvm":
 					return okResponse(req.id, await this.execJvm(req.params as RuntimeJvmParams, signal));
+				case "runtime/spawn":
+					return okResponse(req.id, await this.describeSpawn(req.params as RuntimeSpawnParams));
 				case "runtime/check":
 					return okResponse(req.id, await this.execBuild(req.params as RuntimeBuildParams, [], signal));
 				case "runtime/build": {
@@ -650,6 +657,39 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		});
 	}
 
+	// ── runtime/spawn ────────────────────────────────────────────────────────
+	// Composition only: resolve the binary, validate the caller's paths, and
+	// return the command line plus the rules for recognizing the endpoint the
+	// process will print. No process is started here and no temp directory is
+	// created — a long-running process outlives its request, so anything the
+	// endpoint materialized for it would be deleted out from under it. That is
+	// also why `debug` has no inline-code mode, and why the JVM env hygiene and
+	// the shared workdir do not apply: these flows run the user's own files, in
+	// the user's own directory, in place.
+
+	private async describeSpawn(params: RuntimeSpawnParams): Promise<RuntimeLaunchDescriptor> {
+		const cwd = path.resolve(params.cwd ?? process.cwd());
+		const { binaryPath, source } = await this.ensureBinary();
+		const composed =
+			params.mode === "debug"
+				? await debugArgv(params, cwd)
+				: params.mode === "serve"
+					? await serveArgv(params, cwd)
+					: (() => {
+							throw new RuntimeRpcError("invalid-params", `Unknown spawn mode ${String(params.mode)}.`);
+						})();
+		return {
+			argv: [binaryPath, ...composed.args],
+			cwd,
+			// An overlay, not a snapshot: the supervisor merges it over its own
+			// environment. Only the colour suppression the scraping relies on travels.
+			env: { NO_COLOR: "1" },
+			endpointPattern: composed.endpointPattern,
+			source,
+			shimWarning: source === "path" ? PATH_SHIM_WARNING : undefined,
+		};
+	}
+
 	private async execBuild(
 		params: RuntimeBuildParams,
 		targets: string[],
@@ -740,6 +780,105 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			signal?.removeEventListener("abort", onAbort);
 		}
 	}
+}
+
+/**
+ * Advisory attached to descriptors whose binary came from `PATH`. A packaged
+ * runtime is often installed as a small `.bin` wrapper, and a wrapper that
+ * *forks* rather than `exec`s leaves the supervised pid holding no port: stopping
+ * it may leave the real server behind. The managed install resolves to a real
+ * binary, so this is the one resolution source where the caller should say so.
+ * (The supervisor terminates the process *group*, which covers a forking wrapper
+ * in the common case — hence advisory rather than a refusal.)
+ */
+const PATH_SHIM_WARNING =
+	"The runtime binary was resolved from PATH, where it may be a wrapper script that runs the real " +
+	"binary as a child process. Stopping this job terminates the process group, which normally covers " +
+	"it; if a listener survives, check for a leftover process holding the port. Install the managed " +
+	"runtime (`aura runtime install`) to launch a real binary directly.";
+
+/** The debug flows' endpoint banners, per wire protocol. */
+const DEBUG_ENDPOINT_RULES: Record<RuntimeDebugProtocol, RuntimeEndpointRule[]> = {
+	// CDP prints a full inspector URL; the URL itself is the endpoint.
+	cdp: [{ pattern: "ws://\\S+" }],
+	// DAP prints a bare `host:port` after "listening on".
+	dap: [{ pattern: "listening on\\s+(\\S+)", group: 1 }],
+};
+
+/** `serve` prints a bare `host:port`; the scheme is implied. */
+const SERVE_ENDPOINT_RULES: RuntimeEndpointRule[] = [
+	{ pattern: "Serving static files on\\s+(\\S+)", group: 1, prefix: "http://" },
+];
+
+interface ComposedLaunch {
+	/** Command line after the binary. */
+	args: string[];
+	endpointPattern: RuntimeEndpointRule[];
+}
+
+/** `stat` of `target`, or null when it does not exist. */
+async function statOrNull(target: string): Promise<Stats | null> {
+	return await fs.stat(target).catch(() => null);
+}
+
+async function requireExistingFile(base: string, value: string | undefined, label: string): Promise<string> {
+	if (!value) throw new RuntimeRpcError("invalid-params", `${label} is required.`);
+	const resolved = path.resolve(base, value);
+	const stat = await statOrNull(resolved);
+	if (stat === null) throw new RuntimeRpcError("invalid-params", `${label} does not exist: ${resolved}`, { resolved });
+	if (!stat.isFile()) {
+		throw new RuntimeRpcError("invalid-params", `${label} is not a file: ${resolved}`, { resolved });
+	}
+	return resolved;
+}
+
+async function requireExistingDirectory(base: string, value: string | undefined, label: string): Promise<string> {
+	if (!value) throw new RuntimeRpcError("invalid-params", `${label} is required.`);
+	const resolved = path.resolve(base, value);
+	const stat = await statOrNull(resolved);
+	if (stat === null) throw new RuntimeRpcError("invalid-params", `${label} does not exist: ${resolved}`, { resolved });
+	if (!stat.isDirectory()) {
+		throw new RuntimeRpcError("invalid-params", `${label} is not a directory: ${resolved}`, { resolved });
+	}
+	return resolved;
+}
+
+/**
+ * `run --debugger=<protocol> … <file>`. The program runs suspended until a
+ * client attaches, which is exactly why this is a supervised job rather than a
+ * request that waits for an exit code.
+ */
+async function debugArgv(params: RuntimeSpawnParams, cwd: string): Promise<ComposedLaunch> {
+	const file = await requireExistingFile(cwd, params.path, "debug `path` (the program to debug)");
+	const protocol: RuntimeDebugProtocol = params.protocol ?? "cdp";
+	if (DEBUG_ENDPOINT_RULES[protocol] === undefined) {
+		throw new RuntimeRpcError("invalid-params", `Unknown debug protocol ${String(protocol)}; expected cdp or dap.`);
+	}
+	const language: RuntimeLanguage = params.language ?? inferLanguage(file);
+	const args = ["run", `--debugger=${protocol}`, "--error-format=plain", "--no-color"];
+	if (params.timeoutMs !== undefined) {
+		if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
+			throw new RuntimeRpcError("invalid-params", "timeoutMs must be a positive number of milliseconds.");
+		}
+		args.push("--timeout", `${Math.round(params.timeoutMs)}ms`);
+	}
+	args.push("-l", language, file);
+	if (params.args?.length) args.push("--", ...params.args);
+	return { args, endpointPattern: DEBUG_ENDPOINT_RULES[protocol] };
+}
+
+/** `serve <dir> --no-tui [--port p] [--host h]`. `--no-tui` keeps the output scrapable. */
+async function serveArgv(params: RuntimeSpawnParams, cwd: string): Promise<ComposedLaunch> {
+	const dir = await requireExistingDirectory(cwd, params.directory, "serve `directory`");
+	const args = ["serve", dir, "--no-tui"];
+	if (params.port !== undefined) {
+		if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65_535) {
+			throw new RuntimeRpcError("invalid-params", "port must be an integer from 1 to 65535.");
+		}
+		args.push("--port", String(params.port));
+	}
+	if (params.host) args.push("--host", params.host);
+	return { args, endpointPattern: SERVE_ENDPOINT_RULES };
 }
 
 /**

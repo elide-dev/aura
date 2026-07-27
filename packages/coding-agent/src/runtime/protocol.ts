@@ -24,6 +24,7 @@ export type RuntimeMethod =
 	| "runtime/insights"
 	| "runtime/profile"
 	| "runtime/jvm"
+	| "runtime/spawn"
 	| "runtime/status";
 
 export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
@@ -116,6 +117,91 @@ export interface RuntimeJvmResult extends RuntimeExecResult {
 	entryCount?: number;
 	/** `javadoc`: first few top-level entries of `output`, for orientation. */
 	topLevel?: string[];
+}
+
+// ── runtime/spawn: launch descriptors for long-running processes ─────────────
+// The endpoint composes the command line; it deliberately does NOT start the
+// process. Lifecycle belongs to the `hub` supervisor, which already owns
+// session-scoped naming, log tailing, readiness, stop, and restart. So the
+// method's result is a *descriptor* — what to run, where, and how to recognize
+// the endpoint the process prints — and nothing in the runtime layer holds a
+// process handle.
+
+/** Wire protocol a debug session speaks: Chrome DevTools, or Debug Adapter. */
+export type RuntimeDebugProtocol = "cdp" | "dap";
+
+/** Which long-running flow to compose a descriptor for. */
+export type RuntimeSpawnMode = "debug" | "serve";
+
+export interface RuntimeSpawnParams {
+	mode: RuntimeSpawnMode;
+	/**
+	 * `debug`: existing program file to run under the debugger. Required — unlike
+	 * `runtime/run` there is no inline-code mode, because the file would have to
+	 * outlive the request that created it and no request-scoped workdir can
+	 * promise that.
+	 */
+	path?: string;
+	/** `debug`: language override; inferred from `path`'s extension otherwise. */
+	language?: RuntimeLanguage;
+	/** `debug`: debug wire protocol. Default `cdp`. */
+	protocol?: RuntimeDebugProtocol;
+	/** `debug`: arguments passed to the program after `--`. */
+	args?: string[];
+	/** `debug`: guest execution timeout, passed to the runtime as `--timeout <n>ms`. */
+	timeoutMs?: number;
+	/** `serve`: directory of static files to serve, resolved against `cwd`. Required. */
+	directory?: string;
+	/** `serve`: TCP port to bind. */
+	port?: number;
+	/** `serve`: interface to bind. */
+	host?: string;
+	/** Working directory for the launched process, and the base for `path`/`directory`. */
+	cwd?: string;
+}
+
+/**
+ * One endpoint-recognition rule, applied to the accumulated (ANSI-stripped)
+ * startup output of a launched process. Rules travel with the descriptor rather
+ * than living in tool code so that the layer that composed the argv is also the
+ * layer that says what its banner looks like — when the runtime changes its
+ * startup line, one file changes.
+ */
+export interface RuntimeEndpointRule {
+	/** `RegExp` source, matched case-sensitively against the whole captured output. */
+	pattern: string;
+	/** Capture group holding the endpoint. 0 (the default) means the whole match. */
+	group?: number;
+	/** Scheme to prepend when the captured text is a bare `host:port`. */
+	prefix?: string;
+}
+
+/**
+ * What to launch for a long-running runtime flow. `argv[0]` is the resolved
+ * runtime binary; everything else is its command line.
+ */
+export interface RuntimeLaunchDescriptor {
+	argv: string[];
+	/** Working directory for the process; absolute. */
+	cwd: string;
+	/**
+	 * Environment *overlay*, not a full environment: the supervisor that starts
+	 * the process merges these over its own inherited environment. Passing a
+	 * whole snapshot of `process.env` here would bake this session's secrets into
+	 * a persisted launch spec, so only the variables the runtime needs travel.
+	 */
+	env: Record<string, string>;
+	/** Rules tried in order against the startup output; the first match wins. */
+	endpointPattern: RuntimeEndpointRule[];
+	/** How the binary in `argv[0]` was found; see {@link RuntimeLaunchDescriptor.shimWarning}. */
+	source: RuntimeSource;
+	/**
+	 * Set when `source` is `"path"`: a runtime found on `PATH` may be an npm `.bin`
+	 * wrapper that execs or forks the real binary, so the supervised process is
+	 * not necessarily the one holding the port. Advisory — the caller surfaces it
+	 * rather than refusing the launch.
+	 */
+	shimWarning?: string;
 }
 
 export interface RuntimeBuildParams {
