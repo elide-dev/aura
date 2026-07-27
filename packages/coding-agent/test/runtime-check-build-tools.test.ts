@@ -42,7 +42,7 @@ describe("check/build tools", () => {
 		);
 		expect(tool).not.toBeNull();
 		const r = await tool!.execute("id", {} as never, new AbortController().signal);
-		expect(received).toMatchObject({});
+		expect(received).not.toHaveProperty("targets");
 		expect((r.content[0] as { text: string }).text).toContain("Build successful");
 		expect(r.details).toMatchObject({ exitCode: 0 });
 	});
