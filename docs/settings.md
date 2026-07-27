@@ -511,8 +511,8 @@ Which tool a blocked command is pointed at depends on what is active. `run`, `ch
 and `build` are always-on tools, so a bare invocation, `run …`, and `build …` name
 them directly. The `jvm_*` tools and `serve` are *discoverable* — absent from the tool
 schema until discovered — and an interceptor rule only ever names a tool that is
-currently registered. So `elide jar …` names `jvm_jar` once the JVM suite is active,
-and otherwise falls through to the generic guidance that names `run` and points at
+currently registered. So a direct `jar …` invocation names `jvm_jar` once the JVM
+suite is active, and otherwise falls through to the generic guidance that names `run` and points at
 the rest of the suite. Either way the command is blocked; only the suggestion
 differs.
 
