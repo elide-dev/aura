@@ -1,10 +1,24 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import * as dns from "node:dns/promises";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 import { provisionRuntime } from "../src/runtime/provision";
+
+/** A name RFC 2606 guarantees is never registered — the DNS-failure fixture. */
+const UNRESOLVABLE_HOST = "aura-runtime-does-not-exist.invalid";
+
+/**
+ * Whether this host's resolver answers for `.invalid` anyway (NXDOMAIN-hijacking
+ * networks). Probed at module scope, not in `beforeAll`, because `test.skipIf` is
+ * evaluated when the test is registered — before any hook has run.
+ */
+const invalidNameResolves = await dns
+	.lookup(UNRESOLVABLE_HOST)
+	.then(() => true)
+	.catch(() => false);
 
 let server: ReturnType<typeof Bun.serve>;
 let archive: Uint8Array;
@@ -103,7 +117,7 @@ describe("runtime provisioning", () => {
 			dist: { file: "fake.txz", sha256: archiveSha, archive: "txz" },
 			version: "0.0.0-test",
 			targetRoot: path.join(workRoot, "managed-offline"),
-			timeoutMs: 250,
+			connectTimeoutMs: 250,
 		}).catch(e => e);
 		expect(err).toBeInstanceOf(RuntimeRpcError);
 		expect((err as RuntimeRpcError).code).toBe("download-failed");
@@ -112,14 +126,17 @@ describe("runtime provisioning", () => {
 		expect((err as RuntimeRpcError).message).toMatch(/cannot reach|did not respond within 250ms/);
 	});
 
-	test("an unresolvable host is reported as unreachable, not as a timeout", async () => {
+	// Some networks (captive portals, ISP resolvers that hijack NXDOMAIN) answer for
+	// `.invalid` names, which would turn this case into a false failure about someone
+	// else's DNS. Probed once above; skipped rather than failed when that happens.
+	test.skipIf(invalidNameResolves)("an unresolvable host is reported as unreachable, not as a timeout", async () => {
 		const err = await provisionRuntime({
-			baseUrl: "http://aura-runtime-does-not-exist.invalid",
+			baseUrl: `http://${UNRESOLVABLE_HOST}`,
 			dist: { file: "fake.txz", sha256: archiveSha, archive: "txz" },
 			version: "0.0.0-test",
 			targetRoot: path.join(workRoot, "managed-dns"),
 			// Long enough that DNS failure, not the deadline, is what surfaces.
-			timeoutMs: 15_000,
+			connectTimeoutMs: 15_000,
 		}).catch(e => e);
 		expect(err).toBeInstanceOf(RuntimeRpcError);
 		expect((err as RuntimeRpcError).code).toBe("download-failed");
@@ -133,7 +150,7 @@ describe("runtime provisioning", () => {
 			version: "0.0.0-stall",
 			targetRoot: path.join(workRoot, "managed-stall"),
 			// Generous connect deadline: the server answers immediately, then stops sending.
-			timeoutMs: 5_000,
+			connectTimeoutMs: 5_000,
 			stallTimeoutMs: 300,
 		}).catch(e => e);
 		expect(err).toBeInstanceOf(RuntimeRpcError);

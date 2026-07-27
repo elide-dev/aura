@@ -16,7 +16,7 @@ export interface ProvisionOptions {
 	 * unreachable host can hang instead of refusing, so this bounds the wait. Default 30s.
 	 * The body transfer is deliberately uncapped; see {@link stallTimeoutMs}.
 	 */
-	timeoutMs?: number;
+	connectTimeoutMs?: number;
 	/**
 	 * Abort the body transfer when no bytes arrive for this long (ms). Default 60s.
 	 * This replaces an overall transfer cap so a healthy-but-slow download on a thin
@@ -189,7 +189,7 @@ async function installRuntime(opts: ProvisionOptions, target: InstallTarget): Pr
 		const actual = await downloadToFile(
 			url,
 			archivePath,
-			opts.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+			opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
 			opts.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS,
 		);
 
