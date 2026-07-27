@@ -129,15 +129,19 @@ function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ dir: stri
  * Nearest single-file project config surface (`SYSTEM.md`, `RULES.md`,
  * `AGENTS.md`), walking up from `cwd` to `repoRoot`.
  *
- * Upstream semantics are preserved: the search stops at the nearest ancestor
- * that owns a non-empty native config dir, so a closer config dir without the
- * file does not let a further-up one supply it.
+ * Upstream's terminator is preserved exactly: the walk ends at the nearest
+ * ancestor owning a non-empty BRANDED config dir, even when that dir lacks the
+ * file — a closer branded config dir masks a further-up one.
  *
- * The fork's part: at that ancestor the probe is per FILE across both native
- * bases — branded first, then the read-only legacy `.omp` dir. Picking a
- * DIRECTORY instead would let any unrelated branded content (say
- * `.aura/rules/`) silently mask a legacy `.omp/AGENTS.md`, which is exactly the
- * incremental-adoption case the legacy base exists for.
+ * The fork adds the legacy `.omp` base to this walk, strictly additively:
+ *
+ *   - the probe is per FILE, branded first then legacy, at each ancestor. A
+ *     directory-level choice would let unrelated branded content (say
+ *     `.aura/rules/`) mask a legacy `.omp/AGENTS.md` — the incremental-adoption
+ *     case the legacy base exists for.
+ *   - a legacy dir may SUPPLY the file but never TERMINATES the walk. Otherwise
+ *     a stale subpackage `.omp/` would suppress the repo's branded file, which
+ *     would let the read-only legacy base take precedence over `.aura`.
  */
 async function findNearestProjectConfigFile(
 	cwd: string,
@@ -145,17 +149,20 @@ async function findNearestProjectConfigFile(
 	repoRoot?: string | null,
 ): Promise<{ path: string; content: string; depth: number } | null> {
 	for (const ancestor of getAncestorDirs(cwd, repoRoot)) {
-		const configDirs = (
-			await Promise.all([PATHS.projectDir, LEGACY_CONFIG_DIR_NAME].map(base => ifNonEmptyDir(ancestor.dir, base)))
-		).filter((dir): dir is string => dir !== null);
-		if (configDirs.length === 0) continue;
+		const [brandedDir, legacyDir] = await Promise.all([
+			ifNonEmptyDir(ancestor.dir, PATHS.projectDir),
+			ifNonEmptyDir(ancestor.dir, LEGACY_CONFIG_DIR_NAME),
+		]);
 
-		for (const dir of configDirs) {
+		for (const dir of [brandedDir, legacyDir]) {
+			if (!dir) continue;
 			const filePath = path.join(dir, filename);
 			const content = await readFile(filePath);
 			if (content) return { path: filePath, content, depth: ancestor.depth };
 		}
-		return null;
+
+		// Branded dir present but missing the file: upstream stops here.
+		if (brandedDir) return null;
 	}
 	return null;
 }
@@ -451,8 +458,8 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 
 	const projectRulesFile = await findNearestProjectConfigFile(ctx.cwd, "RULES.md", ctx.repoRoot);
 	if (projectRulesFile) {
-		const projectRule = await loadStickyRulesFile(projectRulesFile.path, "project");
-		if (projectRule) items.push(projectRule);
+		const projectRule = buildStickyRule(projectRulesFile.path, projectRulesFile.content, "project");
+		items.push(projectRule);
 	}
 
 	return { items, warnings };
@@ -465,6 +472,11 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 async function loadStickyRulesFile(filePath: string, level: "user" | "project"): Promise<Rule | null> {
 	const content = await readFile(filePath);
 	if (!content) return null;
+	return buildStickyRule(filePath, content, level);
+}
+
+/** Synthesize the always-apply `RULES.md` rule from already-read content. */
+function buildStickyRule(filePath: string, content: string, level: "user" | "project"): Rule {
 	const source = createSourceMeta(PROVIDER_ID, filePath, level);
 	const ruleName = level === "project" ? "RULES@project" : "RULES";
 	const rule = buildRuleFromMarkdown("RULES.md", content, filePath, source, { ruleName });

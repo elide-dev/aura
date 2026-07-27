@@ -186,6 +186,33 @@ test("a non-empty branded dir does not mask a legacy single-file surface it lack
 	expect(projectPrompts[0].content).toContain("branded system prompt");
 });
 
+test("a closer legacy-only config dir does not suppress a further-up branded file", async () => {
+	// Only the BRANDED dir terminates the ancestor walk. A stale subpackage `.omp/`
+	// (here holding just a rule) must stay additive — it cannot hide the repo's
+	// `.aura/AGENTS.md`, which would invert the legacy base's read-only role.
+	const sub = path.join(project, "packages", "sub");
+	fs.mkdirSync(sub, { recursive: true });
+	writeFile(path.join(sub, LEGACY_CONFIG_DIR_NAME, "rules", "sub-rule.md"), "sub legacy rule\n");
+	writeFile(projectFile(CONFIG_DIR_NAME, "AGENTS.md"), "branded root context\n");
+
+	const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: sub, providers: ["native"] });
+	const projectContext = result.items.filter(file => file._source.level === "project");
+	expect(projectContext).toHaveLength(1);
+	expect(projectContext[0].path).toBe(projectFile(CONFIG_DIR_NAME, "AGENTS.md"));
+});
+
+test("a closer branded-only config dir masks a further-up legacy file (upstream terminator)", async () => {
+	// Upstream's rule, unchanged by the fork: the nearest ancestor owning a
+	// non-empty branded config dir ends the walk even when it lacks the file.
+	const sub = path.join(project, "packages", "sub");
+	fs.mkdirSync(sub, { recursive: true });
+	writeFile(path.join(sub, CONFIG_DIR_NAME, "rules", "sub-rule.md"), "sub branded rule\n");
+	writeFile(projectFile(LEGACY_CONFIG_DIR_NAME, "AGENTS.md"), "legacy root context\n");
+
+	const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: sub, providers: ["native"] });
+	expect(result.items.filter(file => file._source.level === "project")).toHaveLength(0);
+});
+
 test("legacy `.omp` executable surfaces load too — hooks and custom tools", async () => {
 	// Deliberate and documented: the legacy base carries the same trust as the
 	// branded dir (and as `.claude`/`.codex`/`.gemini`), so `hooks/`, `tools/`,
