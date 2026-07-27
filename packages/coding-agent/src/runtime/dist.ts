@@ -2,6 +2,15 @@
 
 export const ELIDE_VERSION = "1.4.1+20260718";
 
+/**
+ * Oldest runtime version the innate tools support — the argv shapes they pin
+ * (`--error-format=plain`, `--insights=`, `--profiler=`) landed in 1.4. Enforced
+ * where a version is already known for free: `runtime/status` reports an older
+ * binary as unavailable with guidance. Deliberately *not* enforced on the exec
+ * path, which would cost an extra `--version` spawn on every single call.
+ */
+export const MINIMUM_RUNTIME_VERSION = "1.4";
+
 export interface RuntimeDistEntry {
 	file: string;
 	sha256: string;

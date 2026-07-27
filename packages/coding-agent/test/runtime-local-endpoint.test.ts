@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { MINIMUM_RUNTIME_VERSION } from "../src/runtime/dist";
 import type { RuntimeExecResult, RuntimeStatusResult } from "../src/runtime/protocol";
 import { createRequest, RuntimeRpcError, unwrapResponse } from "../src/runtime/protocol";
 import type { ProvisionOptions, provisionRuntime } from "../src/runtime/provision";
@@ -119,6 +120,45 @@ describe("LocalRuntimeEndpoint", () => {
 		const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
 		expect(out.version).toBe("9.9.9-fake");
 		expect(out.version).not.toContain("Elide");
+	});
+
+	describe("minimum version floor", () => {
+		/** A fake runtime whose `--version` reports exactly `version`. */
+		async function binPrinting(version: string): Promise<string> {
+			const p = path.join(dir, `v-${version.replace(/[^\w.]/g, "_")}`);
+			await fs.writeFile(p, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${version}"; exit 0; fi\n`, {
+				mode: 0o755,
+			});
+			return p;
+		}
+
+		test("a binary below the floor is reported unavailable with naming guidance", async () => {
+			const bin = await binPrinting("1.2.0");
+			const ep = new LocalRuntimeEndpoint({ explicitPath: bin, autoDownload: false });
+			const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
+			expect(out.available).toBe(false);
+			expect(out.guidance).toContain(MINIMUM_RUNTIME_VERSION);
+			expect(out.guidance).toContain("1.2.0");
+			// Diagnostics stay populated so `aura runtime status --json` can show what was found.
+			expect(out.version).toBe("1.2.0");
+			expect(out.binaryPath).toBe(bin);
+			expect(out.source).toBe("flag");
+		});
+
+		test("a binary exactly at the floor is available", async () => {
+			const bin = await binPrinting("1.4");
+			const ep = new LocalRuntimeEndpoint({ explicitPath: bin, autoDownload: false });
+			const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
+			expect(out.available).toBe(true);
+			expect(out.guidance).toBeUndefined();
+		});
+
+		test("a binary above the floor is available", async () => {
+			const bin = await binPrinting("2.0.1+20260718");
+			const ep = new LocalRuntimeEndpoint({ explicitPath: bin, autoDownload: false });
+			const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
+			expect(out.available).toBe(true);
+		});
 	});
 
 	describe("provisioning gate", () => {

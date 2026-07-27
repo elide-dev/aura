@@ -1,4 +1,4 @@
-export { ELIDE_VERSION } from "./dist";
+export { ELIDE_VERSION, MINIMUM_RUNTIME_VERSION } from "./dist";
 export * from "./protocol";
 export { provisionRuntime } from "./provision";
 export { managedRuntimeRoot, managedVersionDir, resolveRuntimeBinary } from "./resolve";

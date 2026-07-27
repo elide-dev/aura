@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { MINIMUM_RUNTIME_VERSION } from "../dist";
 import {
 	errorResponse,
 	okResponse,
@@ -94,11 +95,13 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		}
 		const result = await this.spawn([found.binaryPath, "--version"], {});
 		const version = parseVersion(result.stdout);
+		const tooOld = version !== undefined && !meetsMinimumVersion(version);
 		return {
-			available: result.exitCode === 0,
+			available: result.exitCode === 0 && !tooOld,
 			version,
 			binaryPath: found.binaryPath,
 			source: found.source,
+			guidance: tooOld ? belowFloorGuidance(version) : undefined,
 			protocolVersion: RUNTIME_PROTOCOL_VERSION,
 		};
 	}
@@ -238,6 +241,31 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
  */
 function parseVersion(stdout: string): string | undefined {
 	return /\d+\.\d+[^\s]*/.exec(stdout)?.[0];
+}
+
+/** Leading numeric components of a version, ignoring any `-rc1` / `+build` tail. */
+function numericParts(version: string): number[] {
+	const core = /^\d+(?:\.\d+)*/.exec(version)?.[0] ?? "";
+	return core.split(".").map(Number);
+}
+
+/** True when `version` is at least {@link MINIMUM_RUNTIME_VERSION} (numeric, component-wise). */
+function meetsMinimumVersion(version: string): boolean {
+	const found = numericParts(version);
+	const floor = numericParts(MINIMUM_RUNTIME_VERSION);
+	for (let i = 0; i < Math.max(found.length, floor.length); i++) {
+		const a = found[i] ?? 0;
+		const b = floor[i] ?? 0;
+		if (a !== b) return a > b;
+	}
+	return true;
+}
+
+function belowFloorGuidance(version: string): string {
+	return (
+		`The installed runtime is version ${version}, older than the required ${MINIMUM_RUNTIME_VERSION}. ` +
+		"Upgrade it, or unset AURA_RUNTIME_BIN / runtime.path so a supported runtime is downloaded automatically."
+	);
 }
 
 function inferLanguage(file: string): RuntimeLanguage {
