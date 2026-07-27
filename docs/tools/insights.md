@@ -33,7 +33,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 
 ## Flow
 1. `RuntimeInsightsTool.createIf(session)` returns `null` unless `runtime.enabled` is truthy.
-2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `Runtime capabilities are disabled (runtime.enabled = false).`
+2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).`
 3. Params are forwarded with `cwd` defaulted to `session.cwd` as a `runtime/insights` request.
 4. `LocalRuntimeEndpoint` rejects the call up front when neither `insight` nor `insightPath` is present.
 5. The binary is resolved (auto-provisioned when allowed); inline `code` becomes `<temp>/guest.<ext>` and inline `insight` becomes `<temp>/insight.js`. The temp dir is removed in a `finally` block.
@@ -58,7 +58,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 - Requires runtime >= 1.4.
 
 ## Errors
-- `Runtime capabilities are disabled (runtime.enabled = false).` when no runtime service is wired.
+- `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).` when no runtime service is wired.
 - `insights requires insight (inline JS) or insightPath.` as an `invalid-params` protocol error.
 - `run requires code (inline) or path (existing file).` and `code and path are mutually exclusive.` from the shared program-source plumbing.
 - `runtime-missing` with installation guidance; `cancelled` on abort.

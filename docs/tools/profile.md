@@ -32,7 +32,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 
 ## Flow
 1. `RuntimeProfileTool.createIf(session)` returns `null` unless `runtime.enabled` is truthy.
-2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `Runtime capabilities are disabled (runtime.enabled = false).`
+2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).`
 3. Params are forwarded with `cwd` defaulted to `session.cwd` as a `runtime/profile` request.
 4. `LocalRuntimeEndpoint` resolves (and may auto-provision) the binary, materializes inline `code` into a temp guest file, and removes the temp dir in a `finally` block.
 5. The endpoint spawns `<binary> run --error-format=plain --no-color --profiler=<mode> -l <language> <programFile>` plus `-- <args>`.
@@ -55,7 +55,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 - Requires runtime >= 1.4.
 
 ## Errors
-- `Runtime capabilities are disabled (runtime.enabled = false).` when no runtime service is wired.
+- `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).` when no runtime service is wired.
 - `run requires code (inline) or path (existing file).` and `code and path are mutually exclusive.` from the shared program-source plumbing.
 - `runtime-missing` with installation guidance; `cancelled` on abort.
 - An invalid `mode` is rejected by schema validation before dispatch.

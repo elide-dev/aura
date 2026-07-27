@@ -102,6 +102,7 @@ describe("aura runtime status", () => {
 		expect(JSON.parse(lines.join("\n"))).toEqual({
 			available: false,
 			disabled: true,
+			guidance: "Set runtime.enabled to true to use the innate runtime tools.",
 			protocolVersion: RUNTIME_PROTOCOL_VERSION,
 		});
 	});

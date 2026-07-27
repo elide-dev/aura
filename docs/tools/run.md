@@ -32,7 +32,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 
 ## Flow
 1. `RuntimeRunTool.createIf(session)` returns `null` unless the `runtime.enabled` setting is truthy, so the tool is absent from the schema when runtime capabilities are off.
-2. `execute()` reads `session.getRuntimeService?.()`. A missing service throws `Runtime capabilities are disabled (runtime.enabled = false).`
+2. `execute()` reads `session.getRuntimeService?.()`. A missing service throws `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).`
 3. Params are forwarded with `cwd` defaulted to `session.cwd`, then dispatched as a `runtime/run` protocol request.
 4. `LocalRuntimeEndpoint` resolves the runtime binary (`resolveRuntimeBinary`), auto-provisioning it when `runtime.autoDownload` allows and no explicit path is pinned.
 5. Inline `code` is materialized into a temp dir (`aura-runtime-<random>/guest.<ext>`) which is removed in a `finally` block; `path` is used as-is.
@@ -56,7 +56,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 - Requires runtime >= 1.4.
 
 ## Errors
-- `Runtime capabilities are disabled (runtime.enabled = false).` when no runtime service is wired.
+- `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).` when no runtime service is wired.
 - `run requires code (inline) or path (existing file).` and `code and path are mutually exclusive.` as `invalid-params` protocol errors.
 - A missing, non-provisionable runtime surfaces `runtime-missing` with installation guidance instead of an opaque failure.
 - Cancellation surfaces as `cancelled`.

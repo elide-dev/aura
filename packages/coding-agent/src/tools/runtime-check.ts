@@ -35,7 +35,10 @@ export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, Ru
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeExecResult>> {
 		const service = this.session.getRuntimeService?.();
-		if (!service) throw new Error("Runtime capabilities are disabled (runtime.enabled = false).");
+		if (!service)
+			throw new Error(
+				"The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).",
+			);
 		const result = await service.check({ ...params, cwd: params.cwd ?? this.session.cwd }, signal);
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],

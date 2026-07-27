@@ -86,7 +86,16 @@ export async function runRuntimeCommand(
 	if (isDisabled(service)) {
 		print(
 			cmd.flags.json
-				? JSON.stringify({ available: false, disabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION }, null, 2)
+				? JSON.stringify(
+						{
+							available: false,
+							disabled: true,
+							guidance: "Set runtime.enabled to true to use the innate runtime tools.",
+							protocolVersion: RUNTIME_PROTOCOL_VERSION,
+						},
+						null,
+						2,
+					)
 				: "runtime: disabled (runtime.enabled = false)",
 		);
 		return 1;

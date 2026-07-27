@@ -67,10 +67,10 @@ describe("insights/profile tools", () => {
 		expect(insights).not.toBeNull();
 		expect(profile).not.toBeNull();
 		await expect(insights!.execute("id", {} as never, new AbortController().signal)).rejects.toThrow(
-			/Runtime capabilities are disabled/,
+			/The runtime service is unavailable on this session/,
 		);
 		await expect(
 			profile!.execute("id", { mode: "cpusampling" } as never, new AbortController().signal),
-		).rejects.toThrow(/Runtime capabilities are disabled/);
+		).rejects.toThrow(/The runtime service is unavailable on this session/);
 	});
 });

@@ -66,7 +66,7 @@ describe("check/build tools", () => {
 		const tool = RuntimeCheckTool.createIf(sessionWith(undefined));
 		expect(tool).not.toBeNull();
 		await expect(tool!.execute("id", {} as never, new AbortController().signal)).rejects.toThrow(
-			/Runtime capabilities are disabled/,
+			/The runtime service is unavailable on this session/,
 		);
 	});
 });
