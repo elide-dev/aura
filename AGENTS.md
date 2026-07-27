@@ -265,3 +265,12 @@ Location: `packages/*/CHANGELOG.md` (per package).
 2. Run `bun run release`.
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+
+## Aura fork conventions
+
+This repo is aura — a fork of oh-my-pi. Read `docs/aura/FORK.md` before
+editing any upstream file, and add a row there when you touch a new one.
+Naming rule: Elide is never user-facing; the noun is "the runtime"
+(tools run/check/build/insights/profile, settings `runtime.*`, CLI
+`aura runtime status`). Specs live in `docs/superpowers/specs/`, plans in
+`docs/superpowers/plans/`.
