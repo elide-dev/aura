@@ -117,7 +117,14 @@ async function downloadToFile(
 			cause: String(cause),
 		});
 	} finally {
-		await sink.end();
+		// A failing flush (disk full, for one) must not replace whatever typed error is
+		// already in flight. On the success path a short write is caught downstream by
+		// the checksum comparison, so swallowing here costs no correctness.
+		try {
+			await sink.end();
+		} catch {
+			// ignored on purpose — see above
+		}
 	}
 	return hasher.digest("hex");
 }
@@ -216,17 +223,28 @@ async function installRuntime(opts: ProvisionOptions, target: InstallTarget): Pr
 			});
 		}
 
-		// No-clobber install. Another process may have finished installing this version
-		// while we were downloading; blowing its tree away would break a runtime that is
-		// already in use. Only replace `versionDir` when it holds no usable binary.
-		const raced = await findBinaryInTree(versionDir);
-		if (raced) {
-			progress(`Runtime ${version} installed.`);
-			return raced;
-		}
-		await fs.rm(versionDir, { recursive: true, force: true });
+		// Rename-arbitrated install. `rename` is the race arbiter: it either places our
+		// tree or fails because another process already placed theirs, with no window in
+		// between for a check to go stale. Losing means adopting the winner's install —
+		// this never removes a `versionDir` it did not create, because a runtime process
+		// may already be executing out of it.
 		await fs.mkdir(path.dirname(versionDir), { recursive: true });
-		await fs.rename(extractDir, versionDir);
+		try {
+			await fs.rename(extractDir, versionDir);
+		} catch (cause) {
+			if (["EEXIST", "ENOTEMPTY"].includes((cause as NodeJS.ErrnoException).code ?? "")) {
+				const rival = await findBinaryInTree(versionDir);
+				if (rival) {
+					progress(`Runtime ${version} installed.`);
+					return rival;
+				}
+			}
+			throw new RuntimeRpcError(
+				"download-failed",
+				`Runtime install could not be placed at ${versionDir}. Remove that directory and retry.`,
+				{ versionDir, cause: String(cause) },
+			);
+		}
 		const installed = await findBinaryInTree(versionDir);
 		if (!installed) {
 			throw new RuntimeRpcError("download-failed", "Runtime install did not land where expected.", { versionDir });

@@ -187,4 +187,23 @@ describe("runtime provisioning", () => {
 		expect(await Bun.file(path.join(versionDir, "RIVAL")).text()).toBe("do not delete");
 		expect(await Bun.file(bin).text()).toContain("rival");
 	}, 15_000);
+
+	test("an occupied but binaryless versionDir errors instead of being deleted", async () => {
+		const targetRoot = path.join(workRoot, "managed-occupied");
+		const versionDir = path.join(targetRoot, "0.0.0-test");
+		// Nothing usable here, but it is not ours to remove — something else may own it.
+		await fs.mkdir(versionDir, { recursive: true });
+		await fs.writeFile(path.join(versionDir, "SOMEONE-ELSES"), "keep me");
+
+		const err = await provisionRuntime({
+			baseUrl: `http://localhost:${server.port}`,
+			dist: { file: "fake.txz", sha256: archiveSha, archive: "txz" },
+			version: "0.0.0-test",
+			targetRoot,
+		}).catch(e => e);
+		expect(err).toBeInstanceOf(RuntimeRpcError);
+		expect((err as RuntimeRpcError).code).toBe("download-failed");
+		expect((err as RuntimeRpcError).message).toContain("could not be placed");
+		expect(await Bun.file(path.join(versionDir, "SOMEONE-ELSES")).text()).toBe("keep me");
+	}, 15_000);
 });

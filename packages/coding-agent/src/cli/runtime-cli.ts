@@ -48,9 +48,10 @@ export function resolveStatusEndpointOptions(values: RuntimeSettingsValues): Loc
 }
 
 /**
- * Fresh, non-singleton service for one status probe. Deliberately *not*
- * `getOrCreateRuntimeService`: that singleton is first-call-wins, so a CLI probe
- * would bake `autoDownload: false` into every later consumer in the process.
+ * Fresh, unshared service for one status probe. Deliberately *not*
+ * `getOrCreateRuntimeService`: that memo is keyed on the endpoint options, so
+ * probing with `autoDownload: false` would evict the entry the innate tools are
+ * using and make them rebuild. Constructing directly keeps the probe invisible.
  */
 export function createStatusRuntime(values: RuntimeSettingsValues = readRuntimeSettings()): StatusRuntime {
 	const opts = resolveStatusEndpointOptions(values);
