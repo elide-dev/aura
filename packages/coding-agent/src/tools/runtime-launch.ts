@@ -7,8 +7,8 @@
  * the endpoint the process prints — and owns no lifecycle. The `hub` supervisor
  * owns the lifecycle: session-scoped names, log capture, readiness, `stop`,
  * `restart`, `describe`. So these tools hold no process map of their own; the
- * handle they return is a hub job name, which means `hub logs`, `hub stop`, and
- * `/jobs` work on a debugger or a static server for free, and there is no second
+ * handle they return is a hub job name, which means `hub logs` and `hub stop`
+ * work on a debugger or a static server for free, and there is no second
  * process registry to keep honest.
  */
 
