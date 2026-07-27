@@ -34,6 +34,102 @@ export interface LocalEndpointOptions {
 
 const GUEST_EXT: Record<RuntimeLanguage, string> = { js: "js", ts: "ts", python: "py" };
 
+/** Per-invocation spawn knobs. Anything absent falls back to the flow's defaults, then to the endpoint's env. */
+export interface RuntimeSpawnOptions {
+	stdin?: string;
+	timeoutMs?: number;
+	cwd?: string;
+	/** Full spawn environment; see {@link jvmSpawnEnv}. Defaults to the endpoint's env. */
+	env?: NodeJS.ProcessEnv;
+}
+
+/** One runtime invocation. The endpoint's own spawn; a parameter so workdir flows are testable without a binary. */
+export type RuntimeSpawn = (
+	argv: string[],
+	opts: RuntimeSpawnOptions,
+	signal?: AbortSignal,
+) => Promise<RuntimeExecResult>;
+
+/**
+ * A temp directory plus a runner bound to it. Handed to a request handler so a
+ * single protocol request can be several invocations over one directory
+ * (`javac` → `java`, `javac` → `javap`) without the handler owning any
+ * filesystem lifecycle. Endpoint-internal: no path ever reaches tool code.
+ */
+export interface RuntimeWorkdir {
+	/** The flow's temp directory. Valid only until the flow returns. */
+	readonly dir: string;
+	/** Write `content` to `name` inside the workdir (nested names get their parents); returns the absolute path. */
+	write(name: string, content: string): Promise<string>;
+	/** Run one invocation. Options merge field-wise over the flow's defaults. */
+	run(argv: string[], opts?: RuntimeSpawnOptions): Promise<RuntimeExecResult>;
+}
+
+export interface RuntimeWorkdirOptions {
+	spawn: RuntimeSpawn;
+	/** Cancellation for every invocation in the flow. */
+	signal?: AbortSignal;
+	/**
+	 * Defaults applied to each `run` whose own options omit the field. A default
+	 * `cwd` of `undefined` deliberately stays undefined — the child then inherits
+	 * the process cwd, which is what the single-shot run/insights/profile flows
+	 * have always done. Multi-invocation flows pass `cwd: wd.dir` explicitly.
+	 */
+	defaults?: RuntimeSpawnOptions;
+}
+
+/**
+ * Create a temp workdir, hand `fn` a runner bound to it, and remove the
+ * directory afterwards — on the throwing path too. This is the endpoint-side
+ * equivalent of a session: everything a request materializes lives here and
+ * nothing outlives the request.
+ */
+export async function withRuntimeWorkdir<T>(
+	opts: RuntimeWorkdirOptions,
+	fn: (wd: RuntimeWorkdir) => Promise<T>,
+): Promise<T> {
+	const defaults = opts.defaults ?? {};
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-runtime-"));
+	const wd: RuntimeWorkdir = {
+		dir,
+		write: async (name, content) => {
+			const file = path.join(dir, name);
+			await fs.mkdir(path.dirname(file), { recursive: true });
+			await fs.writeFile(file, content);
+			return file;
+		},
+		run: (argv, o = {}) =>
+			opts.spawn(
+				argv,
+				{
+					stdin: o.stdin ?? defaults.stdin,
+					timeoutMs: o.timeoutMs ?? defaults.timeoutMs,
+					cwd: o.cwd ?? defaults.cwd,
+					env: o.env ?? defaults.env,
+				},
+				opts.signal,
+			),
+	};
+	try {
+		return await fn(wd);
+	} finally {
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Spawn environment for JVM-flavored invocations: `JAVA_HOME` and `JDK_HOME`
+ * are removed. The runtime's `java` honors those variables while its `javac`
+ * always compiles against the embedded JDK, so a host with an older preset JDK
+ * (CI images commonly pin 17) splits the two halves and running a freshly
+ * compiled class dies with `UnsupportedClassVersionError`. The tools promise
+ * the embedded JVM, so the host's JDK never reaches the child.
+ */
+export function jvmSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const { JAVA_HOME: _javaHome, JDK_HOME: _jdkHome, ...rest } = base;
+	return rest;
+}
+
 const MISSING_GUIDANCE =
 	"The runtime is not installed. It downloads automatically on first use when runtime.autoDownload is on; " +
 	"or point AURA_RUNTIME_BIN (or the runtime.path setting) at an existing binary. Requires runtime >= 1.4.";
@@ -107,10 +203,10 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 	}
 
 	private async execRun(params: RuntimeRunParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
-		return this.withGuestFile(params, async (bin, guestFile, language) => {
+		return this.withGuestFile(params, signal, async (bin, guestFile, language, wd) => {
 			const argv = [bin, "run", "--error-format=plain", "--no-color", "-l", language, guestFile];
 			if (params.args?.length) argv.push("--", ...params.args);
-			return this.spawn(argv, params, signal);
+			return wd.run(argv);
 		});
 	}
 
@@ -118,12 +214,8 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		if (params.insight === undefined && params.insightPath === undefined) {
 			throw new RuntimeRpcError("invalid-params", "insights requires insight (inline JS) or insightPath.");
 		}
-		return this.withGuestFile(params, async (bin, guestFile, language, tempDir) => {
-			let insightFile = params.insightPath;
-			if (insightFile === undefined) {
-				insightFile = path.join(tempDir, "insight.js");
-				await fs.writeFile(insightFile, params.insight ?? "");
-			}
+		return this.withGuestFile(params, signal, async (bin, guestFile, language, wd) => {
+			const insightFile = params.insightPath ?? (await wd.write("insight.js", params.insight ?? ""));
 			const argv = [
 				bin,
 				"run",
@@ -135,12 +227,12 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 				guestFile,
 			];
 			if (params.args?.length) argv.push("--", ...params.args);
-			return this.spawn(argv, params, signal);
+			return wd.run(argv);
 		});
 	}
 
 	private async execProfile(params: RuntimeProfileParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
-		return this.withGuestFile(params, async (bin, guestFile, language) => {
+		return this.withGuestFile(params, signal, async (bin, guestFile, language, wd) => {
 			const argv = [
 				bin,
 				"run",
@@ -152,7 +244,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 				guestFile,
 			];
 			if (params.args?.length) argv.push("--", ...params.args);
-			return this.spawn(argv, params, signal);
+			return wd.run(argv);
 		});
 	}
 
@@ -165,10 +257,21 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		return this.spawn([binaryPath, "build", "--no-color", ...targets], params, signal);
 	}
 
-	/** Shared inline-code plumbing: resolve binary, materialize `code` to a temp guest file, clean up. */
+	/** The endpoint's spawn as a {@link RuntimeSpawn}, for workdir-bound flows. */
+	private spawner(): RuntimeSpawn {
+		return (argv, opts, signal) => this.spawn(argv, opts, signal);
+	}
+
+	/**
+	 * Shared inline-code plumbing: resolve the binary, materialize `code` into a
+	 * workdir guest file, and hand the handler a runner bound to that workdir.
+	 * Single-shot by nature today, but it goes through the same workdir as the
+	 * multi-invocation flows so there is one lifecycle to reason about.
+	 */
 	private async withGuestFile(
 		params: RuntimeRunParams,
-		fn: (bin: string, guestFile: string, language: RuntimeLanguage, tempDir: string) => Promise<RuntimeExecResult>,
+		signal: AbortSignal | undefined,
+		fn: (bin: string, guestFile: string, language: RuntimeLanguage, wd: RuntimeWorkdir) => Promise<RuntimeExecResult>,
 	): Promise<RuntimeExecResult> {
 		if (params.code === undefined && params.path === undefined) {
 			throw new RuntimeRpcError("invalid-params", "run requires code (inline) or path (existing file).");
@@ -178,24 +281,22 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		}
 		const { binaryPath } = await this.ensureBinary();
 		const language: RuntimeLanguage = params.language ?? (params.path ? inferLanguage(params.path) : "ts");
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-runtime-"));
-		try {
-			let guestFile = params.path;
-			if (guestFile === undefined) {
-				guestFile = path.join(tempDir, `guest.${GUEST_EXT[language]}`);
-				await fs.writeFile(guestFile, params.code ?? "");
-			}
-			return await fn(binaryPath, guestFile, language, tempDir);
-		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
-		}
+		return withRuntimeWorkdir(
+			{
+				spawn: this.spawner(),
+				signal,
+				// cwd stays the request's (usually undefined → the process cwd): inline
+				// guests have always run in the user's directory, not the workdir.
+				defaults: { stdin: params.stdin, timeoutMs: params.timeoutMs, cwd: params.cwd },
+			},
+			async wd => {
+				const guestFile = params.path ?? (await wd.write(`guest.${GUEST_EXT[language]}`, params.code ?? ""));
+				return fn(binaryPath, guestFile, language, wd);
+			},
+		);
 	}
 
-	private async spawn(
-		argv: string[],
-		params: { stdin?: string; timeoutMs?: number; cwd?: string },
-		signal?: AbortSignal,
-	): Promise<RuntimeExecResult> {
+	private async spawn(argv: string[], params: RuntimeSpawnOptions, signal?: AbortSignal): Promise<RuntimeExecResult> {
 		if (signal?.aborted) throw new RuntimeRpcError("cancelled", "Runtime execution was cancelled.");
 		const start = performance.now();
 		const proc = Bun.spawn(argv, {
@@ -203,7 +304,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			stdin: params.stdin !== undefined ? new TextEncoder().encode(params.stdin) : undefined,
 			stdout: "pipe",
 			stderr: "pipe",
-			env: { ...(this.opts.env ?? process.env), NO_COLOR: "1" },
+			env: { ...(params.env ?? this.opts.env ?? process.env), NO_COLOR: "1" },
 		});
 		let killed = false;
 		const timers: ReturnType<typeof setTimeout>[] = [];

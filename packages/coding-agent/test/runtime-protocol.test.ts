@@ -9,8 +9,8 @@ import {
 } from "../src/runtime/protocol";
 
 describe("runtime protocol", () => {
-	test("protocol version is 1", () => {
-		expect(RUNTIME_PROTOCOL_VERSION).toBe(1);
+	test("protocol version is 2", () => {
+		expect(RUNTIME_PROTOCOL_VERSION).toBe(2);
 	});
 
 	test("createRequest produces JSON-RPC 2.0 with unique ids", () => {

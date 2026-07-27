@@ -5,7 +5,17 @@
  * CLI per call; a stdio broker daemon or an in-process endpoint are drop-ins.
  */
 
-export const RUNTIME_PROTOCOL_VERSION = 1 as const;
+/**
+ * Version of this contract, surfaced by `runtime/status` (and printed by
+ * `aura runtime status`). Informational today — there is no negotiation and no
+ * v1 endpoint left in the tree — but it is the honest answer to "what shape is
+ * this seam?", which is what a future stdio-broker or in-process endpoint needs.
+ *
+ * v2 = the shared-workdir generation: one temp directory per request-handler
+ * flow with a bound runner, so a single request can be several invocations
+ * (compile → run). The multi-invocation methods ride this version.
+ */
+export const RUNTIME_PROTOCOL_VERSION = 2 as const;
 
 export type RuntimeMethod =
 	| "runtime/run"
