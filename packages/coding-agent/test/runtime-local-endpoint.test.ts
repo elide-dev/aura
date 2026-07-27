@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RuntimeExecResult, RuntimeStatusResult } from "../src/runtime/protocol";
 import { createRequest, RuntimeRpcError, unwrapResponse } from "../src/runtime/protocol";
+import type { ProvisionOptions, provisionRuntime } from "../src/runtime/provision";
+import type { resolveRuntimeBinary } from "../src/runtime/resolve";
 import { LocalRuntimeEndpoint } from "../src/runtime/transport/local";
 
 let dir: string;
@@ -117,6 +119,62 @@ describe("LocalRuntimeEndpoint", () => {
 		const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
 		expect(out.version).toBe("9.9.9-fake");
 		expect(out.version).not.toContain("Elide");
+	});
+
+	describe("provisioning gate", () => {
+		/** Records whether it ran and hands back the fake binary as a freshly "downloaded" runtime. */
+		function trackedProvision() {
+			const calls: ProvisionOptions[] = [];
+			const provision: typeof provisionRuntime = async (opts = {}) => {
+				calls.push(opts);
+				return fakeBin;
+			};
+			return { calls, provision };
+		}
+		const noRuntimeFound: typeof resolveRuntimeBinary = async () => null;
+
+		test("auto-download provisions when resolution finds nothing", async () => {
+			const { calls, provision } = trackedProvision();
+			// autoDownload defaults to on; no explicit path, and resolution comes up empty.
+			const ep = new LocalRuntimeEndpoint({ resolve: noRuntimeFound, provision });
+			const out = unwrapResponse<RuntimeExecResult>(await ep.request(createRequest("runtime/check", {})));
+			expect(calls.length).toBe(1);
+			// The provisioned binary is what actually got spawned.
+			expect(out.stdout.trim()).toBe("ARGS:build --no-color");
+		});
+
+		test("autoDownload false reports runtime-missing without provisioning", async () => {
+			const { calls, provision } = trackedProvision();
+			const ep = new LocalRuntimeEndpoint({ autoDownload: false, resolve: noRuntimeFound, provision });
+			const res = await ep.request(createRequest("runtime/check", {}));
+			expect(() => unwrapResponse(res)).toThrow(RuntimeRpcError);
+			try {
+				unwrapResponse(res);
+			} catch (e) {
+				expect((e as RuntimeRpcError).code).toBe("runtime-missing");
+			}
+			expect(calls).toEqual([]);
+		});
+
+		test("an explicit path never triggers a download, even with autoDownload on", async () => {
+			const { calls, provision } = trackedProvision();
+			// Explicit path that resolution rejects: the user asked for a specific binary,
+			// so the failure must surface rather than be papered over with a download.
+			const ep = new LocalRuntimeEndpoint({
+				explicitPath: path.join(dir, "nope"),
+				autoDownload: true,
+				resolve: noRuntimeFound,
+				provision,
+			});
+			const res = await ep.request(createRequest("runtime/check", {}));
+			try {
+				unwrapResponse(res);
+				throw new Error("expected error");
+			} catch (e) {
+				expect((e as RuntimeRpcError).code).toBe("runtime-missing");
+			}
+			expect(calls).toEqual([]);
+		});
 	});
 
 	test("timeout kills the process and reports killed", async () => {
