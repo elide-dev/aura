@@ -31,8 +31,15 @@ import "@oh-my-pi/pi-coding-agent/discovery";
 import {
 	clearOmpExtensionCliRoots,
 	injectOmpExtensionCliRoots,
+	listOmpExtensionRoots,
 } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
-import { CONFIG_DIR_NAME, getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import {
+	CONFIG_DIR_NAME,
+	getConfigRootDir,
+	LEGACY_CONFIG_DIR_NAME,
+	removeSyncWithRetries,
+	setAgentDir,
+} from "@oh-my-pi/pi-utils";
 
 const PROVIDER_ID = "omp-plugins";
 
@@ -116,7 +123,7 @@ function ctx(): LoadContext {
 }
 
 test("project settings.json#extensions surfaces every sub-directory", async () => {
-	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [ext] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [ext] }));
 
 	const [skills, commands, rules, prompts, hooks, tools, mcps] = await Promise.all([
 		loadFromPlugin<{ name: string }>(skillCapability.id, ctx()),
@@ -136,6 +143,24 @@ test("project settings.json#extensions surfaces every sub-directory", async () =
 	expect(hooks.some(h => h.name === "edit.sh" && h.type === "post")).toBe(true);
 	expect(tools.map(t => t.name)).toEqual(expect.arrayContaining(["wcount", "deep-tool"]));
 	expect(mcps.find(m => m.name === "lsp")?.command).toBe("lsp-server");
+});
+
+test("a pre-rebrand project .omp/settings.json still feeds sub-discovery", async () => {
+	writeFile(path.join(project, LEGACY_CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [ext] }));
+
+	const skills = await loadFromPlugin<{ name: string }>(skillCapability.id, ctx());
+	expect(skills.map(s => s.name)).toContain("my-skill");
+});
+
+test("the branded project settings.json wins over a legacy .omp one", async () => {
+	const legacyOnly = path.join(tempDir, "legacy-extension");
+	buildExtensionPackage(legacyOnly);
+	writeFile(path.join(project, LEGACY_CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [legacyOnly] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [ext] }));
+
+	const roots = await listOmpExtensionRoots(ctx());
+	expect(roots.map(r => r.path)).toContain(ext);
+	expect(roots.map(r => r.path)).not.toContain(legacyOnly);
 });
 
 test("user settings.json#extensions also feeds sub-discovery", async () => {
@@ -158,7 +183,7 @@ test("`--extension` CLI injection is wired through the same provider", async () 
 test("file-extension entrypoints contribute zero sub-surface (the file has no siblings to scan)", async () => {
 	const standaloneFile = path.join(tempDir, "standalone.ts");
 	fs.writeFileSync(standaloneFile, "export default function (_pi) {}\n");
-	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [standaloneFile] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [standaloneFile] }));
 
 	const skills = await loadFromPlugin<{ name: string }>(skillCapability.id, ctx());
 	expect(skills).toHaveLength(0);
@@ -170,7 +195,7 @@ test("relative paths in settings resolve against the project cwd", async () => {
 	const target = path.join(project, relative);
 	fs.mkdirSync(path.dirname(target), { recursive: true });
 	fs.cpSync(ext, target, { recursive: true });
-	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [`./${relative}`] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [`./${relative}`] }));
 
 	const skills = await loadFromPlugin<{ name: string }>(skillCapability.id, ctx());
 	expect(skills.map(s => s.name)).toContain("my-skill");
@@ -181,7 +206,7 @@ test(".mcp.json with bare entries (no command/url) records a warning and is skip
 		path.join(ext, ".mcp.json"),
 		JSON.stringify({ mcpServers: { broken: {}, ok: { command: "x", args: [] } } }),
 	);
-	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [ext] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [ext] }));
 
 	const result = await pluginProvider(mcpCapability.id).load(ctx());
 	expect(result.items.map(s => (s as { name: string }).name)).toEqual(["ok"]);
@@ -198,7 +223,7 @@ test("relative path-like command and cwd resolve against the plugin config direc
 			},
 		}),
 	);
-	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [ext] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [ext] }));
 
 	const servers = await loadFromPlugin<{ name: string; command?: string; cwd?: string }>(mcpCapability.id, ctx());
 	const local = servers.find(s => s.name === "local");
@@ -223,7 +248,7 @@ test("path-like command stays rooted at the plugin package root even with a subd
 			},
 		}),
 	);
-	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [ext] }));
+	writeFile(path.join(project, CONFIG_DIR_NAME, "settings.json"), JSON.stringify({ extensions: [ext] }));
 
 	const servers = await loadFromPlugin<{ name: string; command?: string; cwd?: string }>(mcpCapability.id, ctx());
 	const local = servers.find(s => s.name === "local");

@@ -10,7 +10,7 @@ and after every upstream merge.
 
 | File | Why |
 |---|---|
-| `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura; profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE |
+| `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura, LEGACY_CONFIG_DIR_NAME=.omp (read-only compat for pre-rebrand project dirs); profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE |
 | `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE |
 | `packages/coding-agent/src/task/discovery.ts` | TASK_AGENT_CONFIG_SOURCE derives from CONFIG_DIR_NAME (was hardcoded ".omp"; stale value filtered out all project/user agent dirs after rebrand) |
 | `packages/coding-agent/package.json` | bin: aura alias alongside omp |
@@ -19,6 +19,8 @@ and after every upstream merge.
 | `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`; imports the five `Runtime*Tool` classes and registers `run`/`check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates |
 | `packages/coding-agent/src/tools/builtin-names.ts` | appended `run`, `check`, `build`, `insights`, `profile` to `BUILTIN_TOOL_NAMES` (no collision with the `search`→`grep` / `find`→`glob` legacy alias map) |
 | `packages/coding-agent/src/tools/essential-tools.ts` | added `run`, `check`, `build` to `ESSENTIAL_BUILTIN_TOOL_NAMES` so they stay top-level and a re-register cannot demote them (issue #5764 guard); `insights`/`profile` stay `discoverable` |
+| `packages/coding-agent/src/config/settings.ts` | project config resolves to `<cwd>/${CONFIG_DIR_NAME}/config.yml` (was a hardcoded `.omp`): `#projectConfigPath()` is the sole write target, `#loadProjectConfigYaml()` falls back to `<cwd>/.omp/config.yml` for reads and seeds the first branded write so legacy keys carry forward |
+| `packages/coding-agent/src/discovery/omp-extension-roots.ts` | project extension roots read `<cwd>/${CONFIG_DIR_NAME}/settings.json` (was a hardcoded `.omp`) with a `.omp` read fallback via `readProjectSettingsExtensions`; `scopeDirs` folded into the call site |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime command |
 | `packages/coding-agent/src/sdk.ts` | wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
 | `AGENTS.md` | appended the `## Aura fork conventions` section (points contributors at this file, states the runtime naming rule, locates specs/plans) |
@@ -40,9 +42,14 @@ re-substituting the constant.
 `discovery/omp-plugins`, `discovery/pi-config-dir`,
 `extension-dashboard-mcp-parity`, `gc-cli`,
 `issue-4197-plugin-resolution-cache`, `main-interactive-input`,
-`marketplace/manager`, `marketplace/project-scope`,
-`modes/controllers/omfg-controller`, `sdk-skills`, `settings-reload-cwd`,
+`marketplace/manager`, `marketplace/project-scope`, `model-hub`,
+`modes/controllers/omfg-controller`, `sdk-skills`,
+`selector-settings-side-effects`, `settings-reload-cwd`,
 `system-prompt-dedup`, `task/discovery`, `tools/gh`, `update-cli`.
+
+`settings-reload-cwd` and `discovery/omp-plugins` additionally carry fork-added
+cases pinning the project-config brand split (branded path canonical, `.omp`
+read fallback, writes never legacy); keep those alongside upstream's.
 
 `packages/utils/test/`: `dirs-cache`, `dirs-python-gateway`, `profiles`.
 

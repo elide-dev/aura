@@ -17,7 +17,14 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import {
+	CONFIG_DIR_NAME,
+	getAgentDir,
+	isEnoent,
+	LEGACY_CONFIG_DIR_NAME,
+	logger,
+	tryParseJson,
+} from "@oh-my-pi/pi-utils";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
@@ -75,25 +82,27 @@ export function getInjectedOmpExtensionCliRoots(): readonly OmpExtensionRoot[] {
 	return injectedCliRoots.map(({ path: p, level }) => ({ path: p, level, name: path.basename(p) }));
 }
 
-interface ScopeDirs {
-	project: string;
-	user: string;
-}
-
-function scopeDirs(ctx: LoadContext): ScopeDirs {
-	return {
-		project: path.join(ctx.cwd, ".omp"),
-		user: getAgentDir(),
-	};
-}
-
-async function readSettingsExtensions(settingsPath: string): Promise<string[]> {
-	const content = await readFile(settingsPath);
-	if (!content) return [];
+function parseSettingsExtensions(content: string): string[] {
 	const parsed = tryParseJson<{ extensions?: unknown }>(content);
 	const raw = parsed?.extensions;
 	if (!Array.isArray(raw)) return [];
 	return raw.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+}
+
+async function readSettingsExtensions(settingsPath: string): Promise<string[]> {
+	const content = await readFile(settingsPath);
+	return content ? parseSettingsExtensions(content) : [];
+}
+
+/**
+ * Project-scope extensions from `<cwd>/<CONFIG_DIR_NAME>/settings.json`, falling back
+ * to the pre-rebrand `<cwd>/.omp/settings.json` when the branded file is absent. The
+ * branded directory is canonical; the legacy path is read compatibility only.
+ */
+async function readProjectSettingsExtensions(ctx: LoadContext): Promise<string[]> {
+	const content = await readFile(path.join(ctx.cwd, CONFIG_DIR_NAME, "settings.json"));
+	if (content) return parseSettingsExtensions(content);
+	return readSettingsExtensions(path.join(ctx.cwd, LEGACY_CONFIG_DIR_NAME, "settings.json"));
 }
 
 function resolveAgainst(raw: string, ctx: LoadContext): string {
@@ -122,8 +131,9 @@ async function isDirectory(p: string): Promise<boolean> {
  * are dropped):
  *
  * 1. CLI roots injected via {@link injectOmpExtensionCliRoots}
- * 2. Project `<cwd>/.omp/settings.json#extensions`
- * 3. User `~/.omp/agent/settings.json#extensions`
+ * 2. Project `<cwd>/<CONFIG_DIR_NAME>/settings.json#extensions` (legacy `.omp` read
+ *    fallback when the branded file is absent)
+ * 3. User `<agent dir>/settings.json#extensions`
  * 4. Enabled npm/link plugins installed under `<plugins>/node_modules/` (for
  *    `omp install <pkg>` / `omp plugin install` / `omp plugin link`). Marketplace
  *    installs are loaded by the `claude-plugins` provider and are excluded here.
@@ -134,10 +144,9 @@ async function isDirectory(p: string): Promise<boolean> {
  * other sources still surface.
  */
 export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtensionRoot[]> {
-	const { project, user } = scopeDirs(ctx);
 	const [projectExtensions, userExtensions, installedPlugins] = await Promise.all([
-		readSettingsExtensions(path.join(project, "settings.json")),
-		readSettingsExtensions(path.join(user, "settings.json")),
+		readProjectSettingsExtensions(ctx),
+		readSettingsExtensions(path.join(getAgentDir(), "settings.json")),
 		listInstalledPluginRoots(ctx),
 	]);
 

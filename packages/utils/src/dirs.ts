@@ -22,6 +22,13 @@ export const APP_NAME: string = "aura";
 /** Config directory name (e.g. ".aura") */
 export const CONFIG_DIR_NAME: string = ".aura";
 
+/**
+ * Pre-rebrand config directory name. Read-only compatibility: project-local
+ * config written before the rename still resolves, but nothing is ever written
+ * here — {@link CONFIG_DIR_NAME} is the sole write target.
+ */
+export const LEGACY_CONFIG_DIR_NAME: string = ".omp";
+
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 

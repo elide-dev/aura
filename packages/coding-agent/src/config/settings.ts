@@ -17,11 +17,13 @@ import * as path from "node:path";
 import { configureCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { configureProviderMaxInFlightRequests } from "@oh-my-pi/pi-ai/stream";
 import {
+	CONFIG_DIR_NAME,
 	getAgentDbPath,
 	getAgentDir,
 	getLastChangelogVersionPath,
 	getProjectDir,
 	isEnoent,
+	LEGACY_CONFIG_DIR_NAME,
 	logger,
 	MAIN_CONFIG_FILENAMES,
 	procmgr,
@@ -1047,6 +1049,23 @@ export class Settings {
 		return this;
 	}
 
+	/** `<cwd>/<CONFIG_DIR_NAME>/config.yml` — the canonical project config, and the only write target. */
+	#projectConfigPath(): string {
+		return path.join(this.#cwd, CONFIG_DIR_NAME, "config.yml");
+	}
+
+	/**
+	 * Project config for reading: the branded file, falling back to the pre-rebrand
+	 * `<cwd>/.omp/config.yml` so projects that predate the rename keep loading. The
+	 * fallback is read-only — {@link #saveProjectNow} always writes the branded path.
+	 */
+	async #loadProjectConfigYaml(): Promise<RawSettings> {
+		const branded = await this.#loadYamlIfPresent(this.#projectConfigPath());
+		if (branded) return branded;
+		const legacy = path.join(this.#cwd, LEGACY_CONFIG_DIR_NAME, "config.yml");
+		return (await this.#loadYamlIfPresent(legacy)) ?? {};
+	}
+
 	async #loadYaml(filePath: string): Promise<RawSettings> {
 		const loaded = await this.#loadYamlIfPresent(filePath);
 		return loaded ?? {};
@@ -1097,7 +1116,7 @@ export class Settings {
 					merged = this.#deepMerge(merged, item.data as RawSettings);
 				}
 			}
-			const nativeProject = await this.#loadYaml(path.join(this.#cwd, ".omp", "config.yml"));
+			const nativeProject = await this.#loadProjectConfigYaml();
 			const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
 			if (nativeModelRoles !== undefined) {
 				merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
@@ -1812,14 +1831,16 @@ export class Settings {
 	async #saveProjectNow(): Promise<void> {
 		if (this.#savesCancelled || !this.#persist || this.#modifiedProjectModelRoles.size === 0) return;
 
-		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
+		const projectConfigPath = this.#projectConfigPath();
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
 		this.#modifiedProjectModelRoles.clear();
 
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
 			await withFileLock(projectConfigPath, async () => {
-				const projectSettings = await this.#loadYaml(projectConfigPath);
+				// Seed from whichever file the read path resolved, so a legacy `.omp` project
+				// carries its existing keys forward into the branded file instead of losing them.
+				const projectSettings = await this.#loadProjectConfigYaml();
 
 				const projectRoles = getByPath(this.#project, ["modelRoles"]);
 				for (const role of modifiedModelRoles) {
