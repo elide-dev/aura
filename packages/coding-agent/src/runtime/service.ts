@@ -4,6 +4,8 @@ import {
 	type RuntimeCheckParams,
 	type RuntimeExecResult,
 	type RuntimeInsightsParams,
+	type RuntimeJvmParams,
+	type RuntimeJvmResult,
 	type RuntimeMethod,
 	type RuntimeProfileParams,
 	type RuntimeRpcRequest,
@@ -42,6 +44,10 @@ export class RuntimeService {
 	}
 	profile(params: RuntimeProfileParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
 		return this.call("runtime/profile", params, signal);
+	}
+	/** One of the six JVM flows; see {@link RuntimeJvmParams.action}. */
+	jvm(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
+		return this.call("runtime/jvm", params, signal);
 	}
 	status(): Promise<RuntimeStatusResult> {
 		return this.call("runtime/status", undefined);

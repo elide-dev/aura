@@ -23,9 +23,13 @@ export type RuntimeMethod =
 	| "runtime/build"
 	| "runtime/insights"
 	| "runtime/profile"
+	| "runtime/jvm"
 	| "runtime/status";
 
-export type RuntimeLanguage = "js" | "ts" | "python";
+export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
+
+/** The two compiled guest languages, which take the JVM flows rather than `runtime/run`. */
+export type JvmLanguage = "java" | "kotlin";
 
 export interface RuntimeRunParams {
 	/** Inline source; mutually exclusive with `path`. Written to a temp file (stdin source mode is unsupported by the runtime). */
@@ -49,6 +53,66 @@ export interface RuntimeInsightsParams extends RuntimeRunParams {
 
 export interface RuntimeProfileParams extends RuntimeRunParams {
 	mode: "cputracing" | "cpusampling";
+}
+
+/** The six JVM flows behind the single `runtime/jvm` method. */
+export type RuntimeJvmAction = "run" | "disassemble" | "format" | "jar" | "deps" | "javadoc";
+
+/**
+ * Parameters for `runtime/jvm`. One method, one action union: every flow is
+ * "materialize source in a workdir, compile, then do one more thing with the
+ * result", so they share plumbing rather than six near-identical methods.
+ * Which fields are required depends on `action`; the endpoint answers
+ * `invalid-params` naming the missing field.
+ */
+export interface RuntimeJvmParams {
+	action: RuntimeJvmAction;
+	/** Source language. Required for every action except `javadoc` (Java-only) and `jar`/`deps` in artifact mode. */
+	language?: JvmLanguage;
+	/** Inline source to compile. */
+	code?: string;
+	/** Entrypoint/target class override; see `deriveJvmMainClass`. */
+	mainClass?: string;
+	/** `jar` sub-mode: build a jar from source, or list an existing one. Default `create`. */
+	mode?: "create" | "inspect";
+	/** Destination written by `jar` (create) and `javadoc`, resolved against `cwd`. */
+	output?: string;
+	/** Required to replace an existing `output`. */
+	overwrite?: boolean;
+	/** Existing jar to inspect (`jar`, mode `inspect`), resolved against `cwd`. */
+	jar?: string;
+	/** Existing `.class`/`.jar`/directory to analyze (`deps`), resolved against `cwd`. */
+	path?: string;
+	/** Base directory for `output`/`jar`/`path` resolution. Defaults to the endpoint process cwd. */
+	cwd?: string;
+	timeoutMs?: number;
+}
+
+/**
+ * Result of a `runtime/jvm` flow. It extends {@link RuntimeExecResult} with the
+ * invocation that produced it (`phase`) plus whatever that flow uniquely
+ * produced. `exitCode`/`stdout`/`stderr` always describe the *last* invocation
+ * the flow reached, so a failed compile is reported as the compiler saw it.
+ */
+export interface RuntimeJvmResult extends RuntimeExecResult {
+	action: RuntimeJvmAction;
+	/** The invocation these streams came from — `compile` means the flow stopped there. */
+	phase: "compile" | RuntimeJvmAction;
+	language?: JvmLanguage;
+	/** Class the flow compiled and targeted. */
+	className?: string;
+	/** `format`: the formatted source, read back from the workdir. */
+	formatted?: string;
+	/** `jar`/`javadoc`: absolute path actually written. */
+	output?: string;
+	/** `jar` (inspect): absolute path of the archive that was listed. */
+	jar?: string;
+	/** `jar`: `jar --list` output for the built or inspected archive. */
+	listing?: string;
+	/** `javadoc`: number of entries copied into `output`. */
+	entryCount?: number;
+	/** `javadoc`: first few top-level entries of `output`, for orientation. */
+	topLevel?: string[];
 }
 
 export interface RuntimeBuildParams {

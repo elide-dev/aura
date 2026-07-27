@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { RuntimeExecResult } from "../src/runtime/protocol";
 import {
@@ -33,14 +34,68 @@ async function exists(p: string): Promise<boolean> {
 }
 
 describe("withRuntimeWorkdir", () => {
-	test("two invocations in one flow share the same directory", async () => {
-		const { calls, spawn } = recordingSpawn();
+	test("two invocations in one flow share the same directory, and files written before the first survive to the second", async () => {
+		const calls: SpawnCall[] = [];
+		/** Records the call, then reports what the workdir contains at that moment. */
+		const listing: string[][] = [];
+		let workdir = "";
+		const spawn: RuntimeSpawn = async (argv, opts, signal) => {
+			calls.push({ argv, opts, signal });
+			listing.push((await fs.readdir(workdir)).sort());
+			return { exitCode: 0, stdout: "", stderr: "", durationMs: 0, killed: false } satisfies RuntimeExecResult;
+		};
 		const seen = await withRuntimeWorkdir({ spawn }, async wd => {
+			workdir = wd.dir;
+			await wd.write("Main.java", "class Main {}");
 			await wd.run(["javac", "Main.java"], { cwd: wd.dir });
+			// Stand in for the compiler's output: the second invocation must see it.
+			await wd.write("Main.class", "bytecode");
 			await wd.run(["java", "Main"], { cwd: wd.dir });
 			return wd.dir;
 		});
 		expect(calls.map(c => c.opts.cwd)).toEqual([seen, seen]);
+		expect(listing[0]).toEqual(["Main.java"]);
+		expect(listing[1]).toEqual(["Main.class", "Main.java"]);
+	});
+
+	test("write refuses to escape the workdir", async () => {
+		await withRuntimeWorkdir({ spawn: recordingSpawn().spawn }, async wd => {
+			await expect(wd.write(path.join("..", "escape.java"), "x")).rejects.toThrow(
+				/Refusing to write outside the runtime workdir/,
+			);
+			await expect(wd.write(path.join("a", "..", "..", "escape.java"), "x")).rejects.toThrow(
+				/Refusing to write outside the runtime workdir/,
+			);
+			await expect(wd.write(path.join(os.tmpdir(), "absolute.java"), "x")).rejects.toThrow(
+				/Refusing to write outside the runtime workdir/,
+			);
+			// A nested name that stays inside is still fine.
+			expect(await wd.write(path.join("a", "b", "Ok.java"), "x")).toBe(path.join(wd.dir, "a", "b", "Ok.java"));
+		});
+	});
+
+	test("a cleanup failure does not mask the flow's result", async () => {
+		const rm = spyOn(fs, "rm").mockRejectedValueOnce(new Error("EBUSY: directory is busy"));
+		try {
+			const value = await withRuntimeWorkdir({ spawn: recordingSpawn().spawn }, async () => "flow-value");
+			expect(value).toBe("flow-value");
+			expect(rm).toHaveBeenCalled();
+		} finally {
+			rm.mockRestore();
+		}
+	});
+
+	test("a cleanup failure does not mask the flow's error either", async () => {
+		const rm = spyOn(fs, "rm").mockRejectedValueOnce(new Error("EBUSY: directory is busy"));
+		try {
+			await expect(
+				withRuntimeWorkdir({ spawn: recordingSpawn().spawn }, async () => {
+					throw new Error("flow failed");
+				}),
+			).rejects.toThrow("flow failed");
+		} finally {
+			rm.mockRestore();
+		}
 	});
 
 	test("write materializes files into the workdir and returns absolute paths", async () => {
