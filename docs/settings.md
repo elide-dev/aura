@@ -487,6 +487,7 @@ runtime:
   enabled: true
   autoDownload: true
   path: ""
+  allowShell: false
 ```
 
 | Key | Type | Default | Notes |
@@ -494,6 +495,25 @@ runtime:
 | `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile`, `runtime_debug`/`serve`, and `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
+| `runtime.allowShell` | boolean | `false` | Stop routing direct runtime-binary shell commands to the innate tools. See below. |
+
+#### Runtime shell policy
+
+`bashInterceptor` carries a group of rules that route a direct runtime-binary shell
+command to the innate tool that owns the job: a bare invocation or `run …` to `run`,
+`build …` to `build` (`check` is its no-target form), `serve …` to `serve`, and the
+`java`/`javac`/`javap`/`jar`/`jdeps`/`javadoc` subcommands to the matching `jvm_*`
+tool. `bunx`/`npx`/`pnpm dlx` forms under either package name are covered too. This
+is routing enforcement, not a sandbox — the goal is that the model reaches one
+managed, version-pinned runtime through tools that return structured results,
+instead of shelling out. Like every interceptor rule, these apply only while
+`bashInterceptor.enabled` is on, and each one stands down automatically when its
+target tool is not registered — so the whole group is inert when `runtime.enabled`
+is off.
+
+To opt out, set `runtime.allowShell: true` or export `AURA_ALLOW_ELIDE_SHELL=1`
+(kept under that name for compatibility). Either one drops just this group; the rest
+of the interceptor keeps running.
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 

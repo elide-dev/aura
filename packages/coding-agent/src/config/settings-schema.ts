@@ -304,6 +304,132 @@ const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
+
+// ── Runtime shell policy ───────────────────────────────────────────────────
+// Routing enforcement, not a sandbox: the point is that the model reaches the
+// runtime through the innate tools (one managed, version-pinned binary, structured
+// results) rather than through ad-hoc shell invocations. A determined shell can
+// still get there; that is accepted.
+//
+// These rules need no `runtime.enabled` check of their own: `checkBashInterception`
+// skips any rule whose `tool` is absent from `availableTools`, and none of
+// `run`/`check`/`build`/`serve`/`jvm_*` are registered when the runtime is off, so
+// the whole group stands down for free.
+
+/** Marks the rules that `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL=1` suppress. */
+export const RUNTIME_SHELL_RULE_KIND = "runtime-shell";
+
+// Command position: string start, or right after a separator that ends the previous
+// command (`;`, `|`, `||`, `&`, `&&`, newline, subshell `(`). Anchoring on position
+// — the same reasoning the `>` redirect rule applies — is what keeps the binary name
+// from matching as a path segment, a bare argument, or a `--elide…` flag. Known
+// regex limit (accepted for v1): a separator inside a quoted string still reads as
+// command position, so `grep "a|elide" f` can false-positive.
+const CMD_POS = "(?:^|[\\n;&|(])\\s*";
+// Env assignments and transparent wrappers a real invocation can hide behind
+// (`FOO=1 sudo -E elide …`, `env FOO=1 elide …`). The repetition must consume
+// everything between the separator and the binary, so an unrelated command in
+// command position cannot lead into a match.
+const CMD_PRELUDE = "(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\\s;&|]*|sudo|command|exec|env|-[^\\s;&|]*)\\s+)*";
+// The runtime binary as a command word: optional directory prefix, optional `.exe`,
+// and a right boundary rejecting both a longer name (`elidefoo`) and a further path
+// segment (`/home/elide/x`).
+const RUNTIME_BIN = "(?:[^\\s;&|()<>]*/)?elide(?:\\.exe)?(?![\\w./-])";
+// Subcommand position: after the binary, skipping any global flags.
+const RUNTIME_SUBCOMMAND = "\\s+(?:-[^\\s;&|]*\\s+)*";
+// `bunx`/`npx`/`pnpm dlx`-style one-shot runners, under either package name.
+const RUNTIME_PACKAGE_RUNNER =
+	"(?:bunx|npx|pnpx|(?:bun|npm|pnpm|yarn)\\s+(?:dlx|exec))\\s+(?:-[^\\s;&|]*\\s+)*(?:@elide-dev/)?elide(?![\\w./-])";
+const RUNTIME_WORD_END = "(?![\\w.-])";
+
+const RUNTIME_SHELL_OPT_OUT =
+	"If you genuinely need the binary directly (runtime development), set `runtime.allowShell: true` " +
+	"or export AURA_ALLOW_ELIDE_SHELL=1.";
+
+/** Direct shell invocation of the runtime binary, routed to the innate tool that owns the job. */
+function runtimeShellRule(subcommandPattern: string | undefined, tool: string, message: string): BashInterceptorRule {
+	const pattern =
+		subcommandPattern === undefined
+			? `${CMD_POS}${CMD_PRELUDE}${RUNTIME_BIN}`
+			: `${CMD_POS}${CMD_PRELUDE}${RUNTIME_BIN}${RUNTIME_SUBCOMMAND}(?:${subcommandPattern})${RUNTIME_WORD_END}`;
+	return { kind: RUNTIME_SHELL_RULE_KIND, pattern, tool, message: `${message} ${RUNTIME_SHELL_OPT_OUT}` };
+}
+
+/**
+ * Rules routing direct runtime-binary invocation to the innate tools. Ordered
+ * specific-first: `checkBashInterception` returns the first match whose tool is
+ * available, so an unavailable specific tool falls through to the generic `run`
+ * rule rather than letting the command past.
+ */
+export const RUNTIME_SHELL_INTERCEPTOR_RULES: BashInterceptorRule[] = [
+	runtimeShellRule(
+		"build",
+		"build",
+		"Use the `build` tool instead of building through the shell — it runs on the managed, version-pinned runtime and returns structured results. `check` is the no-target form.",
+	),
+	runtimeShellRule(
+		"serve",
+		"serve",
+		"Use the `serve` tool instead of starting the server through the shell — it runs as a managed job, so its output and lifecycle stay observable.",
+	),
+	runtimeShellRule(
+		"javac|java",
+		"jvm_run",
+		"Use the `jvm_run` tool instead of driving the embedded JVM through the shell — it compiles and runs against a pinned bytecode target.",
+	),
+	runtimeShellRule(
+		"javap",
+		"jvm_disassemble",
+		"Use the `jvm_disassemble` tool instead of driving the embedded JVM's disassembler through the shell.",
+	),
+	runtimeShellRule("jar", "jvm_jar", "Use the `jvm_jar` tool instead of driving jar packaging through the shell."),
+	runtimeShellRule(
+		"jdeps",
+		"jvm_deps",
+		"Use the `jvm_deps` tool instead of driving dependency analysis through the shell.",
+	),
+	runtimeShellRule(
+		"javadoc",
+		"jvm_javadoc",
+		"Use the `jvm_javadoc` tool instead of driving API doc generation through the shell.",
+	),
+	{
+		kind: RUNTIME_SHELL_RULE_KIND,
+		pattern: `${CMD_POS}${CMD_PRELUDE}${RUNTIME_PACKAGE_RUNNER}`,
+		tool: "run",
+		message:
+			"Fetching and running the runtime through a package runner is blocked — the innate tools already own a managed, version-pinned runtime. " +
+			`Use \`run\` for code and scripts, \`check\`/\`build\` to compile, \`insights\` and \`profile\` to analyze, \`runtime_debug\`/\`serve\` for long-running processes, and the \`jvm_*\` tools for JVM work. ${RUNTIME_SHELL_OPT_OUT}`,
+	},
+	runtimeShellRule(
+		undefined,
+		"run",
+		"Use the innate runtime tools instead of invoking the runtime binary from the shell: `run` for code and scripts, `check`/`build` to compile, `insights` and `profile` to analyze, `runtime_debug`/`serve` for long-running processes, and the `jvm_*` tools for JVM work. They share one managed, version-pinned runtime and return structured results.",
+	),
+];
+
+/** True when direct shell invocation of the runtime is permitted (setting or compat env var). */
+export function isRuntimeShellAllowed(
+	allowShellSetting: boolean,
+	env: Record<string, string | undefined> = process.env,
+): boolean {
+	if (allowShellSetting) return true;
+	return /^(?:1|true|yes|on)$/i.test(env.AURA_ALLOW_ELIDE_SHELL ?? "");
+}
+
+/**
+ * Drop the runtime shell rules when the opt-out is active. Every other rule stays
+ * in force — the opt-out is about the runtime policy, not the interceptor.
+ */
+export function applyRuntimeShellOptOut(
+	rules: BashInterceptorRule[],
+	allowShellSetting: boolean,
+	env?: Record<string, string | undefined>,
+): BashInterceptorRule[] {
+	if (!isRuntimeShellAllowed(allowShellSetting, env)) return rules;
+	return rules.filter(rule => rule.kind !== RUNTIME_SHELL_RULE_KIND);
+}
+
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
 		pattern: "^\\s*(cat|head|tail|less|more)\\s+",
@@ -366,6 +492,7 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 		tool: "hub",
 		message: 'Use the `hub` tool (`op:"start"`) for watch mode so its output, input, and lifecycle stay managed.',
 	},
+	...RUNTIME_SHELL_INTERCEPTOR_RULES,
 ];
 
 export const SETTINGS_SCHEMA = {
@@ -466,6 +593,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Runtime",
 			label: "Runtime binary path",
 			description: "Explicit runtime binary; overrides discovery and disables auto-download.",
+		},
+	},
+	"runtime.allowShell": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Allow shell invocation of the runtime",
+			description:
+				"Stop routing direct runtime-binary shell commands to the innate tools. For runtime development; AURA_ALLOW_ELIDE_SHELL=1 does the same per-process.",
 		},
 	},
 	"prewalk.enabled": {
@@ -5624,6 +5762,12 @@ export interface BashInterceptorRule {
 	tool: string;
 	message: string;
 	allowSubcommands?: string[];
+	/**
+	 * Optional group tag, so a related set of rules can be suppressed as a unit.
+	 * `RUNTIME_SHELL_RULE_KIND` is the only tag in use — see
+	 * {@link applyRuntimeShellOptOut}.
+	 */
+	kind?: string;
 }
 
 export interface ShellMinimizerSettings {

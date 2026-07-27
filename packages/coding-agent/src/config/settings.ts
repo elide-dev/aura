@@ -41,6 +41,7 @@ import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { isSearchProviderId, SEARCH_PROVIDER_ORDER } from "../web/search/types";
 import { withFileLock } from "./file-lock";
 import {
+	applyRuntimeShellOptOut,
 	type BashInterceptorRule,
 	type GroupPrefix,
 	type GroupTypeMap,
@@ -717,9 +718,14 @@ export class Settings {
 
 	/**
 	 * Get bash interceptor rules (typed accessor for complex array config).
+	 *
+	 * This is where the rule set is assembled for the bash tool, so it is also
+	 * where the runtime shell opt-out lands: `runtime.allowShell` (or the compat
+	 * `AURA_ALLOW_ELIDE_SHELL=1`) drops the runtime-routing rules and leaves every
+	 * other rule in force.
 	 */
 	getBashInterceptorRules(): BashInterceptorRule[] {
-		return this.get("bashInterceptor.patterns");
+		return applyRuntimeShellOptOut(this.get("bashInterceptor.patterns"), this.get("runtime.allowShell"));
 	}
 
 	#modelRolesFromLayer(layer: RawSettings): Record<string, string> {
