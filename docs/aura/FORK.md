@@ -11,7 +11,7 @@ and after every upstream merge.
 | File | Why |
 |---|---|
 | `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura, LEGACY_CONFIG_DIR_NAME=.omp (read-only compat for pre-rebrand project dirs); profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE; `readInheritedProfileFromEnvSafe` (was `readPiProfileFromEnvSafe`) scans all three profile vars in that precedence for the pre-profile `PI_CODING_AGENT_DIR` snapshot, since `setProfile` writes all three |
-| `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE |
+| `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE; handles the top-level `--check` flag (one-line clean-env health probe, no model/network/provisioning) before delegating |
 | `packages/coding-agent/src/task/discovery.ts` | `TASK_AGENT_CONFIG_SOURCES` derives from CONFIG_DIR_NAME + LEGACY_CONFIG_DIR_NAME (was a single hardcoded `".omp"`; stale value filtered out all project/user agent dirs after rebrand). Project agent dirs are consumed in priority order so `.aura/agents` beats legacy `.omp/agents` on a name collision, and `projectAgentsDir` only ever reports a writable base |
 | `packages/coding-agent/package.json` | bin: aura alias alongside omp |
 | `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` theme in `BUILTIN_THEMES` (import + entry), mirroring `dark`/`light` |
@@ -28,7 +28,7 @@ and after every upstream merge.
 | `packages/coding-agent/src/cli/agents-cli.ts` | `agents unpack --project` targets `<projectDir>/${CONFIG_DIR_NAME}/agents` (was a hardcoded `.omp`); discovery reads both dirs, so the write side is branded-only |
 | `packages/coding-agent/src/advisor/watchdog.ts` | `collectConfigCandidates` probes `NATIVE_CONFIG_DIR_NAMES` (branded + legacy `.omp`) per ancestor instead of only `.omp`, and the owner-dir/level classification keys off that list |
 | `packages/coding-agent/src/cli/args.ts` | `getExtraHelpText` documents `AURA_PROFILE` first with `OMP_PROFILE` marked legacy; `agents unpack` examples use `${APP_NAME}` and `${CONFIG_DIR_NAME}` |
-| `packages/coding-agent/src/cli-commands.ts` | register runtime command |
+| `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
 | `packages/coding-agent/src/sdk.ts` | wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
 | `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` and linking the five runtime tool pages |
 | `AGENTS.md` | appended the `## Aura fork conventions` section (points contributors at this file, states the runtime naming rule, locates specs/plans) |
@@ -67,6 +67,7 @@ read fallback, writes never legacy); keep those alongside upstream's.
 
 - `packages/coding-agent/src/runtime/` — runtime capability core
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts`
+- `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts`
 - `packages/coding-agent/src/tools/runtime-*.ts`, `src/prompts/tools/runtime-*.md`
 - `packages/coding-agent/src/modes/theme/aura.json` — the `aura` built-in theme
   registered by the `theme.ts` row above

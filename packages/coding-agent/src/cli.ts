@@ -369,6 +369,22 @@ export async function runCli(argv: string[]): Promise<void> {
 		await runSmokeTest();
 		return;
 	}
+	// `--check`: one-line readiness probe for clean-env CI, handled here rather
+	// than as a launch flag so it never reaches the model or the command parser
+	// (the `--smoke-test` precedent directly above). Exit code follows the same
+	// hard-failure contract as `doctor`: nonzero only for a too-old Bun or a
+	// runtime that is enabled but unavailable.
+	if (resolvedArgv[0] === "--check") {
+		const { getProjectDir } = await import("@oh-my-pi/pi-utils");
+		const [{ runDoctorCommand }, { Settings }] = await Promise.all([
+			import("./cli/doctor-cli"),
+			import("./config/settings"),
+		]);
+		await Settings.init({ cwd: getProjectDir() });
+		const code = await runDoctorCommand({ flags: { check: true } });
+		if (code !== 0) process.exitCode = code;
+		return;
+	}
 	const [{ run }, { commands, resolveCliArgv }] = await Promise.all([
 		import("@oh-my-pi/pi-utils/cli"),
 		import("./cli-commands"),
