@@ -5,8 +5,13 @@ import {
 	type DoctorReport,
 	formatCheckLine,
 	formatDoctorReport,
+	resolveToolGating,
 	runDoctorCommand,
+	SESSION_GATED_TOOL_NAMES,
+	SETTINGS_GATED_TOOL_NAMES,
+	type ToolGateSettings,
 } from "../src/cli/doctor-cli";
+import { BUILTIN_TOOL_NAMES } from "../src/tools/builtin-names";
 
 /**
  * A fully healthy fabricated input. Every branch test starts here and perturbs
@@ -35,7 +40,7 @@ function healthyInput(overrides: Partial<DoctorInput> = {}): DoctorInput {
 			},
 		},
 		natives: { loaded: true, version: "17.1.3", target: "linux-x64-modern" },
-		tools: { available: ["read", "bash", "run"], active: ["read", "bash", "run"] },
+		tools: { available: ["read", "bash", "run"], active: ["read", "bash", "run"], gatedOff: [], sessionGated: [] },
 		plugins: { checks: [{ name: "plugins_directory", status: "ok", message: "Found at /x" }] },
 		terminal: {
 			detectedId: "wezterm",
@@ -146,6 +151,39 @@ describe("buildDoctorReport", () => {
 		expect(section(report, "runtime").entries[0].detail).toContain("runtime.enabled");
 	});
 
+	// One label, one source: the endpoint-reported version when a probe landed,
+	// the compiled-in constant otherwise, and a visible warning on skew.
+	test("protocol entry prefers the endpoint-reported version", () => {
+		const entry = section(buildDoctorReport(healthyInput()), "runtime").entries.find(e => e.label === "protocol");
+		expect(entry?.detail).toBe("v2");
+		expect(entry?.status).toBe("ok");
+	});
+
+	test("protocol entry marks itself as compiled-in when the endpoint was not reached", () => {
+		const report = buildDoctorReport(healthyInput({ runtime: { enabled: false, protocolVersion: 2 } }));
+		const entry = section(report, "runtime").entries.find(e => e.label === "protocol");
+		expect(entry?.detail).toContain("compiled in");
+		expect(entry?.detail).toContain("v2");
+	});
+
+	test("protocol skew between endpoint and build is warned about, not hidden", () => {
+		const report = buildDoctorReport(
+			healthyInput({
+				runtime: {
+					enabled: true,
+					protocolVersion: 2,
+					status: { available: true, version: "1.4.1", protocolVersion: 1 },
+				},
+			}),
+		);
+		const entry = section(report, "runtime").entries.find(e => e.label === "protocol");
+		expect(entry?.status).toBe("warn");
+		expect(entry?.detail).toContain("v1");
+		expect(entry?.detail).toContain("v2");
+		// A protocol skew is not one of the two hard failures.
+		expect(report.exitCode).toBe(0);
+	});
+
 	test("runtime probe failure without a status is reported, not thrown", () => {
 		const report = buildDoctorReport(
 			healthyInput({ runtime: { enabled: true, protocolVersion: 2, error: "spawn EACCES" } }),
@@ -173,16 +211,41 @@ describe("buildDoctorReport", () => {
 
 	test("tools report the active/available split", () => {
 		const report = buildDoctorReport(
-			healthyInput({ tools: { available: ["read", "bash", "run", "check"], active: ["read", "bash"] } }),
+			healthyInput({
+				tools: {
+					available: ["read", "bash", "run", "check"],
+					active: ["read", "bash"],
+					gatedOff: [
+						{ name: "run", reason: "runtime.enabled = false" },
+						{ name: "check", reason: "runtime.enabled = false" },
+					],
+					sessionGated: [],
+				},
+			}),
 		);
 		const entries = section(report, "tools").entries;
 		expect(entries.map(e => e.detail).join(" ")).toContain("2/4");
-		// The gated-off names are named so a missing tool is diagnosable.
-		expect(entries.map(e => e.detail).join(" ")).toContain("run");
+		// The gated-off names are named, with the reason, so a missing tool is diagnosable.
+		const gated = entries.find(e => e.label === "gated off");
+		expect(gated?.detail).toContain("run, check");
+		expect(gated?.detail).toContain("runtime.enabled = false");
+	});
+
+	test("session-gated names are listed separately and still counted active", () => {
+		const report = buildDoctorReport(
+			healthyInput({
+				tools: { available: ["read", "ask"], active: ["read", "ask"], gatedOff: [], sessionGated: ["ask"] },
+			}),
+		);
+		const entry = section(report, "tools").entries.find(e => e.label === "session-gated");
+		expect(entry?.detail).toContain("ask");
+		expect(entry?.detail).toContain("live session");
 	});
 
 	test("no active tools warns", () => {
-		const report = buildDoctorReport(healthyInput({ tools: { available: ["read"], active: [] } }));
+		const report = buildDoctorReport(
+			healthyInput({ tools: { available: ["read"], active: [], gatedOff: [], sessionGated: [] } }),
+		);
 		expect(section(report, "tools").status).toBe("warn");
 		expect(report.exitCode).toBe(0);
 	});
@@ -222,6 +285,17 @@ describe("buildDoctorReport", () => {
 		expect(section(buildDoctorReport(healthyInput()), "terminal").status).toBe("ok");
 	});
 
+	test("a failed memory probe is distinct from a backend the user turned off", () => {
+		const report = buildDoctorReport(
+			healthyInput({ memory: { backend: "unknown", diagnose: false, stats: false, error: "import blew up" } }),
+		);
+		const detail = section(report, "memory").entries[0].detail;
+		expect(detail).toContain("import blew up");
+		expect(detail).not.toContain("memory.backend = off");
+		expect(section(report, "memory").status).toBe("warn");
+		expect(report.exitCode).toBe(0);
+	});
+
 	test("memory backend off is an optional miss", () => {
 		const report = buildDoctorReport(healthyInput({ memory: { backend: "off", diagnose: false, stats: false } }));
 		expect(section(report, "memory").status).toBe("warn");
@@ -247,6 +321,97 @@ describe("buildDoctorReport", () => {
 
 	test("buildDoctorReport is pure: the same input yields an equal report", () => {
 		expect(buildDoctorReport(healthyInput())).toEqual(buildDoctorReport(healthyInput()));
+	});
+});
+
+describe("resolveToolGating", () => {
+	const ALL_ON: ToolGateSettings = {
+		runtimeEnabled: true,
+		debugEnabled: true,
+		memoryBackend: "mnemopi",
+		autolearnEnabled: true,
+	};
+	const MEMORY_TOOLS = ["retain", "recall", "reflect", "memory_edit"];
+	const RUNTIME_TOOLS = [
+		"run",
+		"check",
+		"build",
+		"insights",
+		"profile",
+		"jvm_run",
+		"jvm_disassemble",
+		"jvm_format",
+		"jvm_jar",
+		"jvm_deps",
+		"jvm_javadoc",
+	];
+
+	test("everything on registers every name", () => {
+		const result = resolveToolGating(
+			[...RUNTIME_TOOLS, ...MEMORY_TOOLS, "debug", "learn", "manage_skill", "read"],
+			ALL_ON,
+		);
+		expect(result.gatedOff).toEqual([]);
+		expect(result.active).toHaveLength(RUNTIME_TOOLS.length + MEMORY_TOOLS.length + 4);
+	});
+
+	// The bug this pins: on a default install (`memory.backend: off`) doctor used
+	// to print retain/recall/reflect/memory_edit as registered while the memory
+	// section of the SAME report said no backend was configured.
+	test("memory.backend = off gates off every memory tool", () => {
+		const result = resolveToolGating([...MEMORY_TOOLS, "read"], { ...ALL_ON, memoryBackend: "off" });
+		for (const name of MEMORY_TOOLS) {
+			expect(result.active).not.toContain(name);
+			expect(result.gatedOff.find(g => g.name === name)?.reason).toContain("memory.backend = off");
+		}
+		expect(result.active).toEqual(["read"]);
+	});
+
+	test("memory_edit needs mnemopi specifically, the rest accept hindsight", () => {
+		const result = resolveToolGating(MEMORY_TOOLS, { ...ALL_ON, memoryBackend: "hindsight" });
+		expect(result.active).toEqual(["retain", "recall", "reflect"]);
+		expect(result.gatedOff.map(g => g.name)).toEqual(["memory_edit"]);
+	});
+
+	test("runtime.enabled = false gates off exactly the runtime and jvm tools", () => {
+		const result = resolveToolGating([...RUNTIME_TOOLS, "read", "retain"], { ...ALL_ON, runtimeEnabled: false });
+		expect(result.gatedOff.map(g => g.name).sort()).toEqual([...RUNTIME_TOOLS].sort());
+		expect(result.gatedOff.every(g => g.reason === "runtime.enabled = false")).toBe(true);
+		expect(result.active).toEqual(["read", "retain"]);
+	});
+
+	test("debug.enabled = false gates off debug only", () => {
+		const result = resolveToolGating(["debug", "read"], { ...ALL_ON, debugEnabled: false });
+		expect(result.gatedOff).toEqual([{ name: "debug", reason: "debug.enabled = false" }]);
+	});
+
+	test("autolearn.enabled = false gates off learn and manage_skill", () => {
+		const result = resolveToolGating(["learn", "manage_skill", "read"], { ...ALL_ON, autolearnEnabled: false });
+		expect(result.gatedOff.map(g => g.name)).toEqual(["learn", "manage_skill"]);
+		expect(result.gatedOff.every(g => g.reason === "autolearn.enabled = false")).toBe(true);
+	});
+
+	test("learn accepts the local backend where the memory tools do not", () => {
+		const result = resolveToolGating(["learn", "retain"], { ...ALL_ON, memoryBackend: "local" });
+		expect(result.active).toEqual(["learn"]);
+		expect(result.gatedOff.map(g => g.name)).toEqual(["retain"]);
+	});
+
+	test("session-gated names are reported but stay active", () => {
+		const result = resolveToolGating([...SESSION_GATED_TOOL_NAMES, "read"], ALL_ON);
+		expect(result.sessionGated).toEqual([...SESSION_GATED_TOOL_NAMES]);
+		for (const name of SESSION_GATED_TOOL_NAMES) expect(result.active).toContain(name);
+	});
+
+	test("sessionGated never lists a name that is not available", () => {
+		expect(resolveToolGating(["read"], ALL_ON).sessionGated).toEqual([]);
+	});
+
+	test("every gated name is a real builtin tool name", () => {
+		const builtin = new Set<string>(BUILTIN_TOOL_NAMES);
+		for (const name of [...SETTINGS_GATED_TOOL_NAMES, ...SESSION_GATED_TOOL_NAMES]) {
+			expect(builtin.has(name)).toBe(true);
+		}
 	});
 });
 

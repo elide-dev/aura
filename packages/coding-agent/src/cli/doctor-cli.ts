@@ -3,11 +3,18 @@
  *
  * Two rules shape this module:
  *
- * 1. **Aggregate, never reimplement.** Every section delegates to the probe that
- *    already owns that surface (`resolveStatusEndpointOptions` +
- *    `formatRuntimeStatus` for the runtime, `PluginManager.doctor` for plugins,
- *    `collectTerminalState` for the terminal, `resolveMemoryBackend` for memory).
- *    Doctor's own contribution is the aggregation and the exit contract.
+ * 1. **Aggregate, never reimplement.** Every section's *data* comes from the
+ *    probe that already owns that surface: `readRuntimeSettings` +
+ *    `createStatusRuntime` (hence `resolveStatusEndpointOptions`) for the
+ *    runtime, `PluginManager.doctor` for plugins, `collectTerminalState` for the
+ *    terminal, `resolveMemoryBackend` for memory. Doctor's own contribution is
+ *    the aggregation and the exit contract.
+ *
+ *    Rendering is the one place doctor does not reuse: the runtime section
+ *    re-renders `RuntimeStatusResult`'s fields as {@link DoctorEntry}s rather
+ *    than embedding `formatRuntimeStatus`'s pre-joined block, because a report
+ *    made of uniform entries is what `--json` and the per-entry glyphs need.
+ *    `aura runtime status` remains the canonical text rendering of that struct.
  * 2. **Pure builder, separate gatherer.** {@link buildDoctorReport} is a pure
  *    function over fabricated-or-gathered data, so every exit-code branch is
  *    unit-testable without a runtime, a terminal, or a plugin tree.
@@ -100,8 +107,21 @@ export interface DoctorNativesInput {
 export interface DoctorToolsInput {
 	/** Every tool name the builtin registry knows. */
 	available: string[];
-	/** The subset that registers under the current settings. */
+	/**
+	 * Names that will register: every available name whose `createIf` gate is
+	 * either absent or decidable from settings and passing. Excludes names in
+	 * {@link gatedOff}; still *includes* names in {@link sessionGated}, whose
+	 * gate cannot be evaluated here.
+	 */
 	active: string[];
+	/** Names a settings-decidable gate turns off, each with the reason. */
+	gatedOff: { name: string; reason: string }[];
+	/**
+	 * Names whose gate needs a live session or an external probe, so doctor
+	 * cannot say either way (`ask` needs a UI, `checkpoint`/`rewind` a top-level
+	 * session, `lsp` the session's `enableLsp`, `github` a working `gh`).
+	 */
+	sessionGated: string[];
 }
 
 export interface DoctorPluginsInput {
@@ -124,6 +144,11 @@ export interface DoctorMemoryInput {
 	backend: string;
 	diagnose: boolean;
 	stats: boolean;
+	/**
+	 * Set when resolving the backend threw. Distinct from `backend: "off"`, which
+	 * is a user choice — a probe failure must never be rendered as one.
+	 */
+	error?: string;
 }
 
 export interface DoctorInput {
@@ -183,8 +208,34 @@ function identitySection(input: DoctorIdentityInput): DoctorEntry[] {
 	return entries;
 }
 
+/**
+ * The `protocol` entry, from one source for every branch: the version the
+ * endpoint actually reported, falling back to the compiled-in constant when no
+ * probe succeeded. A skew between the two is a real bug (a stale endpoint
+ * answering a newer client), so it is rendered as a warning rather than being
+ * silently resolved in favor of either side.
+ */
+function protocolEntry(input: DoctorRuntimeInput): DoctorEntry {
+	const reported = input.status?.protocolVersion;
+	if (reported === undefined) {
+		return {
+			label: "protocol",
+			status: "ok",
+			detail: `v${input.protocolVersion} (compiled in; endpoint not reached)`,
+		};
+	}
+	if (reported !== input.protocolVersion) {
+		return {
+			label: "protocol",
+			status: "warn",
+			detail: `endpoint reports v${reported} but this build speaks v${input.protocolVersion}`,
+		};
+	}
+	return { label: "protocol", status: "ok", detail: `v${reported}` };
+}
+
 function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
-	const protocol: DoctorEntry = { label: "protocol", status: "ok", detail: `v${input.protocolVersion}` };
+	const protocol = protocolEntry(input);
 	if (!input.enabled) {
 		return [
 			{
@@ -222,7 +273,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 	];
 	if (status.binaryPath) entries.push({ label: "binary", status: "ok", detail: status.binaryPath });
 	if (status.source) entries.push({ label: "source", status: "ok", detail: status.source });
-	entries.push({ label: "protocol", status: "ok", detail: `v${status.protocolVersion}` });
+	entries.push(protocol);
 	return entries;
 }
 
@@ -246,8 +297,6 @@ function nativesSection(input: DoctorNativesInput): DoctorEntry[] {
 }
 
 function toolsSection(input: DoctorToolsInput): DoctorEntry[] {
-	const active = new Set(input.active);
-	const inactive = input.available.filter(name => !active.has(name));
 	const entries: DoctorEntry[] = [
 		{
 			label: "registered",
@@ -255,8 +304,26 @@ function toolsSection(input: DoctorToolsInput): DoctorEntry[] {
 			detail: `${input.active.length}/${input.available.length} — ${input.active.join(", ") || "none"}`,
 		},
 	];
-	if (inactive.length > 0) {
-		entries.push({ label: "gated off", status: "ok", detail: inactive.join(", ") });
+	if (input.gatedOff.length > 0) {
+		// Grouped by reason so `memory.backend = off` is stated once, not per tool.
+		const byReason = new Map<string, string[]>();
+		for (const { name, reason } of input.gatedOff) {
+			const bucket = byReason.get(reason);
+			if (bucket) bucket.push(name);
+			else byReason.set(reason, [name]);
+		}
+		entries.push({
+			label: "gated off",
+			status: "ok",
+			detail: [...byReason].map(([reason, names]) => `${names.join(", ")} (${reason})`).join("; "),
+		});
+	}
+	if (input.sessionGated.length > 0) {
+		entries.push({
+			label: "session-gated",
+			status: "ok",
+			detail: `${input.sessionGated.join(", ")} — registration depends on the live session, not settings`,
+		});
 	}
 	return entries;
 }
@@ -295,6 +362,9 @@ function terminalSection(input: DoctorTerminalInput): DoctorEntry[] {
 }
 
 function memorySection(input: DoctorMemoryInput): DoctorEntry[] {
+	if (input.error !== undefined) {
+		return [{ label: "backend", status: "warn", detail: `could not resolve the memory backend — ${input.error}` }];
+	}
 	if (input.backend === "off") {
 		return [
 			{ label: "backend", status: "warn", detail: "off (memory.backend = off) — no memory backend configured" },
@@ -450,9 +520,16 @@ async function gatherNatives(): Promise<DoctorNativesInput> {
 		// version from it avoids a second source of truth.
 		const sentinel = Object.keys(mod).find(key => key.startsWith("__piNativesV"));
 		const version = sentinel?.slice("__piNativesV".length).replaceAll("_", ".");
-		// `PI_NATIVE_VARIANT` is the loader's own x64 CPU-variant override; the
-		// resolved tag is otherwise computed privately inside the loader.
-		const variant = Bun.env.PI_NATIVE_VARIANT;
+		// The x64 CPU variant decides WHICH addon file loaded
+		// (`pi_natives.linux-x64-modern.node` vs `…-baseline.node`), so the reported
+		// target has to include it or it names a file that is not on disk. Read the
+		// user override first, then `__PI_NATIVE_VARIANT_CACHE` — the hidden key the
+		// loader writes once variant detection settles, so it is populated by the
+		// time this import resolves. When neither is set (non-x64, where the loader
+		// selects no variant) omit the suffix rather than invent one.
+		// Read `process.env` specifically: that is the object the loader writes the
+		// cache key onto.
+		const variant = process.env.PI_NATIVE_VARIANT ?? process.env.__PI_NATIVE_VARIANT_CACHE;
 		const target = `${process.platform}-${process.arch}${variant ? `-${variant}` : ""}`;
 		return { version, target };
 	});
@@ -462,38 +539,131 @@ async function gatherNatives(): Promise<DoctorNativesInput> {
 }
 
 /**
- * Tool names without constructing a session.
+ * The settings a tool's `createIf` gate can consult. Narrowed to exactly the
+ * keys the gate table below reads, so {@link resolveToolGating} stays pure and
+ * unit-testable against a literal.
+ */
+export interface ToolGateSettings {
+	runtimeEnabled: boolean;
+	debugEnabled: boolean;
+	memoryBackend: string;
+	autolearnEnabled: boolean;
+}
+
+/**
+ * Names whose `createIf` gate needs a live session or an external probe, so
+ * doctor cannot decide them: `ask` needs `session.hasUI`, `checkpoint`/`rewind`
+ * need `isTopLevelSession(session)`, `lsp` reads `session.enableLsp`, and
+ * `github` runs a `gh` availability probe. These are reported as
+ * `sessionGated` and counted as active, because "probably yes" is the honest
+ * default for a gate doctor cannot evaluate.
+ */
+export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint", "rewind", "lsp", "github"];
+
+/**
+ * Settings-decidable `createIf` gates, transcribed from the tool classes.
  *
- * `available` is the builtin registry (the same list `--tools` completes
- * against). `active` drops the tools whose registration gate is decidable from
- * settings alone — today that is the `runtime.enabled` family. Gates that need a
- * live session (a GitHub token, an LSP server, a memory backend) are not
- * resolved here on purpose: doctor must not build a session or reach a network.
+ * Each predicate returns the user-facing reason the tool will NOT register, or
+ * `undefined` when it will. Kept as data rather than scattered `if`s so the
+ * drift test can enumerate it and compare against the real registry.
+ */
+const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | undefined> = {
+	// RuntimeRunTool/CheckTool/BuildTool/InsightsTool/ProfileTool + the six Jvm*Tool
+	// classes all gate on `runtime.enabled`.
+	...Object.fromEntries(
+		[
+			"run",
+			"check",
+			"build",
+			"insights",
+			"profile",
+			"jvm_run",
+			"jvm_disassemble",
+			"jvm_format",
+			"jvm_jar",
+			"jvm_deps",
+			"jvm_javadoc",
+		].map(name => [name, (s: ToolGateSettings) => (s.runtimeEnabled ? undefined : "runtime.enabled = false")]),
+	),
+	// DebugTool.createIf
+	debug: s => (s.debugEnabled ? undefined : "debug.enabled = false"),
+	// MemoryRetainTool/MemoryRecallTool/MemoryReflectTool.createIf
+	...Object.fromEntries(
+		["retain", "recall", "reflect"].map(name => [
+			name,
+			(s: ToolGateSettings) =>
+				s.memoryBackend === "hindsight" || s.memoryBackend === "mnemopi"
+					? undefined
+					: `memory.backend = ${s.memoryBackend}`,
+		]),
+	),
+	// MemoryEditTool.createIf — mnemopi only.
+	memory_edit: s => (s.memoryBackend === "mnemopi" ? undefined : `memory.backend = ${s.memoryBackend}`),
+	// LearnTool.createIf
+	learn: s =>
+		!s.autolearnEnabled
+			? "autolearn.enabled = false"
+			: s.memoryBackend === "hindsight" || s.memoryBackend === "mnemopi" || s.memoryBackend === "local"
+				? undefined
+				: `memory.backend = ${s.memoryBackend}`,
+	// ManageSkillTool.createIf
+	manage_skill: s => (s.autolearnEnabled ? undefined : "autolearn.enabled = false"),
+};
+
+/** Tool names carrying a settings-decidable gate (exported for the drift test). */
+export const SETTINGS_GATED_TOOL_NAMES: readonly string[] = Object.keys(SETTINGS_GATED_TOOLS);
+
+/**
+ * Partition tool names into what will register and what a settings gate turns
+ * off. Pure — the settings read happens in {@link gatherTools}.
+ *
+ * `active` is "every available name minus the settings-decidable gates that
+ * fail". It is not a promise that every listed tool registers: the
+ * {@link SESSION_GATED_TOOL_NAMES} entries stay in `active` and are also called
+ * out separately, because their gates read the live session, which doctor
+ * deliberately never builds.
+ */
+export function resolveToolGating(available: readonly string[], gateSettings: ToolGateSettings): DoctorToolsInput {
+	const gatedOff: { name: string; reason: string }[] = [];
+	const active: string[] = [];
+	for (const name of available) {
+		const reason = SETTINGS_GATED_TOOLS[name]?.(gateSettings);
+		if (reason === undefined) active.push(name);
+		else gatedOff.push({ name, reason });
+	}
+	return {
+		available: [...available],
+		active,
+		gatedOff,
+		sessionGated: SESSION_GATED_TOOL_NAMES.filter(name => active.includes(name)),
+	};
+}
+
+/**
+ * Tool names without constructing a session: the builtin registry (the same list
+ * `--tools` completes against) partitioned by {@link resolveToolGating}.
  */
 async function gatherTools(): Promise<DoctorToolsInput> {
 	const [{ BUILTIN_TOOL_NAMES }, { settings }] = await Promise.all([
 		import("../tools/builtin-names"),
 		import("../config/settings"),
 	]);
-	const available = [...BUILTIN_TOOL_NAMES];
-	const runtimeEnabled = (await attempt(() => settings.get("runtime.enabled"))) as
-		| { value: boolean }
-		| { error: string };
-	const runtimeOff = "value" in runtimeEnabled && runtimeEnabled.value === false;
-	const RUNTIME_TOOLS = new Set([
-		"run",
-		"check",
-		"build",
-		"insights",
-		"profile",
-		"jvm_run",
-		"jvm_disassemble",
-		"jvm_format",
-		"jvm_jar",
-		"jvm_deps",
-		"jvm_javadoc",
-	]);
-	return { available, active: runtimeOff ? available.filter(name => !RUNTIME_TOOLS.has(name)) : available };
+	const read = await attempt(
+		(): ToolGateSettings => ({
+			runtimeEnabled: settings.get("runtime.enabled") !== false,
+			debugEnabled: settings.get("debug.enabled") !== false,
+			memoryBackend: String(settings.get("memory.backend") ?? "off"),
+			autolearnEnabled: settings.get("autolearn.enabled") !== false,
+		}),
+	);
+	// An unreadable settings document is not evidence that anything is disabled:
+	// fall back to the schema defaults so no tool is reported as gated off on the
+	// strength of a failed read.
+	const gateSettings: ToolGateSettings =
+		"value" in read
+			? read.value
+			: { runtimeEnabled: true, debugEnabled: true, memoryBackend: "off", autolearnEnabled: true };
+	return resolveToolGating([...BUILTIN_TOOL_NAMES], gateSettings);
 }
 
 async function gatherPlugins(): Promise<DoctorPluginsInput> {
@@ -554,7 +724,9 @@ async function gatherMemory(): Promise<DoctorMemoryInput> {
 			stats: typeof backend.stats === "function",
 		};
 	});
-	return "error" in probed ? { backend: "off", diagnose: false, stats: false } : probed.value;
+	// A failed probe reports `error`, never `backend: "off"` — "off" is a setting
+	// the user chose, and rendering a failure as a choice hides the failure.
+	return "error" in probed ? { backend: "unknown", diagnose: false, stats: false, error: probed.error } : probed.value;
 }
 
 /**
