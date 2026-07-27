@@ -236,14 +236,27 @@ export function hubToolAvailable(session: ToolSession): boolean {
 	return session.isToolActive?.("hub") ?? true;
 }
 
-/** The line every one of these tools ends on: how to look at it and how to stop it. */
+/**
+ * The line every one of these tools ends on: how to look at the job and how to
+ * stop it.
+ *
+ * The hub-less branch deliberately offers no in-session route, because there
+ * isn't one. Broker-supervised daemons are reachable only through
+ * `daemonClientForProject`, whose sole caller is the hub tool — and `/jobs` reads
+ * `getAsyncJobSnapshot` (async *tool* jobs: background bash, subagents) and is
+ * read-only, so it neither lists this daemon nor could stop it. What is true is
+ * that the job is started without `persist` or `detached`, and the broker stops
+ * every non-detached daemon on its way down.
+ */
 export function jobHandleLine(details: RuntimeJobDetails, hubAvailable = true): string {
 	const state = details.state === undefined ? "" : ` (state: ${details.state})`;
 	if (!hubAvailable) {
 		return (
-			`Job: ${details.jobName}${state}. This session has no hub tool, so you cannot read or stop this ` +
-			"job yourself — it is a project background job, and the user can inspect and stop it from the " +
-			"/jobs picker. Say so rather than leaving it running silently."
+			`Job: ${details.jobName}${state}. This session has no hub tool, so there is no tool here that can ` +
+			"read or stop this job. It is neither persistent nor detached, so it ends when the project's " +
+			"background broker exits; until then it has to be stopped out of band (find the process and " +
+			"terminate it), or re-run in a session that has hub. Tell the user it was left running rather " +
+			"than leaving it running silently."
 		);
 	}
 	return (

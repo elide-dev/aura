@@ -290,15 +290,36 @@ describe("runtime_debug", () => {
 		expect(text).not.toContain("wait window");
 	});
 
-	test("without the hub tool the guidance points at /jobs instead of a tool the model lacks", async () => {
+	test("without the hub tool the guidance names only remedies that actually exist", async () => {
 		const hub = fakeHub({ logs: "Debugger listening on ws://127.0.0.1:9229/x" });
 		const session = sessionWith(async () => descriptorFor("debug"));
 		(session as { isToolActive?: (name: string) => boolean }).isToolActive = name => name !== "hub";
 		const result = await new RuntimeDebugTool(session, hub.launch).execute("id", { path: "app.ts" });
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("no hub tool");
-		expect(text).toContain("/jobs");
+		// Must not name a tool the session lacks...
 		expect(text).not.toContain('hub {op:"stop"');
+		// ...and must not name `/jobs`, which lists async tool jobs (read-only) and
+		// never broker daemons — it can neither show nor stop this job.
+		expect(text).not.toContain("/jobs");
+		// The remedies that are true: the broker takes non-detached daemons down with
+		// it, and a session with hub can stop it.
+		expect(text).toContain("background broker exits");
+		expect(text).toContain("session that has hub");
+		expect(text).toMatch(/out of band/);
+		// The endpoint is still reported — only the lifecycle advice changes.
+		expect(result.details?.endpoint).toBe("ws://127.0.0.1:9229/x");
+	});
+
+	test("the hub-less caveat also reaches the no-endpoint and failed-launch bodies", async () => {
+		const session = sessionWith(async () => descriptorFor("debug"));
+		(session as { isToolActive?: (name: string) => boolean }).isToolActive = name => name !== "hub";
+		for (const hub of [fakeHub({ logs: "warming up", state: "running" }), fakeHub({ logs: "", state: "failed" })]) {
+			const result = await new RuntimeDebugTool(session, hub.launch).execute("id", { path: "app.ts" });
+			const text = (result.content[0] as { text: string }).text;
+			expect(text).not.toContain("/jobs");
+			expect(text).toContain("background broker exits");
+		}
 	});
 
 	test("a failed launch is reported as an error, with the job name kept", async () => {
