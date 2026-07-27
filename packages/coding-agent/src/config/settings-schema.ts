@@ -145,6 +145,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"GitHub",
 		"Output Limits",
 		"Execution",
+		"Runtime",
 		"Discovery & MCP",
 		"Developer",
 	],
@@ -437,6 +438,36 @@ export const SETTINGS_SCHEMA = {
 				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
 		},
 	},
+	"runtime.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Enable runtime capabilities",
+			description: "Innate run/check/build/insights/profile tools executed on the managed runtime.",
+		},
+	},
+	"runtime.autoDownload": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Auto-download the runtime",
+			description: "Fetch the pinned runtime into the config dir on first use when no binary is found.",
+		},
+	},
+	"runtime.path": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Runtime binary path",
+			description: "Explicit runtime binary; overrides discovery and disables auto-download.",
+		},
+	},
 	"prewalk.enabled": {
 		type: "boolean",
 		default: false,
@@ -563,7 +594,7 @@ export const SETTINGS_SCHEMA = {
 	// Theme
 	"theme.dark": {
 		type: "string",
-		default: "titanium",
+		default: "aura",
 		ui: {
 			tab: "appearance",
 			group: "Theme",

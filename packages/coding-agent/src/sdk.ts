@@ -112,6 +112,7 @@ import type { MnemopiSessionState } from "./mnemopi/state";
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
+import { getOrCreateRuntimeService, resolveRuntimeEndpointOptions } from "./runtime";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
@@ -1656,6 +1657,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
+			// Settings are read per call and the service is memoized on them, so an edit
+			// to runtime.* yields a fresh service on the next call; an explicit
+			// runtime.path suppresses auto-download downstream.
+			getRuntimeService: () => {
+				const opts = resolveRuntimeEndpointOptions({
+					enabled: settings.get("runtime.enabled"),
+					autoDownload: settings.get("runtime.autoDownload"),
+					path: settings.get("runtime.path") ?? "",
+				});
+				return opts ? getOrCreateRuntimeService(opts) : undefined;
+			},
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,

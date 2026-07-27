@@ -16,11 +16,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** App name (e.g. "omp") */
-export const APP_NAME: string = "omp";
+/** App name (e.g. "aura") */
+export const APP_NAME: string = "aura";
 
-/** Config directory name (e.g. ".omp") */
-export const CONFIG_DIR_NAME: string = ".omp";
+/** Config directory name (e.g. ".aura") */
+export const CONFIG_DIR_NAME: string = ".aura";
+
+/**
+ * Pre-rebrand config directory name. Read-only compatibility: project-local
+ * config written before the rename still resolves, but nothing is ever written
+ * here — {@link CONFIG_DIR_NAME} is the sole write target.
+ */
+export const LEGACY_CONFIG_DIR_NAME: string = ".omp";
 
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
@@ -32,7 +39,7 @@ export const VERSION: string = version;
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const PROFILE_ENV_KEYS = ["OMP_PROFILE", "PI_PROFILE"] as const;
+const PROFILE_ENV_KEYS = ["AURA_PROFILE", "OMP_PROFILE", "PI_PROFILE"] as const;
 
 /**
  * Names Windows treats as reserved device aliases. Matches the basename
@@ -72,24 +79,32 @@ export function normalizeProfileName(profile: string | undefined): string | unde
 }
 
 /**
- * Resolve the active profile from the two profile env vars. `OMP_PROFILE` is the
- * canonical variable and takes precedence; `PI_PROFILE` is the legacy
- * compatibility fallback, consulted only when `OMP_PROFILE` is undefined. An
- * explicitly-empty `OMP_PROFILE` therefore selects the default profile rather
- * than silently inheriting `PI_PROFILE`. Delegates validation/normalization to
+ * Resolve the active profile from the three profile env vars in precedence order
+ * `AURA_PROFILE` → `OMP_PROFILE` → `PI_PROFILE`. `AURA_PROFILE` is the canonical
+ * variable and takes precedence; `OMP_PROFILE` and `PI_PROFILE` are legacy
+ * compatibility fallbacks, each consulted only when every higher-precedence
+ * variable is undefined. An explicitly-empty higher-precedence variable
+ * therefore selects the default profile rather than silently inheriting a
+ * lower-precedence one (e.g. `AURA_PROFILE=""` selects the default even when
+ * `OMP_PROFILE` is set). Delegates validation/normalization to
  * {@link normalizeProfileName} (which throws on a syntactically invalid value).
  */
-export function resolveProfileEnv(omp: string | undefined, pi: string | undefined): string | undefined {
-	return normalizeProfileName(omp !== undefined ? omp : pi);
+export function resolveProfileEnv(
+	aura: string | undefined,
+	omp: string | undefined,
+	pi: string | undefined,
+): string | undefined {
+	const selected = aura !== undefined ? aura : omp !== undefined ? omp : pi;
+	return normalizeProfileName(selected);
 }
 
 function getProfileFromEnv(): string | undefined {
-	return resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE);
+	return resolveProfileEnv(process.env.AURA_PROFILE, process.env.OMP_PROFILE, process.env.PI_PROFILE);
 }
 
 /**
  * Module-load profile resolution. Unlike {@link getProfileFromEnv}, an invalid
- * OMP_PROFILE/PI_PROFILE value does NOT throw here — a bad env var must not
+ * AURA_PROFILE/OMP_PROFILE/PI_PROFILE value does NOT throw here — a bad env var must not
  * crash a bare `import` of this module with an uncaught stack trace before the
  * CLI's error handling is in scope. The default profile is used instead; the
  * CLI re-validates the env (see `runCli` in coding-agent/src/cli.ts) so the
@@ -464,6 +479,7 @@ export function setProfile(profile: string | undefined): void {
 	activeProfile = next;
 	if (activeProfile) {
 		dirs = new DirResolver({ profile: activeProfile });
+		process.env.AURA_PROFILE = activeProfile;
 		process.env.OMP_PROFILE = activeProfile;
 		process.env.PI_PROFILE = activeProfile;
 		process.env.PI_CODING_AGENT_DIR = dirs.agentDir;
