@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { deriveJvmMainClass, JVM_BYTECODE_RELEASE, jvmSourceFile } from "../src/runtime/jvm";
+import type { RuntimeRpcError } from "../src/runtime/protocol";
 
 describe("deriveJvmMainClass", () => {
 	test("an explicit override always wins", () => {
@@ -31,6 +32,27 @@ describe("deriveJvmMainClass", () => {
 
 	test("an empty override is treated as absent", () => {
 		expect(deriveJvmMainClass("java", "public class Entry {}", "")).toBe("Entry");
+	});
+
+	test("a package-qualified or nested class override is accepted", () => {
+		expect(deriveJvmMainClass("java", "", "com.example.Outer$Inner")).toBe("com.example.Outer$Inner");
+	});
+
+	test("an override that is not a class name is refused — it would become a toolchain flag", () => {
+		// The override lands in the `java`/`javap` argv, so a leading dash must never survive.
+		for (const bad of ["-Xshare:off", "--version", "Main; rm -rf /", "Main Other", "/etc/passwd", "a\nb"]) {
+			let code: string | undefined;
+			try {
+				deriveJvmMainClass("java", "", bad);
+			} catch (e) {
+				code = (e as RuntimeRpcError).code;
+			}
+			expect(code, `expected ${bad} to be refused`).toBe("invalid-params");
+		}
+	});
+
+	test("the refusal names the offending value", () => {
+		expect(() => deriveJvmMainClass("kotlin", "", "-Xflag")).toThrow(/-Xflag/);
 	});
 });
 

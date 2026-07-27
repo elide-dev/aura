@@ -18,7 +18,7 @@
 |---|---|---:|---|
 | `language` | `"java" \| "kotlin"` | Yes | Source language. |
 | `code` | `string` | Yes | Java or Kotlin source. |
-| `mainClass` | `string` | No | Class to disassemble. Defaults to the derived class. |
+| `mainClass` | `string` | No | Class to disassemble. Must be a class name (`/^[\w.$]+$/`). Defaults to the derived class. |
 | `timeoutMs` | `number` | No | Kills the compile or the disassembly after this many milliseconds. |
 
 ## Outputs
@@ -54,6 +54,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 ## Errors
 - `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).` when no runtime service is wired.
 - `jvm_disassemble requires \`language\` and \`code\`.` as an `invalid-params` protocol error.
+- `mainClass must be a class name (letters, digits, "_", "$", "."), got: <value>` — `invalid-params`. The derived class becomes a bare argv element for `java`/`javap`, so a value that could read as a flag is refused.
 - `runtime-missing` with installation guidance; `cancelled` on abort.
 
 ## Notes

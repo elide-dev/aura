@@ -176,6 +176,60 @@ async function refuseExistingOutput(dest: string, overwrite: boolean | undefined
 	});
 }
 
+/**
+ * Resolve a project-writing destination and bound it to somewhere strictly
+ * *inside* the working directory. `output: "."` otherwise resolves to the
+ * project root, and the javadoc replace path is an `rm -rf` of that
+ * destination — so an unbounded `output` plus `overwrite: true` deletes the
+ * user's project. `..`, an ancestor, and any absolute path outside the working
+ * directory are refused for the same reason.
+ */
+function resolveOutputDest(baseCwd: string, output: string): string {
+	const cwd = path.resolve(baseCwd);
+	const dest = path.resolve(cwd, output);
+	const rel = path.relative(cwd, dest);
+	if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+		throw new RuntimeRpcError(
+			"invalid-params",
+			`Refusing to write output to ${dest} — output must be a path inside the working directory (${cwd}), ` +
+				"not the directory itself or one of its parents.",
+			{ output: dest },
+		);
+	}
+	return dest;
+}
+
+/**
+ * `overwrite: true` on javadoc means "replace the docs I generated last time",
+ * and the replacement is a recursive remove. So the destination has to actually
+ * look like a docs tree: absent, an empty directory, or a directory carrying the
+ * `index.html` every javadoc run emits. A directory full of source, or a plain
+ * file, is someone else's data and is refused.
+ */
+async function assertReplaceableDocsDir(dest: string): Promise<void> {
+	const stat = await fs.stat(dest).catch(() => null);
+	if (stat === null) return;
+	if (stat.isDirectory()) {
+		const entries = await fs.readdir(dest);
+		if (entries.length === 0 || entries.includes("index.html")) return;
+	}
+	throw new RuntimeRpcError(
+		"invalid-params",
+		`Refusing to replace ${dest} — it does not look like a previous jvm_javadoc output (no index.html). ` +
+			"Choose a fresh directory, or the output directory of a previous run.",
+		{ output: dest },
+	);
+}
+
+/** A jar is a file: an existing directory in its place is a caller mistake, not an internal failure. */
+async function assertNotDirectory(dest: string): Promise<void> {
+	const stat = await fs.stat(dest).catch(() => null);
+	if (stat?.isDirectory() !== true) return;
+	throw new RuntimeRpcError("invalid-params", `Refusing to write the jar to ${dest} — it is an existing directory.`, {
+		output: dest,
+	});
+}
+
 const JAR_CREATE_REQUIREMENTS =
 	"jvm_jar create requires `language`, `code`, and `output` (cwd-relative path for the built jar).";
 
@@ -322,9 +376,9 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 					? this.jvmJarInspect(params, signal)
 					: this.jvmJarCreate(params, signal);
 			case "deps":
-				return params.path === undefined
-					? this.jvmDepsFromSource(params, signal)
-					: this.jvmDepsFromPath(params, signal);
+				// Truthiness, not presence: an empty `path` must not resolve to the
+				// working directory and quietly analyze the whole project.
+				return params.path ? this.jvmDepsFromPath(params, signal) : this.jvmDepsFromSource(params, signal);
 			case "javadoc":
 				return this.jvmJavadoc(params, signal);
 			default:
@@ -476,8 +530,9 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 	private async jvmJarCreate(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
 		const { language, code } = this.requireJvmSource(params, JAR_CREATE_REQUIREMENTS);
 		if (params.output === undefined) throw new RuntimeRpcError("invalid-params", JAR_CREATE_REQUIREMENTS);
-		const dest = path.resolve(this.jvmBaseCwd(params), params.output);
+		const dest = resolveOutputDest(this.jvmBaseCwd(params), params.output);
 		await refuseExistingOutput(dest, params.overwrite);
+		await assertNotDirectory(dest);
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
 			const { className, failure } = await this.compileJvm(wd, bin, run, "jar", language, code, params.mainClass);
 			if (failure) return failure;
@@ -527,8 +582,9 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			throw new RuntimeRpcError("invalid-params", "jvm_javadoc requires `code` (Java source to document).");
 		}
 		const code = params.code;
-		const dest = path.resolve(this.jvmBaseCwd(params), params.output ?? "javadoc-out");
+		const dest = resolveOutputDest(this.jvmBaseCwd(params), params.output ?? "javadoc-out");
 		await refuseExistingOutput(dest, params.overwrite);
+		if (params.overwrite === true) await assertReplaceableDocsDir(dest);
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
 			const className = deriveJvmMainClass("java", code, params.mainClass);
 			await wd.write(`${className}.java`, code);

@@ -19,7 +19,7 @@
 |---|---|---:|---|
 | `language` | `"java" \| "kotlin"` | Yes | Source language. |
 | `code` | `string` | Yes | Java or Kotlin source. |
-| `mainClass` | `string` | No | Entrypoint class. Defaults to the derived class (see Flow). |
+| `mainClass` | `string` | No | Entrypoint class. Must be a class name (`/^[\w.$]+$/`). Defaults to the derived class (see Flow). |
 | `timeoutMs` | `number` | No | Kills the compile or the run after this many milliseconds. |
 
 `cwd` is not a parameter; the session cwd is passed through as the protocol's `cwd` (it only affects path resolution, which this action does not use).
@@ -35,7 +35,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).`
 3. Params are sent as `runtime/jvm` with `action: "run"` and `cwd` = the session cwd.
 4. The endpoint resolves the binary (auto-provisioning when allowed), then opens one temp workdir for the whole flow.
-5. The target class is derived: an explicit `mainClass` wins; otherwise Java takes `public class X`, then the first `class X`, then `Main`; Kotlin is always `MainKt`.
+5. The target class is derived: an explicit `mainClass` wins (and is validated as a class name); otherwise Java takes `public class X`, then the first `class X`, then `Main`; Kotlin is always `MainKt`.
 6. The source is written as `<className>.java` (Java) or `Main.kt` (Kotlin) inside the workdir.
 7. Compile: `<binary> javac -- --release 17 <className>.java`, or `<binary> kotlinc -- Main.kt -cp . -d out`. Every invocation runs with the workdir as its cwd and with `JAVA_HOME`/`JDK_HOME` stripped from the environment.
 8. A nonzero or killed compile returns immediately with `phase: "compile"` — the program is not run.
@@ -61,6 +61,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 ## Errors
 - `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).` when no runtime service is wired.
 - `jvm_run requires \`language\` and \`code\`.` as an `invalid-params` protocol error.
+- `mainClass must be a class name (letters, digits, "_", "$", "."), got: <value>` — `invalid-params`. The derived class becomes a bare argv element for `java`/`javap`, so a value that could read as a flag is refused.
 - `runtime-missing` with installation guidance; `cancelled` on abort.
 - Compile and run failures are **not** errors: they come back as a result whose `exitCode` is nonzero.
 

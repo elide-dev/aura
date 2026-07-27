@@ -19,8 +19,8 @@
 | `action` | `"create" \| "inspect"` | Yes | Build a jar from source, or list an existing one. Sent as the protocol's `mode` (the protocol `action` is `"jar"`). |
 | `language` | `"java" \| "kotlin"` | create | Source language. |
 | `code` | `string` | create | Source to compile into the jar. |
-| `mainClass` | `string` | No | Manifest main class. Defaults to the derived class. |
-| `output` | `string` | create | Destination jar path, resolved against the session cwd. |
+| `mainClass` | `string` | No | Manifest main class. Must be a class name (`/^[\w.$]+$/`). Defaults to the derived class. |
+| `output` | `string` | create | Destination jar path, resolved against the session cwd and required to be **inside** it. |
 | `overwrite` | `boolean` | No | Required to replace an existing `output`. |
 | `jar` | `string` | inspect | Existing jar to list, resolved against the session cwd. |
 | `timeoutMs` | `number` | No | Kills the compile or the `jar` invocation after this many milliseconds. |
@@ -36,12 +36,13 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 ## Flow (create)
 1. Params are sent as `runtime/jvm` with `action: "jar"`, `mode: "create"`, and `cwd` = the session cwd.
 2. `language`, `code`, and `output` are all required; a missing one is `invalid-params`.
-3. `output` is resolved against `cwd`. **If it exists and `overwrite` is not `true` the call fails before anything is spawned** and the existing file is untouched.
-4. The endpoint opens one temp workdir, derives the class name, writes the source, and compiles (`javac -- --release 17 <className>.java`, or `kotlinc -- Main.kt -cp . -d out`). A failed compile returns with `phase: "compile"`.
-5. Jar: `<binary> jar -- --create --file aura-out.jar --main-class <className>` followed by the sorted `*.class` files in the workdir (Java) or `-C out .` (Kotlin).
-6. The archive is copied to `output`, creating parent directories as needed.
-7. `<binary> jar -- --list --file aura-out.jar` produces `listing`.
-8. The workdir is removed in a `finally` block. `JAVA_HOME`/`JDK_HOME` are stripped from the spawn environment.
+3. `output` is resolved against `cwd` and must land strictly inside it — `.`, `..`, an ancestor, or an absolute path elsewhere is refused, whatever `overwrite` says.
+4. **If it exists and `overwrite` is not `true` the call fails before anything is spawned** and the existing file is untouched. An existing *directory* at `output` is refused even with `overwrite: true` — a jar is a file.
+5. The endpoint opens one temp workdir, derives the class name, writes the source, and compiles (`javac -- --release 17 <className>.java`, or `kotlinc -- Main.kt -cp . -d out`). A failed compile returns with `phase: "compile"`.
+6. Jar: `<binary> jar -- --create --file aura-out.jar --main-class <className>` followed by the sorted `*.class` files in the workdir (Java) or `-C out .` (Kotlin).
+7. The archive is copied to `output`, creating parent directories as needed.
+8. `<binary> jar -- --list --file aura-out.jar` produces `listing`.
+9. The workdir is removed in a `finally` block. `JAVA_HOME`/`JDK_HOME` are stripped from the spawn environment.
 
 ## Flow (inspect)
 1. `jar` is required; a missing one is `invalid-params`.
@@ -54,7 +55,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 - **inspect**: read-only.
 
 ## Side Effects
-- Filesystem: create writes `output` (and its parent directories) in your project — one of only two runtime tools that write outside a temp dir. The temp workdir is removed afterwards.
+- Filesystem: create writes `output` (and its parent directories) inside the session cwd — paths outside it are refused — one of only two runtime tools that write outside a temp dir. The temp workdir is removed afterwards.
 - Subprocesses: three runtime spawns for create (compile, jar, list); one for inspect.
 - Network: first use may download the managed runtime when `runtime.autoDownload` is on.
 - Approval: `approval = "exec"`.
@@ -71,6 +72,9 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 - `jvm_jar inspect requires \`jar\` (path to an existing .jar).` — `invalid-params`.
 - `No jar found at <absolute path>.` — `invalid-params`, with `data.jar`.
 - `Refusing to overwrite <absolute path> — pass overwrite: true to replace it.` — `invalid-params`, with `data.output`.
+- `Refusing to write output to <absolute path> — output must be a path inside the working directory (<cwd>), not the directory itself or one of its parents.` — `invalid-params`, with `data.output`.
+- `Refusing to write the jar to <absolute path> — it is an existing directory.` — `invalid-params`, with `data.output`.
+- `mainClass must be a class name (letters, digits, "_", "$", "."), got: <value>` — `invalid-params`.
 - `runtime-missing` with installation guidance; `cancelled` on abort.
 
 ## Notes

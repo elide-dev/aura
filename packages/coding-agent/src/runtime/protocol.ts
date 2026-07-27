@@ -91,8 +91,11 @@ export interface RuntimeJvmParams {
 /**
  * Result of a `runtime/jvm` flow. It extends {@link RuntimeExecResult} with the
  * invocation that produced it (`phase`) plus whatever that flow uniquely
- * produced. `exitCode`/`stdout`/`stderr` always describe the *last* invocation
- * the flow reached, so a failed compile is reported as the compiler saw it.
+ * produced. `exitCode`/`stdout`/`stderr` describe the invocation named by
+ * `phase`: the last one the flow reached when it stopped early (a failed compile
+ * is reported as the compiler saw it), and otherwise the flow's *defining*
+ * invocation — for `jar` create that is the `--create`, not the `--list` that
+ * follows it, whose output is reported separately as `listing`.
  */
 export interface RuntimeJvmResult extends RuntimeExecResult {
 	action: RuntimeJvmAction;

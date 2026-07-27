@@ -19,10 +19,10 @@
 | `path` | `string` | No | Existing `.class`, `.jar`, or class directory, resolved against the session cwd. Selects artifact mode. |
 | `language` | `"java" \| "kotlin"` | No | Source language (source mode). |
 | `code` | `string` | No | Source to compile and analyze (source mode). |
-| `mainClass` | `string` | No | Entrypoint class. Defaults to the derived class. |
+| `mainClass` | `string` | No | Entrypoint class. Must be a class name (`/^[\w.$]+$/`). Defaults to the derived class. |
 | `timeoutMs` | `number` | No | Kills the compile or the analysis after this many milliseconds. |
 
-Exactly one mode must be satisfiable: `path`, or `language` + `code`. `path` wins when both are present.
+Exactly one mode must be satisfiable: `path`, or `language` + `code`. A non-empty `path` wins when both are present; an empty `path` is treated as absent and takes source mode (it must never resolve to the working directory and analyze the whole project).
 
 ## Outputs
 A single text block plus `details` carrying the raw `RuntimeJvmResult`.
@@ -60,6 +60,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 - `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).` when no runtime service is wired.
 - `jvm_deps requires either \`path\` (existing .class/.jar) or \`language\` + \`code\`.` — `invalid-params`.
 - `No class file or jar found at <absolute path>.` — `invalid-params`, with `data.path`.
+- `mainClass must be a class name (letters, digits, "_", "$", "."), got: <value>` — `invalid-params`. The derived class becomes a bare argv element for `java`/`javap`, so a value that could read as a flag is refused.
 - `runtime-missing` with installation guidance; `cancelled` on abort.
 
 ## Notes
