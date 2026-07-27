@@ -1,6 +1,6 @@
 # check
 
-> Validate the current project on the managed runtime: resolve dependencies and compile every source set without producing artifacts.
+> Validate the current project on the managed runtime: resolve dependencies and compile every source set without producing artifacts or executing user code.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/runtime-check.ts`
@@ -28,15 +28,15 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 1. `RuntimeCheckTool.createIf(session)` returns `null` unless `runtime.enabled` is truthy.
 2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).`
 3. Params are forwarded with `cwd` defaulted to `session.cwd` as a `runtime/check` request.
-4. `LocalRuntimeEndpoint` resolves (and may auto-provision) the runtime binary, then spawns `<binary> build --no-color` with **no** targets — the runtime's target-less build resolves dependencies and compiles without emitting artifacts.
+4. `LocalRuntimeEndpoint` resolves (and may auto-provision) the runtime binary, then spawns `<binary> build --no-color` with **no** targets — the runtime's target-less build resolves dependencies and compiles without emitting artifacts and without executing user code.
 5. `timeoutMs` and the caller abort signal both kill the process and set `killed`.
 
 ## Modes / Variants
-- Single mode. `check` is the validation-only sibling of `build`: same underlying build driver, empty target list.
+- Single mode. `check` is the validation-only sibling of `build`: same underlying build driver, empty target list. Use `build` when artifacts are the goal.
 
 ## Side Effects
 - Filesystem: the runtime's own dependency resolution may populate its caches and lockfiles in the project directory; no build artifacts are produced.
-- Subprocesses: one runtime binary spawn per call.
+- Subprocesses: one runtime binary spawn per call — the runtime itself. Compilation never runs user code; use `run` (or `build` with a target that has a build script) when execution is intended.
 - Network: dependency resolution may fetch; first use may download the managed runtime when `runtime.autoDownload` is on.
 - Approval: `approval = "exec"`.
 

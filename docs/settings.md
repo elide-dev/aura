@@ -478,6 +478,25 @@ tools:
 
 Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, `web_search.enabled`, and `inspect_image.enabled`.
 
+### Runtime
+
+The `run`, `check`, `build`, `insights`, and `profile` tools execute on a managed runtime binary. All five are gated on `runtime.enabled`; when it is off, none of them register.
+
+```yaml
+runtime:
+  enabled: true
+  autoDownload: true
+  path: ""
+```
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile` tools executed on the managed runtime. Off disables the tools and the `aura runtime` subcommands that need a binary. |
+| `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
+| `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
+
+See [run](./tools/run.md), [check](./tools/check.md), [build](./tools/build.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for per-tool behavior.
+
 ### Native computer use
 
 The disabled-by-default `computer` essential tool captures and controls the real host desktop through native OS APIs. It is separate from `browser`: `computer` can drive IDEs, terminals, native applications, browser windows, and system dialogs, while `browser` manages Chromium/CDP tabs and structured page automation.
