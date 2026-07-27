@@ -15,7 +15,7 @@ const runtimeRunSchema = type({
 	"cwd?": type("string").describe("working directory (defaults to the session cwd)"),
 });
 
-export type RuntimeRunParams = typeof runtimeRunSchema.infer;
+export type RuntimeRunToolParams = typeof runtimeRunSchema.infer;
 
 export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, RuntimeExecResult> {
 	readonly name = "run";
@@ -36,7 +36,7 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 
 	async execute(
 		_toolCallId: string,
-		params: RuntimeRunParams,
+		params: RuntimeRunToolParams,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeExecResult>> {
 		const service = this.session.getRuntimeService?.();

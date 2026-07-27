@@ -13,7 +13,7 @@ const runtimeBuildSchema = type({
 	"timeoutMs?": type("number").describe("kill the build after this many milliseconds"),
 });
 
-export type RuntimeBuildParams = typeof runtimeBuildSchema.infer;
+export type RuntimeBuildToolParams = typeof runtimeBuildSchema.infer;
 
 export class RuntimeBuildTool implements AgentTool<typeof runtimeBuildSchema, RuntimeExecResult> {
 	readonly name = "build";
@@ -34,7 +34,7 @@ export class RuntimeBuildTool implements AgentTool<typeof runtimeBuildSchema, Ru
 
 	async execute(
 		_toolCallId: string,
-		params: RuntimeBuildParams,
+		params: RuntimeBuildToolParams,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeExecResult>> {
 		const service = this.session.getRuntimeService?.();

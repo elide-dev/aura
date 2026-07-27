@@ -10,7 +10,7 @@ const runtimeCheckSchema = type({
 	"timeoutMs?": type("number").describe("kill the validation after this many milliseconds"),
 });
 
-export type RuntimeCheckParams = typeof runtimeCheckSchema.infer;
+export type RuntimeCheckToolParams = typeof runtimeCheckSchema.infer;
 
 export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, RuntimeExecResult> {
 	readonly name = "check";
@@ -31,7 +31,7 @@ export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, Ru
 
 	async execute(
 		_toolCallId: string,
-		params: RuntimeCheckParams,
+		params: RuntimeCheckToolParams,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeExecResult>> {
 		const service = this.session.getRuntimeService?.();
