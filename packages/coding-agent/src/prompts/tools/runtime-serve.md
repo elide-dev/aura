@@ -7,7 +7,9 @@ output is watched for the URL (default 15).
 Use it to preview a built site, generated API docs, or any directory of static
 assets. The result is the URL plus a **hub job name**: read its output with
 `hub {op:"logs", name}`, and stop it with `hub {op:"stop", name}` — there is no
-separate stop tool, and leaving a server running holds the port. If no URL
+separate stop tool, and leaving a server running holds the port. (If this session
+has no `hub` tool, the result says so and points at the `/jobs` picker instead.)
+If no URL
 appears within the wait window the job is still returned along with its startup
 output; it may simply still be starting, so poll `hub logs` before concluding
 anything failed.

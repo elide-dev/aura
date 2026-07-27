@@ -6,6 +6,7 @@ import type { ToolSession } from ".";
 import { requireRuntimeService } from "./jvm-common";
 import {
 	failedLaunchBody,
+	hubToolAvailable,
 	jobHandleLine,
 	type LaunchExecutor,
 	noEndpointReport,
@@ -88,15 +89,16 @@ export class RuntimeDebugTool implements AgentTool<typeof runtimeDebugSchema, Ru
 			signal,
 			launch: this.launch,
 		});
-		if (job.failed) return runtimeJobResult(failedLaunchBody(job), job, descriptor);
+		const hubAvailable = hubToolAvailable(this.session);
+		if (job.failed) return runtimeJobResult(failedLaunchBody(job, hubAvailable), job, descriptor);
 		const endpoint = job.details.endpoint;
 		const body =
 			endpoint === undefined
-				? noEndpointReport(`The ${protocol.toUpperCase()} debugger`, job.details, waitSeconds)
+				? noEndpointReport(`The ${protocol.toUpperCase()} debugger`, job.details, waitSeconds, hubAvailable)
 				: [
 						`${protocol.toUpperCase()} debugger listening at ${endpoint}`,
 						`${ATTACH_HINT[protocol]} The program is suspended until a client attaches.`,
-						jobHandleLine(job.details),
+						jobHandleLine(job.details, hubAvailable),
 					].join("\n");
 		return runtimeJobResult(body, job, descriptor);
 	}

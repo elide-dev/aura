@@ -43,12 +43,19 @@ export interface RuntimeJobDetails {
 	mode: "debug" | "serve";
 	/** The hub job name — the handle for `hub logs` / `hub stop` / `hub restart`. */
 	jobName: string;
-	/** The scraped endpoint, absent when the wait window closed first. */
+	/** The scraped endpoint, absent when nothing matched or nothing could be extracted. */
 	endpoint?: string;
 	/** Lifecycle state as of the readiness wait returning. */
 	state?: DaemonState;
-	/** True when the wait window closed without an endpoint — not an error by itself. */
+	/**
+	 * True when hub's readiness wait expired without matching the banner — a
+	 * distinct condition from `endpoint === undefined`, which also covers "the
+	 * banner matched but no endpoint could be extracted from it" (a stale rule).
+	 * Neither is an error by itself.
+	 */
 	timedOut: boolean;
+	/** The startup line hub's readiness pattern matched, when it matched one. */
+	readyMatch?: string;
 	/** Captured startup output, ANSI-stripped. */
 	startupOutput: string;
 	/** The composed command line, for diagnosing a banner change. */
@@ -81,6 +88,15 @@ export function resolveWaitSeconds(waitSeconds: number | undefined): number {
 }
 
 /**
+ * Flags every endpoint rule is compiled with. It must match what the daemon
+ * broker uses to compile a readiness pattern (`new RegExp(spec.ready.log, "u")`),
+ * or a rule that is valid unflagged but invalid under `u` would pass the local
+ * validity filter and then make the *launch* throw — turning a graceful "no
+ * endpoint scraped" degradation into a failed start.
+ */
+const RULE_REGEXP_FLAGS = "u";
+
+/**
  * Apply the descriptor's rules to captured output and return the first endpoint
  * found. Rules are tried in order; `group` selects a capture and `prefix` adds a
  * scheme when the runtime printed a bare `host:port`. An unparseable rule is
@@ -92,7 +108,7 @@ export function matchRuntimeEndpoint(output: string, rules: readonly RuntimeEndp
 	for (const rule of rules) {
 		let re: RegExp;
 		try {
-			re = new RegExp(rule.pattern);
+			re = new RegExp(rule.pattern, RULE_REGEXP_FLAGS);
 		} catch {
 			continue;
 		}
@@ -123,7 +139,7 @@ function mintJobName(prefix: string): string {
 function readinessPattern(rules: readonly RuntimeEndpointRule[]): string | undefined {
 	const valid = rules.filter(rule => {
 		try {
-			new RegExp(rule.pattern);
+			new RegExp(rule.pattern, RULE_REGEXP_FLAGS);
 			return true;
 		} catch {
 			return false;
@@ -176,14 +192,27 @@ export async function startRuntimeJob(
 		? undefined
 		: await launch(session, { op: "logs", name: jobName, lines: STARTUP_LOG_LINES, head: true }, opts.signal);
 	const startupOutput = Bun.stripANSI((logs === undefined ? "" : textOf(logs)).replace(HUB_LOG_STATUS_SUFFIX, ""));
-	const endpoint = matchRuntimeEndpoint(startupOutput, descriptor.endpointPattern);
+	const readyMatch = daemon?.readyMatch;
+	// The line hub already matched is the authoritative source: it comes from the
+	// broker's own readiness buffer, so it is found even when the banner scrolled
+	// past the startup lines read back here. The log text is the fallback for when
+	// there was no readiness pattern to match with.
+	const endpoint =
+		(readyMatch === undefined ? undefined : matchRuntimeEndpoint(readyMatch, descriptor.endpointPattern)) ??
+		matchRuntimeEndpoint(startupOutput, descriptor.endpointPattern);
 	return {
 		details: {
 			mode: opts.mode,
 			jobName,
 			endpoint,
 			state: daemon?.state,
-			timedOut: endpoint === undefined,
+			// hub's own verdict on the wait window, not a re-derivation from
+			// `endpoint`: "the banner never appeared" and "the banner appeared but the
+			// rule could not extract an endpoint from it" are different faults and earn
+			// different guidance. Without a readiness pattern there was no window to
+			// expire, so the extraction result is the only signal available.
+			timedOut: ready === undefined ? endpoint === undefined : started.details?.timedOut === true,
+			readyMatch,
 			startupOutput,
 			argv: descriptor.argv,
 			cwd: descriptor.cwd,
@@ -193,9 +222,30 @@ export async function startRuntimeJob(
 	};
 }
 
+/**
+ * Whether the calling session actually has the `hub` tool. `createTools` sets
+ * `isToolActive` from the set it really built, so this is the registry's own
+ * answer rather than a second copy of hub's gate (`--tools <name>` sessions and
+ * IRC-disabled subagents do not get hub). Absent — a bare test or SDK session
+ * that never went through `createTools` — the common case is assumed.
+ *
+ * It matters because the guidance these tools print names the tool that stops the
+ * job: telling a model to call `hub` it does not have is a dead end.
+ */
+export function hubToolAvailable(session: ToolSession): boolean {
+	return session.isToolActive?.("hub") ?? true;
+}
+
 /** The line every one of these tools ends on: how to look at it and how to stop it. */
-export function jobHandleLine(details: RuntimeJobDetails): string {
+export function jobHandleLine(details: RuntimeJobDetails, hubAvailable = true): string {
 	const state = details.state === undefined ? "" : ` (state: ${details.state})`;
+	if (!hubAvailable) {
+		return (
+			`Job: ${details.jobName}${state}. This session has no hub tool, so you cannot read or stop this ` +
+			"job yourself — it is a project background job, and the user can inspect and stop it from the " +
+			"/jobs picker. Say so rather than leaving it running silently."
+		);
+	}
 	return (
 		`Job: ${details.jobName}${state} — read its output with hub {op:"logs", name:"${details.jobName}"} ` +
 		`and stop it with hub {op:"stop", name:"${details.jobName}"}.`
@@ -203,17 +253,27 @@ export function jobHandleLine(details: RuntimeJobDetails): string {
 }
 
 /**
- * The "no endpoint yet" fallback: the job is real and may still be starting, so
- * this reports the handle plus what the process actually printed, which is what
- * makes a changed startup banner diagnosable instead of mysterious.
+ * The "no endpoint" fallback: the job is real either way, so this reports the
+ * handle plus what the process actually printed, which is what makes a changed
+ * startup banner diagnosable instead of mysterious.
+ *
+ * Two distinct faults, two messages. Either the banner never arrived (still
+ * starting, or a different banner entirely), or it *did* arrive and the rule
+ * could not pull an endpoint out of it — which means the rule is stale and the
+ * matched line is the evidence for fixing it.
  */
-export function noEndpointReport(subject: string, details: RuntimeJobDetails, waitSeconds: number): string {
+export function noEndpointReport(
+	subject: string,
+	details: RuntimeJobDetails,
+	waitSeconds: number,
+	hubAvailable = true,
+): string {
 	const output = details.startupOutput.trim();
-	return [
-		`${subject} did not report an endpoint within the wait window (${waitSeconds}s); it may still be starting.`,
-		jobHandleLine(details),
-		`Startup output:\n${output || "(no output yet)"}`,
-	].join("\n");
+	const lead = details.timedOut
+		? `${subject} did not report an endpoint within the wait window (${waitSeconds}s); it may still be starting.`
+		: `${subject} printed a matching startup line but no endpoint could be extracted from it ` +
+			`(matched: ${JSON.stringify(details.readyMatch ?? "")}). The scraping rule is probably stale.`;
+	return [lead, jobHandleLine(details, hubAvailable), `Startup output:\n${output || "(no output yet)"}`].join("\n");
 }
 
 /** Compose the tool result shared by both flows from a body and the job details. */
@@ -232,6 +292,6 @@ export function runtimeJobResult(
 }
 
 /** The body used when hub could not start the process at all. */
-export function failedLaunchBody(job: StartedRuntimeJob): string {
-	return [job.launchSummary, jobHandleLine(job.details)].join("\n");
+export function failedLaunchBody(job: StartedRuntimeJob, hubAvailable = true): string {
+	return [job.launchSummary, jobHandleLine(job.details, hubAvailable)].join("\n");
 }

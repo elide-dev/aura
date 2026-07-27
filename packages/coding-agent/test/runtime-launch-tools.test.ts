@@ -8,8 +8,11 @@ import { RuntimeDebugTool } from "../src/tools/runtime-debug";
 import { matchRuntimeEndpoint, resolveWaitSeconds } from "../src/tools/runtime-launch";
 import { RuntimeServeTool } from "../src/tools/runtime-serve";
 
+// Kept in step with `transport/local.ts` by `runtime-spawn-endpoint.test.ts`,
+// which asserts the descriptor the endpoint actually emits and scrapes the real
+// 1.4.2 banners through it.
 const CDP_RULES = [{ pattern: "ws://\\S+" }];
-const DAP_RULES = [{ pattern: "listening on\\s+(\\S+)", group: 1 }];
+const DAP_RULES = [{ pattern: "listening on\\s+/?(\\S+)", group: 1 }];
 const SERVE_RULES = [{ pattern: "Serving static files on\\s+(\\S+)", group: 1, prefix: "http://" }];
 
 function descriptorFor(mode: "debug" | "serve", overrides: Partial<RuntimeLaunchDescriptor> = {}) {
@@ -49,8 +52,17 @@ interface FakeHub {
 	) => Promise<AgentToolResult<LaunchToolDetails>>;
 }
 
-/** Stand-in for the hub operation: records calls and replays canned log output. */
-function fakeHub(opts: { logs: string; state?: DaemonState }): FakeHub {
+/**
+ * Stand-in for the hub operation: records calls and replays canned log output.
+ * It simulates the broker's readiness half faithfully — it applies the `ready.log`
+ * pattern the tool supplied (with the `u` flag the broker uses), reports the
+ * matched text as `readyMatch`, and reports `timedOut` when nothing matched. A
+ * fake that always said "ready" would hide exactly the wiring under test.
+ *
+ * `readySees` overrides what the readiness buffer saw, standing in for the case
+ * where the banner matched there but is not in the startup lines read back.
+ */
+function fakeHub(opts: { logs: string; state?: DaemonState; readySees?: string }): FakeHub {
 	const calls: LaunchParams[] = [];
 	return {
 		calls,
@@ -58,9 +70,13 @@ function fakeHub(opts: { logs: string; state?: DaemonState }): FakeHub {
 			calls.push(params);
 			const state = opts.state ?? "ready";
 			if (params.op === "start") {
+				const readyRe = params.ready?.log === undefined ? undefined : new RegExp(params.ready.log, "u");
+				const matched = readyRe?.exec(opts.readySees ?? opts.logs) ?? null;
+				const daemon = snapshot(state, params.name ?? "");
+				if (matched) daemon.readyMatch = matched[0].slice(0, 500);
 				return {
 					content: [{ type: "text", text: `Started ${params.name}: ${state}` }],
-					details: { op: "start", daemon: snapshot(state, params.name ?? "") },
+					details: { op: "start", daemon, timedOut: readyRe !== undefined && matched === null },
 				};
 			}
 			// hub's own logs op appends a bracketed status marker after the output.
@@ -115,6 +131,36 @@ describe("matchRuntimeEndpoint", () => {
 	test("rules are tried in order and an unparseable pattern is skipped, not thrown", () => {
 		const rules = [{ pattern: "([" }, ...SERVE_RULES];
 		expect(matchRuntimeEndpoint("Serving static files on 127.0.0.1:8080", rules)).toBe("http://127.0.0.1:8080");
+	});
+
+	test("a pattern that is only invalid under the `u` flag is skipped too", () => {
+		// The broker compiles readiness patterns with "u", so the scraper must agree
+		// on validity or the two disagree about which rules exist. (Built from a
+		// variable: as a literal this source would not parse at all.)
+		const uOnlyInvalid = "\\p{";
+		expect(() => new RegExp(uOnlyInvalid)).not.toThrow();
+		expect(() => new RegExp(uOnlyInvalid, "u")).toThrow();
+		expect(
+			matchRuntimeEndpoint("Serving static files on 127.0.0.1:8080", [{ pattern: "\\p{" }, ...SERVE_RULES]),
+		).toBe("http://127.0.0.1:8080");
+	});
+
+	test("the real Graal DAP banner yields a bare host:port, with the leading slash dropped", () => {
+		// 1.4.2 prints Java's InetSocketAddress formatting, which includes a `/`.
+		// `/0.0.0.0:4711` is not something a DAP client can attach to.
+		const banner = "[Graal DAP] Starting server and listening on /0.0.0.0:4711\n";
+		expect(matchRuntimeEndpoint(banner, DAP_RULES)).toBe("0.0.0.0:4711");
+	});
+
+	test("a DAP banner without the slash still parses", () => {
+		expect(matchRuntimeEndpoint("DAP listening on 127.0.0.1:4711\n", DAP_RULES)).toBe("127.0.0.1:4711");
+	});
+
+	test("the real CDP banner still resolves to the ws:// URL, not the surrounding words", () => {
+		const banner =
+			"Debugger listening on ws://127.0.0.1:9229/0dc12963/inspect\n" +
+			"For help, see: https://www.graalvm.org/tools/chrome-debugger\n";
+		expect(matchRuntimeEndpoint(banner, CDP_RULES)).toBe("ws://127.0.0.1:9229/0dc12963/inspect");
 	});
 });
 
@@ -206,6 +252,53 @@ describe("runtime_debug", () => {
 		expect(text).toContain(hub.calls[0]!.name!);
 		expect(result.details).toMatchObject({ timedOut: true, state: "running" });
 		expect(result.details?.endpoint).toBeUndefined();
+	});
+
+	test("the endpoint comes from hub's matched line even when the banner is not in the log read", async () => {
+		// The readiness buffer saw the banner; the startup lines read back did not
+		// (a busy process scrolls it past the first 200 lines).
+		const hub = fakeHub({
+			logs: "line1\nline2\nline3",
+			readySees: "Debugger listening on ws://127.0.0.1:9229/deep/inspect",
+		});
+		const tool = new RuntimeDebugTool(
+			sessionWith(async () => descriptorFor("debug")),
+			hub.launch,
+		);
+		const result = await tool.execute("id", { path: "app.ts" });
+		expect(result.details?.endpoint).toBe("ws://127.0.0.1:9229/deep/inspect");
+		expect(result.details?.readyMatch).toBe("ws://127.0.0.1:9229/deep/inspect");
+		expect(result.details?.timedOut).toBe(false);
+	});
+
+	test("a banner that matches but yields no endpoint is reported as a stale rule, not a timeout", async () => {
+		// A rule whose capture group can match empty: readiness fires, extraction
+		// does not. Conflating this with a timeout is what hides a bad rule.
+		const rules = [{ pattern: "listening(.*)", group: 1 }];
+		const hub = fakeHub({ logs: "listening" });
+		const tool = new RuntimeDebugTool(
+			sessionWith(async () => descriptorFor("debug", { endpointPattern: rules })),
+			hub.launch,
+		);
+		const result = await tool.execute("id", { path: "app.ts" });
+		const text = (result.content[0] as { text: string }).text;
+		expect(result.details?.endpoint).toBeUndefined();
+		expect(result.details?.timedOut).toBe(false);
+		expect(result.details?.readyMatch).toBe("listening");
+		expect(text).toContain("no endpoint could be extracted");
+		expect(text).toContain("scraping rule is probably stale");
+		expect(text).not.toContain("wait window");
+	});
+
+	test("without the hub tool the guidance points at /jobs instead of a tool the model lacks", async () => {
+		const hub = fakeHub({ logs: "Debugger listening on ws://127.0.0.1:9229/x" });
+		const session = sessionWith(async () => descriptorFor("debug"));
+		(session as { isToolActive?: (name: string) => boolean }).isToolActive = name => name !== "hub";
+		const result = await new RuntimeDebugTool(session, hub.launch).execute("id", { path: "app.ts" });
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("no hub tool");
+		expect(text).toContain("/jobs");
+		expect(text).not.toContain('hub {op:"stop"');
 	});
 
 	test("a failed launch is reported as an error, with the job name kept", async () => {

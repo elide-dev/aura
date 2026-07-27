@@ -155,6 +155,61 @@ describe.skipIf(!realBin)("runtime integration (real binary)", () => {
 	 * handle and can guarantee it never leaks — the hub path is covered
 	 * separately, without a real runtime.
 	 */
+	/**
+	 * Both debug protocols, live. This is the bug class the mocked tests missed:
+	 * 1.4.2's DAP banner is `listening on /0.0.0.0:4711` (Java's socket-address
+	 * formatting), and the leading slash has to be dropped or the "endpoint" is
+	 * not attachable. The program suspends waiting for a client, so the process is
+	 * killed unconditionally rather than waited on.
+	 */
+	describe("debug launch descriptors", () => {
+		const scrapeDebugEndpoint = async (protocol: "cdp" | "dap"): Promise<string | undefined> => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-debug-live-"));
+			const guest = path.join(dir, "app.ts");
+			await fs.writeFile(guest, "console.log('debug me')\n");
+			const descriptor = await svc.spawn({ mode: "debug", path: guest, protocol, cwd: dir });
+			expect(descriptor.argv.slice(1, 3)).toEqual(["run", `--debugger=${protocol}`]);
+			const proc = Bun.spawn(descriptor.argv, {
+				cwd: descriptor.cwd,
+				env: { ...process.env, ...descriptor.env },
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			try {
+				let output = "";
+				let endpoint: string | undefined;
+				const scan = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+					const decoder = new TextDecoder();
+					for await (const chunk of stream) {
+						output += decoder.decode(chunk, { stream: true });
+						endpoint ??= matchRuntimeEndpoint(output, descriptor.endpointPattern);
+						if (endpoint !== undefined) return;
+					}
+				};
+				await Promise.race([scan(proc.stdout), scan(proc.stderr), Bun.sleep(60_000)]);
+				expect(output, "the debugger printed nothing").not.toBe("");
+				return endpoint;
+			} finally {
+				proc.kill("SIGTERM");
+				const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(2_000).then(() => false)]);
+				if (!exited) proc.kill("SIGKILL");
+				await proc.exited;
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		};
+
+		test("cdp reports an attachable ws:// inspector URL", async () => {
+			expect(await scrapeDebugEndpoint("cdp")).toMatch(/^ws:\/\/[^/\s]+:\d+\/\S*$/);
+		}, 120_000);
+
+		test("dap reports a bare host:port, with no leading slash", async () => {
+			const endpoint = await scrapeDebugEndpoint("dap");
+			expect(endpoint).toMatch(/^[^/\s]+:\d+$/);
+			expect(endpoint?.startsWith("/")).toBe(false);
+		}, 120_000);
+	});
+
 	describe("serve launch descriptor", () => {
 		test("the composed argv serves a directory and prints a scrapable endpoint", async () => {
 			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-serve-live-"));

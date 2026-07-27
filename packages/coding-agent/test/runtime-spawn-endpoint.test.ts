@@ -6,6 +6,7 @@ import type { RuntimeLaunchDescriptor } from "../src/runtime/protocol";
 import { createRequest, RuntimeRpcError, unwrapResponse } from "../src/runtime/protocol";
 import type { resolveRuntimeBinary } from "../src/runtime/resolve";
 import { LocalRuntimeEndpoint } from "../src/runtime/transport/local";
+import { matchRuntimeEndpoint } from "../src/tools/runtime-launch";
 
 let dir: string;
 let fakeBin: string;
@@ -60,7 +61,8 @@ describe("runtime/spawn — debug descriptors", () => {
 	test("dap selects the debugger flag and the `listening on` rule", async () => {
 		const d = await descriptor({ mode: "debug", path: guest, protocol: "dap", cwd: dir });
 		expect(d.argv).toContain("--debugger=dap");
-		expect(d.endpointPattern).toEqual([{ pattern: "listening on\\s+(\\S+)", group: 1 }]);
+		// The optional `/` is consumed, not captured: see the real banner test below.
+		expect(d.endpointPattern).toEqual([{ pattern: "listening on\\s+/?(\\S+)", group: 1 }]);
 	});
 
 	test("language is inferred from the extension and overridable", async () => {
@@ -123,6 +125,37 @@ describe("runtime/spawn — serve descriptors", () => {
 	});
 });
 
+/**
+ * The rules the endpoint ships must parse the banners the pinned runtime really
+ * prints. These are verbatim captures from 1.4.2 — the one thing a unit test can
+ * pin that a mocked banner cannot, and the bug class that shipped a `/0.0.0.0:4711`
+ * "endpoint" no DAP client could attach to.
+ */
+describe("runtime/spawn — the shipped rules parse real 1.4.2 banners", () => {
+	test("cdp", async () => {
+		const d = await descriptor({ mode: "debug", path: guest, protocol: "cdp", cwd: dir });
+		const banner =
+			"Debugger listening on ws://127.0.0.1:9229/0dc12963/inspect\n" +
+			"For help, see: https://www.graalvm.org/tools/chrome-debugger\n" +
+			"E.g. in Chrome open: devtools://devtools/bundled/js_app.html?ws=127.0.0.1:9229/0dc12963/inspect\n";
+		expect(matchRuntimeEndpoint(banner, d.endpointPattern)).toBe("ws://127.0.0.1:9229/0dc12963/inspect");
+	});
+
+	test("dap — the leading slash never reaches the caller", async () => {
+		const d = await descriptor({ mode: "debug", path: guest, protocol: "dap", cwd: dir });
+		const banner = "[Graal DAP] Starting server and listening on /0.0.0.0:4711\n";
+		expect(matchRuntimeEndpoint(banner, d.endpointPattern)).toBe("0.0.0.0:4711");
+	});
+
+	test("serve", async () => {
+		const d = await descriptor({ mode: "serve", directory: staticDir, cwd: dir });
+		const banner =
+			'Serving from directory: "/tmp/pub"\nServing /tmp/pub at http://"127.0.0.1":8080\n' +
+			"Serving static files on 127.0.0.1:8080\n";
+		expect(matchRuntimeEndpoint(banner, d.endpointPattern)).toBe("http://127.0.0.1:8080");
+	});
+});
+
 describe("runtime/spawn — resolution", () => {
 	test("a missing runtime is a runtime-missing error, never a partial descriptor", async () => {
 		const ep = new LocalRuntimeEndpoint({ explicitPath: path.join(dir, "gone"), autoDownload: false });
@@ -142,6 +175,11 @@ describe("runtime/spawn — resolution", () => {
 		expect(d.source).toBe("path");
 		expect(d.shimWarning).toMatch(/PATH/);
 		expect(d.shimWarning).not.toMatch(/elide/i);
+		// The remedy must be something that exists: `runtime.path` / AURA_RUNTIME_BIN
+		// are real, and `aura runtime` has no install subcommand to point at.
+		expect(d.shimWarning).toContain("runtime.path");
+		expect(d.shimWarning).toContain("AURA_RUNTIME_BIN");
+		expect(d.shimWarning).not.toMatch(/runtime install/);
 
 		const managed = new LocalRuntimeEndpoint({
 			autoDownload: false,
@@ -155,5 +193,43 @@ describe("runtime/spawn — resolution", () => {
 
 	test("an unknown mode is invalid-params", async () => {
 		await expect(descriptor({ mode: "repl" })).rejects.toMatchObject({ code: "invalid-params" });
+	});
+
+	test("invalid params are rejected before the binary is resolved, so no download is triggered", async () => {
+		// Composition runs first on purpose: provisioning downloads hundreds of
+		// megabytes, and a typo'd mode or path must not pay for one to be told no.
+		let provisioned = 0;
+		let resolved = 0;
+		const ep = new LocalRuntimeEndpoint({
+			autoDownload: true,
+			resolve: async () => {
+				resolved++;
+				return null;
+			},
+			provision: async () => {
+				provisioned++;
+				return fakeBin;
+			},
+		});
+		for (const params of [
+			{ mode: "repl" },
+			{ mode: "debug", cwd: dir },
+			{ mode: "debug", path: path.join(dir, "missing.ts"), cwd: dir },
+			{ mode: "serve", directory: "nope", cwd: dir },
+			{ mode: "serve", directory: staticDir, port: 0, cwd: dir },
+		]) {
+			const res = await ep.request(createRequest("runtime/spawn", params));
+			expect(() => unwrapResponse(res)).toThrow(RuntimeRpcError);
+		}
+		expect(provisioned).toBe(0);
+		expect(resolved).toBe(0);
+
+		// Sanity: valid params DO resolve, so the assertion above is about ordering
+		// rather than a resolve call that never happens.
+		unwrapResponse(
+			await ep.request(createRequest("runtime/spawn", { mode: "serve", directory: staticDir, cwd: dir })),
+		);
+		expect(resolved).toBe(1);
+		expect(provisioned).toBe(1);
 	});
 });

@@ -5,6 +5,7 @@ import type { ToolSession } from ".";
 import { requireRuntimeService } from "./jvm-common";
 import {
 	failedLaunchBody,
+	hubToolAvailable,
 	jobHandleLine,
 	type LaunchExecutor,
 	noEndpointReport,
@@ -73,14 +74,15 @@ export class RuntimeServeTool implements AgentTool<typeof serveSchema, RuntimeJo
 			signal,
 			launch: this.launch,
 		});
-		if (job.failed) return runtimeJobResult(failedLaunchBody(job), job, descriptor);
+		const hubAvailable = hubToolAvailable(this.session);
+		if (job.failed) return runtimeJobResult(failedLaunchBody(job, hubAvailable), job, descriptor);
 		const endpoint = job.details.endpoint;
 		// argv[1] is `serve`, argv[2] the absolute directory the endpoint resolved.
 		const served = descriptor.argv[2] ?? params.directory;
 		const body =
 			endpoint === undefined
-				? noEndpointReport("The static file server", job.details, waitSeconds)
-				: [`Serving ${served} at ${endpoint}`, jobHandleLine(job.details)].join("\n");
+				? noEndpointReport("The static file server", job.details, waitSeconds, hubAvailable)
+				: [`Serving ${served} at ${endpoint}`, jobHandleLine(job.details, hubAvailable)].join("\n");
 		return runtimeJobResult(body, job, descriptor);
 	}
 }

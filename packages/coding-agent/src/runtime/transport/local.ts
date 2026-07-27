@@ -669,15 +669,11 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 
 	private async describeSpawn(params: RuntimeSpawnParams): Promise<RuntimeLaunchDescriptor> {
 		const cwd = path.resolve(params.cwd ?? process.cwd());
+		// Compose (and therefore validate) before resolving the binary: `ensureBinary`
+		// can trigger a multi-hundred-megabyte download, and a bad mode or a
+		// nonexistent path must not pay for one just to be told `invalid-params`.
+		const composed = await composeSpawn(params, cwd);
 		const { binaryPath, source } = await this.ensureBinary();
-		const composed =
-			params.mode === "debug"
-				? await debugArgv(params, cwd)
-				: params.mode === "serve"
-					? await serveArgv(params, cwd)
-					: (() => {
-							throw new RuntimeRpcError("invalid-params", `Unknown spawn mode ${String(params.mode)}.`);
-						})();
 		return {
 			argv: [binaryPath, ...composed.args],
 			cwd,
@@ -794,15 +790,21 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 const PATH_SHIM_WARNING =
 	"The runtime binary was resolved from PATH, where it may be a wrapper script that runs the real " +
 	"binary as a child process. Stopping this job terminates the process group, which normally covers " +
-	"it; if a listener survives, check for a leftover process holding the port. Install the managed " +
-	"runtime (`aura runtime install`) to launch a real binary directly.";
+	"it; if a listener survives, check for a leftover process holding the port. To launch a real binary " +
+	"directly, point runtime.path (or AURA_RUNTIME_BIN) at one, or take the wrapper off PATH so the " +
+	"managed install is used — resolution prefers a binary on PATH over auto-downloading, so a wrapper " +
+	"there always wins.";
 
 /** The debug flows' endpoint banners, per wire protocol. */
 const DEBUG_ENDPOINT_RULES: Record<RuntimeDebugProtocol, RuntimeEndpointRule[]> = {
-	// CDP prints a full inspector URL; the URL itself is the endpoint.
+	// CDP prints a full inspector URL: `Debugger listening on ws://127.0.0.1:9229/<id>/inspect`.
+	// The URL itself is the endpoint, so the whole match is taken.
 	cdp: [{ pattern: "ws://\\S+" }],
-	// DAP prints a bare `host:port` after "listening on".
-	dap: [{ pattern: "listening on\\s+(\\S+)", group: 1 }],
+	// DAP prints `[Graal DAP] Starting server and listening on /0.0.0.0:4711` — the
+	// address carries a leading slash (Java's InetSocketAddress formatting for an
+	// unresolved host). It is consumed by the rule rather than captured: `/0.0.0.0:4711`
+	// is not an address any DAP client can attach to.
+	dap: [{ pattern: "listening on\\s+/?(\\S+)", group: 1 }],
 };
 
 /** `serve` prints a bare `host:port`; the scheme is implied. */
@@ -841,6 +843,21 @@ async function requireExistingDirectory(base: string, value: string | undefined,
 		throw new RuntimeRpcError("invalid-params", `${label} is not a directory: ${resolved}`, { resolved });
 	}
 	return resolved;
+}
+
+/**
+ * Validate the caller's parameters and compose the command line. Deliberately
+ * independent of binary resolution so it can run first — see `describeSpawn`.
+ */
+async function composeSpawn(params: RuntimeSpawnParams, cwd: string): Promise<ComposedLaunch> {
+	switch (params.mode) {
+		case "debug":
+			return debugArgv(params, cwd);
+		case "serve":
+			return serveArgv(params, cwd);
+		default:
+			throw new RuntimeRpcError("invalid-params", `Unknown spawn mode ${String(params.mode)}.`);
+	}
 }
 
 /**

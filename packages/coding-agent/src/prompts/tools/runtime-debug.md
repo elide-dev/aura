@@ -10,7 +10,9 @@ for the endpoint; default 15).
 The program starts suspended and stays suspended until a debug client attaches.
 The result is the endpoint plus a **hub job name**: read its output with
 `hub {op:"logs", name}`, and stop it with `hub {op:"stop", name}`. There is no
-separate stop tool. If no endpoint appears within the wait window the job is
+separate stop tool. (If this session has no `hub` tool, the result says so and
+points at the `/jobs` picker instead.) `cdp` returns a `ws://` URL; `dap` returns
+a bare `host:port`. If no endpoint appears within the wait window the job is
 still returned along with its startup output — it may simply still be starting,
 so poll `hub logs` before concluding anything failed.
 
