@@ -799,7 +799,9 @@ export class AgentDashboard extends Container {
 			project: this.#createScope === "project",
 			cwd: this.cwd,
 		});
-		const targetDir = dirs[0]?.path;
+		// Highest-priority *writable* dir: the legacy `.omp` base is read-only and
+		// must never receive a newly authored agent (see `config.ts` priorityList).
+		const targetDir = dirs.find(entry => entry.writable)?.path;
 		if (!targetDir) {
 			throw new Error(`Cannot resolve ${this.#createScope} agents directory.`);
 		}

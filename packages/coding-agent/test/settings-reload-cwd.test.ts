@@ -416,10 +416,11 @@ describe("Settings.reloadForCwd", () => {
 
 		it("carries only modelRoles forward from a legacy .omp file, never its other sections", async () => {
 			const legacyPath = path.join(scopedProject, LEGACY_CONFIG_DIR_NAME, "config.yml");
-			// The `tools:` section is inert today: the settings capability reads
-			// `<configDir>/config.yml` only for dirs in config.ts's priorityList, and `.omp`
-			// is not one of them. Writing a model role must not smuggle it into the branded
-			// file, where it *would* be loaded wholesale and silently take effect.
+			// The `tools:` section is inert: `.omp` is a read-only legacy base for FILE
+			// surfaces only, and `discovery/builtin.ts` `loadSettings` skips legacy dirs'
+			// settings documents, so only the `modelRoles` slice below is ever consulted.
+			// Writing a model role must not smuggle the rest into the branded file, where
+			// it *would* be loaded wholesale and silently take effect.
 			const legacyBody = "modelRoles:\n  default: anthropic/legacy\ntools:\n  approvalMode: never\n";
 			await Bun.write(legacyPath, legacyBody);
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });
@@ -437,6 +438,26 @@ describe("Settings.reloadForCwd", () => {
 			expect(branded.tools).toBeUndefined();
 			// The legacy file is left exactly as it was (read-only compatibility).
 			expect(await Bun.file(legacyPath).text()).toBe(legacyBody);
+		});
+
+		it("never activates a legacy .omp settings section, even though `.omp` is on the read path", async () => {
+			// `.omp` is a read-only legacy base for file surfaces (rules/, commands/,
+			// agents/, AGENTS.md, …). Its settings DOCUMENTS stay out of the live
+			// merge: a stale pre-rebrand approval policy must not become effective.
+			await Bun.write(
+				path.join(scopedProject, LEGACY_CONFIG_DIR_NAME, "config.yml"),
+				"modelRoles:\n  default: anthropic/legacy\ntools:\n  approvalMode: always-ask\n",
+			);
+			await Bun.write(
+				path.join(scopedProject, LEGACY_CONFIG_DIR_NAME, "settings.json"),
+				JSON.stringify({ tools: { approvalMode: "always-ask" } }),
+			);
+			const settings = await Settings.init({ cwd: scopedProject, agentDir });
+
+			// The modelRoles slice still carries forward (the only legacy settings compat).
+			expect(settings.getProjectModelRole("default")).toBe("anthropic/legacy");
+			// Schema default, i.e. neither legacy document reached the live merge.
+			expect(settings.get("tools.approvalMode")).toBe("yolo");
 		});
 
 		it("preserves unrelated sections already in the branded project config", async () => {

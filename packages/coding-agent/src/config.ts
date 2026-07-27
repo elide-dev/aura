@@ -1,13 +1,34 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getConfigAgentDirName, getProjectDir } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getConfigAgentDirName, getProjectDir, LEGACY_CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
 import { expandTilde } from "./tools/path-utils";
 
 export * from "./config/config-file";
 
-const priorityList = [
+interface ConfigBase {
+	/** Directory name relative to the project root (or to home, via `globalAgentDir`). */
+	dir: string;
+	/** User-level directory name resolver, when it differs from `dir`. */
+	globalAgentDir?: () => string;
+	/**
+	 * Pre-rebrand base kept for READ compatibility only (fork addition).
+	 *
+	 * `.omp` was the project config dir before the rename to
+	 * {@link CONFIG_DIR_NAME}, so projects that predate it keep resolving. It sits
+	 * directly below the branded dir so the branded dir always wins a conflict,
+	 * and it is NEVER a write target — {@link ConfigDirEntry.writable} is false and
+	 * every write path must key off a writable entry (or the branded constant).
+	 *
+	 * Project-level only: pre-rebrand *user* state lives under `~/.omp/agent`,
+	 * which the profile/agent-dir helpers in `@oh-my-pi/pi-utils` own.
+	 */
+	legacy?: boolean;
+}
+
+const priorityList: ConfigBase[] = [
 	{ dir: CONFIG_DIR_NAME, globalAgentDir: getConfigAgentDirName },
+	{ dir: LEGACY_CONFIG_DIR_NAME, legacy: true },
 	{ dir: ".claude" },
 	{ dir: ".codex" },
 	{ dir: ".gemini" },
@@ -77,29 +98,40 @@ export function getChangelogPath(): string | undefined {
 
 /**
  * Config directory bases in priority order (highest first).
- * User-level: ~/.omp/agent, ~/.claude, ~/.codex, ~/.gemini
- * Project-level: .omp, .claude, .codex, .gemini
+ * User-level: ~/.aura/agent, ~/.claude, ~/.codex, ~/.gemini
+ * Project-level: .aura, .omp (legacy, read-only), .claude, .codex, .gemini
+ *
+ * Legacy bases are project-level only; see {@link ConfigBase.legacy}.
  */
-const USER_CONFIG_BASES = priorityList.map(({ dir, globalAgentDir }) => ({
-	base: () => path.join(os.homedir(), globalAgentDir ? globalAgentDir() : dir),
-	name: dir,
-}));
+const USER_CONFIG_BASES = priorityList
+	.filter(({ legacy }) => !legacy)
+	.map(({ dir, globalAgentDir }) => ({
+		base: () => path.join(os.homedir(), globalAgentDir ? globalAgentDir() : dir),
+		name: dir,
+		writable: true,
+	}));
 
-const PROJECT_CONFIG_BASES = priorityList.map(({ dir }) => ({
+const PROJECT_CONFIG_BASES = priorityList.map(({ dir, legacy }) => ({
 	base: dir,
 	name: dir,
+	writable: !legacy,
 }));
 
 export interface ConfigDirEntry {
 	path: string;
-	source: string; // e.g., ".omp", ".claude"
+	source: string; // e.g., ".aura", ".claude"
 	level: "user" | "project";
+	/**
+	 * False for read-only legacy bases (pre-rebrand `.omp`). Write paths that
+	 * derive a target directory from this list MUST pick a writable entry.
+	 */
+	writable: boolean;
 }
 
 export interface GetConfigDirsOptions {
-	/** Include user-level directories (~/.omp/agent/...). Default: true */
+	/** Include user-level directories (~/.aura/agent/...). Default: true */
 	user?: boolean;
-	/** Include project-level directories (.omp/...). Default: true */
+	/** Include project-level directories (.aura/..., legacy .omp/...). Default: true */
 	project?: boolean;
 	/** Current working directory for project paths. Default: getProjectDir() */
 	cwd?: string;
@@ -117,7 +149,7 @@ export interface GetConfigDirsOptions {
  * @example
  * // Get all command directories
  * getConfigDirs("commands")
- * // → [{ path: "~/.omp/agent/commands", source: ".omp", level: "user" }, ...]
+ * // → [{ path: "~/.aura/agent/commands", source: ".aura", level: "user", writable: true }, ...]
  *
  * @example
  * // Get only existing project skill directories
@@ -129,20 +161,20 @@ export function getConfigDirs(subpath: string, options: GetConfigDirsOptions = {
 
 	// User-level directories (highest priority)
 	if (user) {
-		for (const { base, name } of USER_CONFIG_BASES) {
+		for (const { base, name, writable } of USER_CONFIG_BASES) {
 			const resolvedPath = path.resolve(base(), subpath);
 			if (!existingOnly || fs.existsSync(resolvedPath)) {
-				results.push({ path: resolvedPath, source: name, level: "user" });
+				results.push({ path: resolvedPath, source: name, level: "user", writable });
 			}
 		}
 	}
 
 	// Project-level directories
 	if (project) {
-		for (const { base, name } of PROJECT_CONFIG_BASES) {
+		for (const { base, name, writable } of PROJECT_CONFIG_BASES) {
 			const resolvedPath = path.resolve(cwd, base, subpath);
 			if (!existingOnly || fs.existsSync(resolvedPath)) {
-				results.push({ path: resolvedPath, source: name, level: "project" });
+				results.push({ path: resolvedPath, source: name, level: "project", writable });
 			}
 		}
 	}
@@ -207,7 +239,8 @@ export function findConfigFileWithMeta(
 
 /**
  * Find all nearest config directories by walking up from cwd.
- * Returns one entry per config base (.omp, .claude) - the nearest one found.
+ * Returns one entry per config base (.aura, legacy .omp, .claude, …) — the
+ * nearest one found.
  * Results are in priority order (highest first).
  */
 export function findAllNearestProjectConfigDirs(subpath: string, cwd: string = getProjectDir()): ConfigDirEntry[] {
@@ -217,13 +250,13 @@ export function findAllNearestProjectConfigDirs(subpath: string, cwd: string = g
 	let currentDir = cwd;
 
 	while (foundBases.size < PROJECT_CONFIG_BASES.length) {
-		for (const { base, name } of PROJECT_CONFIG_BASES) {
+		for (const { base, name, writable } of PROJECT_CONFIG_BASES) {
 			if (foundBases.has(name)) continue;
 
 			const candidate = path.join(currentDir, base, subpath);
 			try {
 				if (fs.statSync(candidate).isDirectory()) {
-					results.push({ path: candidate, source: name, level: "project" });
+					results.push({ path: candidate, source: name, level: "project", writable });
 					foundBases.add(name);
 				}
 			} catch {}

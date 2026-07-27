@@ -2,8 +2,9 @@
  * Agent discovery from filesystem.
  *
  * Discovers agent definitions from OMP-native task-agent roots:
- *   - ~/.omp/agent/agents/*.md (user-level)
- *   - .omp/agents/*.md (project-level)
+ *   - ~/<CONFIG_DIR_NAME>/agent/agents/*.md (user-level)
+ *   - <CONFIG_DIR_NAME>/agents/*.md (project-level), plus the read-only
+ *     pre-rebrand `.omp/agents/*.md` ranked directly below it
  *   - <ext>/agents/*.md for every OMP extension package wired through
  *     `listOmpExtensionRoots` (CLI `--extension` roots, `extensions:` in
  *     settings, and enabled npm/link plugins under `<plugins>/node_modules/`).
@@ -20,7 +21,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, LEGACY_CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import { isProviderEnabled } from "../capability";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import { listClaudePluginRoots } from "../discovery/helpers";
@@ -28,7 +29,13 @@ import { listOmpExtensionRoots } from "../discovery/omp-extension-roots";
 import { loadBundledAgents, parseAgent } from "./agents";
 import type { AgentDefinition, AgentSource } from "./types";
 
-const TASK_AGENT_CONFIG_SOURCE = CONFIG_DIR_NAME;
+/**
+ * Config bases whose `agents/` dir holds *this* agent's project/user agents (as
+ * opposed to `.claude`/`.codex`/`.gemini`, which are other tools' surfaces).
+ * The branded dir is canonical; the pre-rebrand `.omp` base is read-only compat
+ * and is listed second so a same-named branded agent always wins.
+ */
+const TASK_AGENT_CONFIG_SOURCES: readonly string[] = [CONFIG_DIR_NAME, LEGACY_CONFIG_DIR_NAME];
 
 /** Result of agent discovery */
 export interface DiscoveryResult {
@@ -60,7 +67,8 @@ async function loadAgentsFromDir(dir: string, source: AgentSource): Promise<Agen
 
 /**
  * Discover agents from filesystem and merge with bundled agents.
- * Precedence (highest wins): project `.omp/agents`, user `.omp/agents`,
+ * Precedence (highest wins): project `<CONFIG_DIR_NAME>/agents` then the
+ * read-only legacy `.omp/agents`, user `<CONFIG_DIR_NAME>/agents`,
  * OMP extension-package agents in `listOmpExtensionRoots` source order
  * (CLI roots > project `extensions:` settings > user `extensions:` settings >
  * installed npm/link plugins), Claude marketplace plugin agents (project
@@ -71,22 +79,23 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 	const resolvedCwd = path.resolve(cwd);
 
 	const userDirs = getConfigDirs("agents", { project: false })
-		.filter(entry => entry.source === TASK_AGENT_CONFIG_SOURCE)
+		.filter(entry => TASK_AGENT_CONFIG_SOURCES.includes(entry.source))
 		.map(entry => ({
 			...entry,
 			path: path.resolve(entry.path),
 		}));
 
 	const projectDirs = findAllNearestProjectConfigDirs("agents", resolvedCwd)
-		.filter(entry => entry.source === TASK_AGENT_CONFIG_SOURCE)
+		.filter(entry => TASK_AGENT_CONFIG_SOURCES.includes(entry.source))
 		.map(entry => ({
 			...entry,
 			path: path.resolve(entry.path),
 		}));
 
+	// Priority order within each level (branded before legacy `.omp`); the
+	// first-seen-wins dedup below makes the branded agent win a name collision.
 	const orderedDirs: Array<{ dir: string; source: AgentSource }> = [];
-	const project = projectDirs[0];
-	if (project) orderedDirs.push({ dir: project.path, source: "project" });
+	for (const project of projectDirs) orderedDirs.push({ dir: project.path, source: "project" });
 	const user = userDirs[0];
 	if (user) orderedDirs.push({ dir: user.path, source: "user" });
 
@@ -132,7 +141,9 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 		return true;
 	});
 
-	const projectAgentsDir = projectDirs.length > 0 ? projectDirs[0].path : null;
+	// Reported as *the* project agents dir (UI hints, `task` details): only ever a
+	// writable base, never the read-only legacy one.
+	const projectAgentsDir = projectDirs.find(entry => entry.writable)?.path ?? null;
 
 	return { agents: [...loadedAgents, ...bundledAgents], projectAgentsDir };
 }

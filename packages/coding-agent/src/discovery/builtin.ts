@@ -1,10 +1,13 @@
 /**
- * Builtin Provider (.omp)
+ * Builtin Provider (native)
  *
- * Primary provider for OMP native configs. Supports all capabilities.
+ * Primary provider for this agent's native configs. Supports all capabilities.
+ * Reads the branded project dir (`CONFIG_DIR_NAME`) plus the pre-rebrand
+ * `LEGACY_CONFIG_DIR_NAME` (`.omp`) as a read-only legacy base ranked directly
+ * below it — file surfaces only, never settings documents (see `loadSettings`).
  */
 import * as path from "node:path";
-import { getAgentDir, logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
+import { getAgentDir, LEGACY_CONFIG_DIR_NAME, logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "../autolearn/managed-skills";
 import { registerProvider } from "../capability";
@@ -54,15 +57,33 @@ async function ifNonEmptyDir(...seg: string[]): Promise<string | null> {
 	return null;
 }
 
-async function getConfigDirs(ctx: LoadContext): Promise<Array<{ dir: string; level: "user" | "project" }>> {
-	const result: Array<{ dir: string; level: "user" | "project" }> = [];
+/** A native config directory on the read path. */
+interface NativeConfigDir {
+	dir: string;
+	level: "user" | "project";
+	/**
+	 * True for the pre-rebrand `.omp` project dir (fork addition). Legacy dirs are
+	 * read-only and contribute FILE surfaces only — `loadSettings` skips their
+	 * settings documents; see the comment there.
+	 */
+	legacy?: boolean;
+}
+
+async function getConfigDirs(ctx: LoadContext): Promise<NativeConfigDir[]> {
+	const result: NativeConfigDir[] = [];
 
 	const projectDir = await ifNonEmptyDir(ctx.cwd, PATHS.projectDir);
 	if (projectDir) {
 		result.push({ dir: projectDir, level: "project" });
 	}
+	// Pre-rebrand project dir, directly below the branded one so the branded dir
+	// wins every conflict. Read-only: nothing here is ever written.
+	const legacyProjectDir = await ifNonEmptyDir(ctx.cwd, LEGACY_CONFIG_DIR_NAME);
+	if (legacyProjectDir) {
+		result.push({ dir: legacyProjectDir, level: "project", legacy: true });
+	}
 	// Native user config is profile-scoped: getAgentDir() points at the active
-	// profile's agent dir (~/.omp/profiles/<name>/agent), like sessions and MCP.
+	// profile's agent dir (~/.aura/profiles/<name>/agent), like sessions and MCP.
 	const userDir = await ifNonEmptyDir(getAgentDir());
 	if (userDir) {
 		result.push({ dir: userDir, level: "user" });
@@ -91,7 +112,11 @@ async function findNearestProjectConfigDir(
 	repoRoot?: string | null,
 ): Promise<{ dir: string; depth: number } | null> {
 	for (const ancestor of getAncestorDirs(cwd, repoRoot)) {
-		const configDir = await ifNonEmptyDir(ancestor.dir, PATHS.projectDir);
+		// Branded dir first, then the read-only pre-rebrand `.omp` dir, so a
+		// branded file at the same depth always wins.
+		const configDir =
+			(await ifNonEmptyDir(ancestor.dir, PATHS.projectDir)) ??
+			(await ifNonEmptyDir(ancestor.dir, LEGACY_CONFIG_DIR_NAME));
 		if (configDir) return { dir: configDir, depth: ancestor.depth };
 	}
 	return null;
@@ -193,9 +218,13 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 	// User scope tracks the active profile via getAgentDir() (not ctx.home), so it
 	// stays in sync with getMCPConfigPath("user") and the /mcp config writer.
 	const userAgentDir = getAgentDir();
+	// Project entries list the branded dir before the read-only legacy `.omp` dir,
+	// so a server defined in both resolves to the branded definition.
 	const paths = [
 		{ path: path.join(ctx.cwd, PATHS.projectDir, "mcp.json"), level: "project" as const },
 		{ path: path.join(ctx.cwd, PATHS.projectDir, ".mcp.json"), level: "project" as const },
+		{ path: path.join(ctx.cwd, LEGACY_CONFIG_DIR_NAME, "mcp.json"), level: "project" as const },
+		{ path: path.join(ctx.cwd, LEGACY_CONFIG_DIR_NAME, ".mcp.json"), level: "project" as const },
 		{ path: path.join(userAgentDir, "mcp.json"), level: "user" as const },
 		{ path: path.join(userAgentDir, ".mcp.json"), level: "user" as const },
 	];
@@ -270,15 +299,18 @@ registerProvider<SystemPrompt>(systemPromptCapability.id, {
 
 // Skills
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	// Walk up from cwd finding .omp/skills/ in ancestors (closest first)
+	// Walk up from cwd finding <CONFIG_DIR_NAME>/skills/ in ancestors (closest
+	// first), then the same ancestor's read-only legacy `.omp/skills/`.
 	const ancestors = getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home);
-	const projectScans = ancestors.map(({ dir }) =>
-		scanSkillsFromDir(ctx, {
-			dir: path.join(dir, PATHS.projectDir, "skills"),
-			providerId: PROVIDER_ID,
-			level: "project",
-			requireDescription: true,
-		}),
+	const projectScans = ancestors.flatMap(({ dir }) =>
+		[PATHS.projectDir, LEGACY_CONFIG_DIR_NAME].map(base =>
+			scanSkillsFromDir(ctx, {
+				dir: path.join(dir, base, "skills"),
+				providerId: PROVIDER_ID,
+				level: "project",
+				requireDescription: true,
+			}),
+		),
 	);
 
 	// User-level scan from ~/.omp/agent/skills/
@@ -849,7 +881,17 @@ async function loadSettings(ctx: LoadContext): Promise<LoadResult<Settings>> {
 		}
 	};
 
-	for (const { dir, level } of await getConfigDirs(ctx)) {
+	for (const { dir, level, legacy } of await getConfigDirs(ctx)) {
+		// Legacy `.omp` contributes FILE surfaces (rules/, commands/, AGENTS.md, …)
+		// but NEVER settings documents. Before the rebrand a project `.omp/config.yml`
+		// only ever reached this agent through the narrow `modelRoles` slice in
+		// `Settings#loadProjectConfigYaml`, and `.omp/settings.json` only through the
+		// `extensions` slice in `omp-extension-roots.ts`. Loading either wholesale here
+		// would newly ACTIVATE the rest of the document — a stale `tools.approvalMode`
+		// silently becoming the live approval policy is the exact hazard those narrow
+		// slices exist to avoid. Keep them the only settings compat path.
+		if (legacy) continue;
+
 		const settingsPath = path.join(dir, "settings.json");
 		const settingsContent = await readFile(settingsPath);
 		if (settingsContent) {
