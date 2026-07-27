@@ -19,8 +19,8 @@ let log: string;
  * one's streams reach the caller.
  */
 const FAKE_BODY = `#!/bin/sh
-if [ "$1" = "--version" ]; then echo "9.9.9-fake"; exit 0; fi
 printf 'ARGS:%s\\n' "$*" >> "$AURA_FAKE_LOG"
+if [ "$1" = "--version" ]; then echo "9.9.9-fake"; exit 0; fi
 printf 'JAVA_HOME=[%s] JDK_HOME=[%s]\\n' "$JAVA_HOME" "$JDK_HOME" >> "$AURA_FAKE_LOG"
 if [ "$1" = "javac" ]; then
   for a in "$@"; do
@@ -31,7 +31,7 @@ if [ "$1" = "kotlinc" ]; then mkdir -p out && touch out/MainKt.class; fi
 if [ "$1" = "jar" ]; then
   case "$*" in *--create*) : > aura-out.jar ;; esac
 fi
-if [ "$1" = "javadoc" ]; then mkdir -p apidocs && echo "<html>" > apidocs/index.html; fi
+if [ "$1" = "javadoc" ]; then mkdir -p apidocs && echo "<html>" > apidocs/index.html && echo "unnamed" > apidocs/element-list; fi
 echo "ARGS:$*"
 `;
 
@@ -270,8 +270,8 @@ describe("runtime/jvm — javadoc", () => {
 		expect(await invocations()).toEqual(["javadoc -- -d apidocs Main.java"]);
 		expect(r.output).toBe(dest);
 		expect(r.className).toBe("Main");
-		expect(r.entryCount).toBe(1);
-		expect(r.topLevel).toEqual(["index.html"]);
+		expect(r.entryCount).toBe(2);
+		expect(r.topLevel).toEqual(["element-list", "index.html"]);
 		expect(await fs.readFile(path.join(dest, "index.html"), "utf8")).toContain("<html>");
 		await fs.rm(dest, { recursive: true, force: true });
 	});
@@ -298,10 +298,11 @@ describe("runtime/jvm — javadoc", () => {
 		await fs.mkdir(dest, { recursive: true });
 		// Shaped like a previous run — that is what `overwrite` is allowed to replace.
 		await fs.writeFile(path.join(dest, "index.html"), "old");
+		await fs.writeFile(path.join(dest, "help-doc.html"), "old");
 		await fs.writeFile(path.join(dest, "stale.html"), "old");
 		const r = await jvm({ action: "javadoc", code: JAVA_HELLO, output: "stale-docs", overwrite: true, cwd: dir });
-		expect(r.topLevel).toEqual(["index.html"]);
-		expect(await fs.readdir(dest)).toEqual(["index.html"]);
+		expect(r.topLevel).toEqual(["element-list", "index.html"]);
+		expect((await fs.readdir(dest)).sort()).toEqual(["element-list", "index.html"]);
 		await fs.rm(dest, { recursive: true, force: true });
 	});
 
@@ -343,10 +344,24 @@ describe("runtime/jvm — output paths are bound to the working directory", () =
 		expect(err.code).toBe("invalid-params");
 		expect(err.message).toBe(
 			`Refusing to replace ${path.join(root, "src")} — it does not look like a previous jvm_javadoc output ` +
-				"(no index.html). Choose a fresh directory, or the output directory of a previous run.",
+				"(needs index.html plus one of element-list, help-doc.html, member-search-index.js). " +
+				"Choose a fresh directory, or the output directory of a previous run.",
 		);
 		expect(await invocations()).toEqual([]);
 		expect(await fs.readFile(path.join(root, "src", "Thing.java"), "utf8")).toBe("class Thing {}");
+	});
+
+	test("javadoc overwrite refuses a static site that merely has an index.html", async () => {
+		const root = await project();
+		const dest = path.join(root, "public");
+		await fs.mkdir(dest, { recursive: true });
+		await fs.writeFile(path.join(dest, "index.html"), "<!doctype html>");
+		await fs.writeFile(path.join(dest, "app.js"), "console.log(1)");
+		const err = await jvmError({ action: "javadoc", code: JAVA_HELLO, output: "public", overwrite: true, cwd: root });
+		expect(err.code).toBe("invalid-params");
+		expect(err.message).toContain("does not look like a previous jvm_javadoc output");
+		expect(await invocations()).toEqual([]);
+		expect(await fs.readFile(path.join(dest, "app.js"), "utf8")).toBe("console.log(1)");
 	});
 
 	test("javadoc overwrite replaces a previous docs output", async () => {
@@ -354,18 +369,26 @@ describe("runtime/jvm — output paths are bound to the working directory", () =
 		const dest = path.join(root, "apidocs");
 		await fs.mkdir(dest, { recursive: true });
 		await fs.writeFile(path.join(dest, "index.html"), "stale");
+		await fs.writeFile(path.join(dest, "element-list"), "stale");
 		await fs.writeFile(path.join(dest, "Stale.html"), "stale");
 		const r = await jvm({ action: "javadoc", code: JAVA_HELLO, output: "apidocs", overwrite: true, cwd: root });
 		expect(r.output).toBe(dest);
-		expect(await fs.readdir(dest)).toEqual(["index.html"]);
+		expect((await fs.readdir(dest)).sort()).toEqual(["element-list", "index.html"]);
 		expect(await fs.readFile(path.join(dest, "index.html"), "utf8")).toContain("<html>");
+	});
+
+	test("a directory named ..docs is inside the project and is not mistaken for a parent escape", async () => {
+		const root = await project();
+		const r = await jvm({ action: "javadoc", code: JAVA_HELLO, output: "..docs", cwd: root });
+		expect(r.output).toBe(path.join(root, "..docs"));
+		expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe("keep me");
 	});
 
 	test("javadoc overwrite accepts an existing empty directory", async () => {
 		const root = await project();
 		await fs.mkdir(path.join(root, "empty-docs"), { recursive: true });
 		const r = await jvm({ action: "javadoc", code: JAVA_HELLO, output: "empty-docs", overwrite: true, cwd: root });
-		expect(r.entryCount).toBe(1);
+		expect(r.entryCount).toBe(2);
 	});
 
 	test("javadoc overwrite refuses a plain file standing where the docs would go", async () => {
@@ -386,8 +409,46 @@ describe("runtime/jvm — output paths are bound to the working directory", () =
 		const root = await project();
 		const r = await jvm({ action: "javadoc", code: JAVA_HELLO, output: "docs/api", cwd: root });
 		expect(r.output).toBe(path.join(root, "docs", "api"));
-		expect(await fs.readdir(path.join(root, "docs", "api"))).toEqual(["index.html"]);
+		expect((await fs.readdir(path.join(root, "docs", "api"))).sort()).toEqual(["element-list", "index.html"]);
 		expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe("keep me");
+	});
+
+	test("a symlinked prefix cannot smuggle the output outside the working directory", async () => {
+		// Lexically `link/docs` reads as "inside the project"; really it is somewhere
+		// else entirely, and the javadoc replace path is a recursive remove.
+		const root = await project();
+		const outside = await fs.mkdtemp(path.join(dir, "outside-"));
+		await fs.mkdir(path.join(outside, "docs"), { recursive: true });
+		await fs.writeFile(path.join(outside, "docs", "PRECIOUS.txt"), "irreplaceable");
+		await fs.symlink(outside, path.join(root, "link"), "dir");
+
+		for (const params of [
+			{ action: "javadoc" as const, code: JAVA_HELLO, output: "link/docs", overwrite: true, cwd: root },
+			{
+				action: "jar" as const,
+				language: "java" as const,
+				code: JAVA_HELLO,
+				output: "link/out.jar",
+				overwrite: true,
+				cwd: root,
+			},
+		]) {
+			const err = await jvmError(params);
+			expect(err.code, `expected ${params.output} to be refused`).toBe("invalid-params");
+			expect(err.message).toContain("output must be a path inside the working directory");
+			expect(await invocations()).toEqual([]);
+		}
+		expect(await fs.readFile(path.join(outside, "docs", "PRECIOUS.txt"), "utf8")).toBe("irreplaceable");
+		expect(await fs.readdir(outside)).toEqual(["docs"]);
+	});
+
+	test("a symlink pointing inside the working directory still works", async () => {
+		const root = await project();
+		await fs.mkdir(path.join(root, "real"), { recursive: true });
+		await fs.symlink(path.join(root, "real"), path.join(root, "inside-link"), "dir");
+		const r = await jvm({ action: "javadoc", code: JAVA_HELLO, output: "inside-link/api", cwd: root });
+		expect(r.output).toBe(path.join(root, "inside-link", "api"));
+		expect(await fs.readdir(path.join(root, "real", "api"))).toContain("index.html");
 	});
 
 	test("jar create refuses an output that is the working directory or above it", async () => {

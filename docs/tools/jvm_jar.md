@@ -36,7 +36,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 ## Flow (create)
 1. Params are sent as `runtime/jvm` with `action: "jar"`, `mode: "create"`, and `cwd` = the session cwd.
 2. `language`, `code`, and `output` are all required; a missing one is `invalid-params`.
-3. `output` is resolved against `cwd` and must land strictly inside it — `.`, `..`, an ancestor, or an absolute path elsewhere is refused, whatever `overwrite` says.
+3. `output` is resolved against `cwd` and must land strictly inside it — `.`, `..`, an ancestor, or an absolute path elsewhere is refused, whatever `overwrite` says. The bound is checked lexically and again after resolving symlinks in `cwd` and in the destination's parent chain, so a symlinked directory cannot place the artifact outside the project.
 4. **If it exists and `overwrite` is not `true` the call fails before anything is spawned** and the existing file is untouched. An existing *directory* at `output` is refused even with `overwrite: true` — a jar is a file.
 5. The endpoint opens one temp workdir, derives the class name, writes the source, and compiles (`javac -- --release 17 <className>.java`, or `kotlinc -- Main.kt -cp . -d out`). A failed compile returns with `phase: "compile"`.
 6. Jar: `<binary> jar -- --create --file aura-out.jar --main-class <className>` followed by the sorted `*.class` files in the workdir (Java) or `-C out .` (Kotlin).

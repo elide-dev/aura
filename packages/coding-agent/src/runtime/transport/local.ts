@@ -176,6 +176,31 @@ async function refuseExistingOutput(dest: string, overwrite: boolean | undefined
 	});
 }
 
+/** True when `dest` is strictly below `cwd`, comparing the two paths as given. */
+function isStrictlyInside(cwd: string, dest: string): boolean {
+	const rel = path.relative(cwd, dest);
+	if (rel === "" || path.isAbsolute(rel)) return false;
+	return rel !== ".." && !rel.startsWith(`..${path.sep}`);
+}
+
+/**
+ * `fs.realpath` of the deepest existing ancestor of `target`, with the
+ * not-yet-existing tail re-appended. `realpath` on the whole path would fail for
+ * a destination that does not exist yet, which is the normal case here.
+ */
+async function realpathExistingPrefix(target: string): Promise<string> {
+	const tail: string[] = [];
+	let current = target;
+	for (;;) {
+		const real = await fs.realpath(current).catch(() => null);
+		if (real !== null) return path.join(real, ...tail.reverse());
+		const parent = path.dirname(current);
+		if (parent === current) return target;
+		tail.push(path.basename(current));
+		current = parent;
+	}
+}
+
 /**
  * Resolve a project-writing destination and bound it to somewhere strictly
  * *inside* the working directory. `output: "."` otherwise resolves to the
@@ -183,39 +208,58 @@ async function refuseExistingOutput(dest: string, overwrite: boolean | undefined
  * destination — so an unbounded `output` plus `overwrite: true` deletes the
  * user's project. `..`, an ancestor, and any absolute path outside the working
  * directory are refused for the same reason.
+ *
+ * The check is run twice: once lexically, and once on the *resolved* pair, since
+ * `path.relative` never follows symlinks — `output: "link/docs"` where `link`
+ * points outside reads as inside while the recursive remove lands elsewhere. The
+ * final component is deliberately left unresolved: a leaf symlink is unlinked
+ * rather than followed, so pointing one at a directory elsewhere is harmless.
  */
-function resolveOutputDest(baseCwd: string, output: string): string {
+async function resolveOutputDest(baseCwd: string, output: string): Promise<string> {
 	const cwd = path.resolve(baseCwd);
 	const dest = path.resolve(cwd, output);
-	const rel = path.relative(cwd, dest);
-	if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+	const refuse = () => {
 		throw new RuntimeRpcError(
 			"invalid-params",
 			`Refusing to write output to ${dest} — output must be a path inside the working directory (${cwd}), ` +
 				"not the directory itself or one of its parents.",
 			{ output: dest },
 		);
-	}
+	};
+	if (!isStrictlyInside(cwd, dest)) refuse();
+	const realCwd = await realpathExistingPrefix(cwd);
+	const realParent = await realpathExistingPrefix(path.dirname(dest));
+	if (!isStrictlyInside(realCwd, path.join(realParent, path.basename(dest)))) refuse();
 	return dest;
 }
 
 /**
+ * Files javadoc emits that a hand-written site would not. `index.html` alone is
+ * not evidence — a static site at `public/` has one too — so a replace needs an
+ * `index.html` *and* one of these.
+ */
+const JAVADOC_SIGNATURE_FILES = ["element-list", "help-doc.html", "member-search-index.js"];
+
+/**
  * `overwrite: true` on javadoc means "replace the docs I generated last time",
  * and the replacement is a recursive remove. So the destination has to actually
- * look like a docs tree: absent, an empty directory, or a directory carrying the
- * `index.html` every javadoc run emits. A directory full of source, or a plain
- * file, is someone else's data and is refused.
+ * look like a docs tree: absent, an empty directory, or a directory that carries
+ * both an `index.html` and one of javadoc's own scaffolding files. A directory
+ * full of source, a static site, or a plain file is someone else's data and is
+ * refused.
  */
 async function assertReplaceableDocsDir(dest: string): Promise<void> {
 	const stat = await fs.stat(dest).catch(() => null);
 	if (stat === null) return;
 	if (stat.isDirectory()) {
 		const entries = await fs.readdir(dest);
-		if (entries.length === 0 || entries.includes("index.html")) return;
+		if (entries.length === 0) return;
+		if (entries.includes("index.html") && entries.some(e => JAVADOC_SIGNATURE_FILES.includes(e))) return;
 	}
 	throw new RuntimeRpcError(
 		"invalid-params",
-		`Refusing to replace ${dest} — it does not look like a previous jvm_javadoc output (no index.html). ` +
+		`Refusing to replace ${dest} — it does not look like a previous jvm_javadoc output ` +
+			`(needs index.html plus one of ${JAVADOC_SIGNATURE_FILES.join(", ")}). ` +
 			"Choose a fresh directory, or the output directory of a previous run.",
 		{ output: dest },
 	);
@@ -530,7 +574,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 	private async jvmJarCreate(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
 		const { language, code } = this.requireJvmSource(params, JAR_CREATE_REQUIREMENTS);
 		if (params.output === undefined) throw new RuntimeRpcError("invalid-params", JAR_CREATE_REQUIREMENTS);
-		const dest = resolveOutputDest(this.jvmBaseCwd(params), params.output);
+		const dest = await resolveOutputDest(this.jvmBaseCwd(params), params.output);
 		await refuseExistingOutput(dest, params.overwrite);
 		await assertNotDirectory(dest);
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
@@ -582,7 +626,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			throw new RuntimeRpcError("invalid-params", "jvm_javadoc requires `code` (Java source to document).");
 		}
 		const code = params.code;
-		const dest = resolveOutputDest(this.jvmBaseCwd(params), params.output ?? "javadoc-out");
+		const dest = await resolveOutputDest(this.jvmBaseCwd(params), params.output ?? "javadoc-out");
 		await refuseExistingOutput(dest, params.overwrite);
 		if (params.overwrite === true) await assertReplaceableDocsDir(dest);
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
