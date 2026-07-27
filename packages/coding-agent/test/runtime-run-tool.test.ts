@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { formatExecResult } from "../src/runtime/format";
 import type { RuntimeExecResult } from "../src/runtime/protocol";
 import type { ToolSession } from "../src/tools";
+import { wrapToolWithMetaNotice } from "../src/tools/output-meta";
 import { RuntimeRunTool } from "../src/tools/runtime-run";
 
 function sessionWith(overrides: { enabled?: boolean; run?: (p: unknown) => Promise<RuntimeExecResult> }): ToolSession {
@@ -45,26 +47,87 @@ describe("run tool", () => {
 		expect(result?.details).toMatchObject({ exitCode: 0 });
 	});
 
-	test("output well past any artifact spill threshold survives formatting intact", () => {
-		// The inner cap exists only as a last-resort ceiling; the central artifact spill
-		// (tools.artifactSpillThreshold, default 50KB) must be what trims large output,
-		// so anything in that neighbourhood has to pass through byte-for-byte.
-		const big = "x".repeat(200_000);
-		const text = formatExecResult({ exitCode: 0, stdout: big, stderr: "", durationMs: 1, killed: false });
-		expect(text).toBe(big);
-		expect(text).not.toContain("output truncated");
-	});
-
-	test("the last-resort cap still truncates with a notice", () => {
-		const huge = "y".repeat(500_000);
-		const text = formatExecResult({ exitCode: 0, stdout: huge, stderr: "", durationMs: 1, killed: false });
-		expect(text).toContain("… output truncated (500000 chars total)");
-		expect(text.length).toBeLessThan(huge.length);
-	});
-
 	test("nonzero exit is surfaced in the formatted output", () => {
 		const text = formatExecResult({ exitCode: 2, stdout: "", stderr: "boom", durationMs: 3, killed: false });
 		expect(text).toContain("exit code 2");
 		expect(text).toContain("boom");
+	});
+});
+
+describe("formatExecResult truncation authority", () => {
+	// The central artifact spill (`tools.artifactSpillThreshold`, default 50KB,
+	// applied in tools/output-meta.ts) is the ONLY truncation authority for runtime
+	// tool output. formatExecResult must hand the full text out of `execute` so the
+	// spill can preserve all of it as an artifact.
+	test("does not truncate large stdout", () => {
+		const big = "x".repeat(200_000);
+		const text = formatExecResult({ exitCode: 0, stdout: big, stderr: "", durationMs: 1, killed: false });
+		expect(text).toBe(big);
+	});
+
+	test("does not truncate stdout far beyond the old 400k cap, and emits no truncation notice", () => {
+		const huge = "y".repeat(1_000_000);
+		const text = formatExecResult({ exitCode: 0, stdout: huge, stderr: "", durationMs: 1, killed: false });
+		expect(text).toBe(huge);
+		expect(text).not.toContain("output truncated");
+	});
+
+	test("does not truncate large stderr and keeps the section structure", () => {
+		const out = "o".repeat(600_000);
+		const err = "e".repeat(600_000);
+		const text = formatExecResult({ exitCode: 1, stdout: out, stderr: err, durationMs: 1, killed: false });
+		expect(text).toBe(`${out}\n--- stderr ---\n${err}\n(exit code 1)`);
+		expect(text).not.toContain("output truncated");
+	});
+
+	test("still structures killed and empty results", () => {
+		expect(formatExecResult({ exitCode: 0, stdout: "a\n\n", stderr: "b\n", durationMs: 1, killed: true })).toBe(
+			"a\n--- stderr ---\nb\n(process was killed: timeout or cancellation)",
+		);
+		expect(formatExecResult({ exitCode: 3, stdout: "", stderr: "", durationMs: 1, killed: false })).toBe(
+			"(exit code 3)",
+		);
+		expect(formatExecResult({ exitCode: 0, stdout: "", stderr: "", durationMs: 1, killed: false })).toBe(
+			"(no output, exit code 0)",
+		);
+	});
+});
+
+describe("run tool output spill", () => {
+	test("oversized stdout spills the COMPLETE text to an artifact with a preview inline", async () => {
+		// 500KB of stdout: well over the 50KB default spill threshold, and over the old
+		// 400k-char inner cap, so this pins that nothing pre-truncates the spill.
+		const line = `${"z".repeat(99)}\n`;
+		const stdout = line.repeat(5_000); // 500KB
+		const tool = RuntimeRunTool.createIf(
+			sessionWith({
+				run: async () => ({ exitCode: 0, stdout, stderr: "", durationMs: 1, killed: false }),
+			}),
+		);
+		// The wrapper installs `wrappedExecute`, whose signature carries the tool context
+		// the spill needs; the class's own `execute` declares only three parameters.
+		const wrapped = wrapToolWithMetaNotice(tool as NonNullable<typeof tool>) as unknown as AgentTool;
+
+		let saved: string | undefined;
+		const context = {
+			sessionManager: {
+				saveArtifact: (full: string) => {
+					saved = full;
+					return Promise.resolve("42");
+				},
+			},
+		} as never;
+
+		const result = await wrapped.execute("id1", { code: "x" } as never, undefined, undefined, context);
+		const text = (result.content.find(b => b.type === "text") as { text: string }).text;
+
+		// The model-facing content is a trimmed preview carrying the artifact reference.
+		expect(text).toContain("artifact://42");
+		expect(text.length).toBeLessThan(stdout.length / 2);
+		// The artifact holds the complete output, byte-for-byte.
+		expect(saved).toBe(stdout.replace(/\n+$/, ""));
+		expect(saved).not.toContain("output truncated");
+		// Exactly one truncation notice — no double-notice from a tool-local cap.
+		expect(text.split("artifact://").length - 1).toBe(1);
 	});
 });

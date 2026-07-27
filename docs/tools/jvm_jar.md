@@ -63,7 +63,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 ## Limits & Caps
 - One compilation unit per call; there is no multi-source or dependency-classpath mode.
 - No signing, no `Class-Path` manifest entries, no reproducible-build flags.
-- The listing goes through the same `400_000`-character bound and the central artifact spill.
+- The listing is not truncated by the tool; past `tools.artifactSpillThreshold` the central artifact spill preserves it in full and keeps a head/tail preview inline.
 - Requires runtime >= 1.4.
 
 ## Errors

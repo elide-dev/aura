@@ -47,7 +47,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 - Approval: `approval = "exec"`.
 
 ## Limits & Caps
-- Disassembly of a large class is verbose; the listing goes through the same `400_000`-character per-stream bound and the central artifact spill.
+- Disassembly of a large class is verbose, but nothing is truncated by the tool: past `tools.artifactSpillThreshold` (default 50KB) the central spill saves the complete listing as a session artifact and keeps a head/tail preview inline with a `Read artifact://<id> for full output` reference.
 - `--release 17` applies to the compile, so the bytecode shown is class-file version 61.
 - Requires runtime >= 1.4.
 

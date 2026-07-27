@@ -1,27 +1,28 @@
 import type { RuntimeExecResult } from "./protocol";
 
 /**
- * Last-resort per-stream ceiling. Large tool output is meant to be handled by the
- * central artifact spill (`tools.artifactSpillThreshold`, default 50KB — see
- * `tools/output-meta.ts`), which preserves the full text as an artifact and keeps a
- * head/tail inline. Anything this function truncates is destroyed before the spill
- * can see it, so the cap sits far above the default threshold — and above every
- * setting short of the 500KB/1MB extremes — and only guards a runaway stream.
+ * Render an exec result for the model: stdout, stderr, and an exit annotation.
+ *
+ * This function does NOT truncate. Every runtime tool is constructed through
+ * `wrapToolWithMetaNotice` (see `tools/index.ts` → `tools/output-meta.ts`), whose
+ * wrapper spills any result past `tools.artifactSpillThreshold` (default 50KB) to a
+ * session artifact and replaces the inline content with a head/tail preview plus an
+ * `artifact://` reference — the same central mechanism `bash` relies on. That spill is
+ * the single truncation authority for runtime tool output.
+ *
+ * An earlier revision capped each stream here (`MAX_OUTPUT_CHARS`, 400k chars) as
+ * context-blowout protection. Removing it does not regress that protection: the central
+ * threshold is ~8x stricter than the old cap, so it engages far sooner *and* preserves
+ * the full text as an artifact, whereas anything truncated in here was destroyed before
+ * the spill could ever see it. Two truncation points also meant two "truncated" notices
+ * for one elision. Keep this function purely structural.
  */
-const MAX_OUTPUT_CHARS = 400_000;
-
-function cap(text: string): string {
-	if (text.length <= MAX_OUTPUT_CHARS) return text;
-	return `${text.slice(0, MAX_OUTPUT_CHARS)}\n… output truncated (${text.length} chars total)`;
-}
-
-/** Render an exec result for the model: stdout, stderr, and an exit annotation. */
 export function formatExecResult(result: RuntimeExecResult): string {
 	const parts: string[] = [];
 	const stdout = result.stdout.replace(/\n+$/, "");
 	const stderr = result.stderr.replace(/\n+$/, "");
-	if (stdout) parts.push(cap(stdout));
-	if (stderr) parts.push(`--- stderr ---\n${cap(stderr)}`);
+	if (stdout) parts.push(stdout);
+	if (stderr) parts.push(`--- stderr ---\n${stderr}`);
 	if (result.killed) parts.push("(process was killed: timeout or cancellation)");
 	if (result.exitCode !== 0) parts.push(`(exit code ${result.exitCode})`);
 	if (parts.length === 0) parts.push(`(no output, exit code ${result.exitCode})`);

@@ -53,7 +53,7 @@ A single text block plus `details` carrying the raw `RuntimeJvmResult`.
 
 ## Limits & Caps
 - No `--multi-release`, `--module-path`, or summary/dot-output flags are exposed; the report is `jdeps`' default form.
-- Report text goes through the same `400_000`-character bound and the central artifact spill.
+- The report is not truncated by the tool; past `tools.artifactSpillThreshold` the central artifact spill preserves it in full and keeps a head/tail preview inline.
 - Requires runtime >= 1.4.
 
 ## Errors

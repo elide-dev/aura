@@ -51,7 +51,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 - Approval: `approval = "exec"`, so the call goes through exec approval like `bash`.
 
 ## Limits & Caps
-- Output text is capped at `400_000` characters per stream by `formatExecResult()`, with a `… output truncated (N chars total)` marker. That cap is a last-resort bound: it sits far above the artifact-spill threshold (`tools.artifactSpillThreshold`, default 50KB), so large output is preserved as an artifact rather than destroyed here.
+- Output is not truncated by the tool. Text past `tools.artifactSpillThreshold` (default 50KB) is saved in full as a session artifact by the central spill, and the inline content becomes a head/tail preview plus a `Read artifact://<id> for full output` reference — the same mechanism `bash` uses. There is no per-stream character cap.
 - No implicit execution timeout; unbounded unless `timeoutMs` is supplied.
 - Requires runtime >= 1.4.
 
