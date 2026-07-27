@@ -319,18 +319,37 @@ const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 /** Marks the rules that `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL=1` suppress. */
 export const RUNTIME_SHELL_RULE_KIND = "runtime-shell";
 
-// Command position: string start, or right after a separator that ends the previous
-// command (`;`, `|`, `||`, `&`, `&&`, newline, subshell `(`). Anchoring on position
-// — the same reasoning the `>` redirect rule applies — is what keeps the binary name
-// from matching as a path segment, a bare argument, or a `--elide…` flag. Known
-// regex limit (accepted for v1): a separator inside a quoted string still reads as
-// command position, so `grep "a|elide" f` can false-positive.
-const CMD_POS = "(?:^|[\\n;&|(])\\s*";
-// Env assignments and transparent wrappers a real invocation can hide behind
-// (`FOO=1 sudo -E elide …`, `env FOO=1 elide …`). The repetition must consume
-// everything between the separator and the binary, so an unrelated command in
-// command position cannot lead into a match.
-const CMD_PRELUDE = "(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\\s;&|]*|sudo|command|exec|env|-[^\\s;&|]*)\\s+)*";
+// Command position: string start, or right after a character that opens a fresh
+// command — a separator (`;`, `|`, `||`, `&`, `&&`, newline), a subshell/command
+// substitution `(` (which covers `$(…)`), or a backtick (legacy command
+// substitution). Anchoring on position — the same reasoning the `>` redirect rule
+// applies — is what keeps the binary name from matching as a path segment, a bare
+// argument, or a `--elide…` flag.
+//
+// The `;`/`&`/`|` separators additionally require following whitespace. Quoting is
+// not tracked (see below), and an in-word separator is overwhelmingly more likely to
+// be inside a quoted string than to be a real command boundary: it makes
+// `grep -E "aura|elide" f` safe at the cost of missing `echo hi;elide run x`, which
+// is the right trade now that this group is evaluated on every default install. The
+// substitution openers take no such requirement, since `$(elide …)` has no space.
+//
+// Known regex limit, accepted for v1 (this is routing enforcement, not a sandbox):
+// quoting is not tracked at all, so `grep -E "aura| elide" f` still false-positives.
+// Porting BUCKSHOT's shell-word tokenizer as a programmatic rule kind is the fix if
+// this ever bites in practice.
+const CMD_POS = "(?:^\\s*|\\n\\s*|[;&|]\\s+|[(`]\\s*)";
+// Everything transparent that can sit between command position and the real
+// invocation: env assignments and wrappers (`FOO=1 sudo -E elide …`,
+// `env FOO=1 elide …`, `time elide …`) and the compound-statement keywords that
+// introduce a command body, so `for f in *; do elide run $f; done` and
+// `if …; then elide run x; fi` are covered rather than being a free bypass. Each
+// alternative must be followed by whitespace, which makes them whole words
+// (`sudoedit`/`dosomething` do not match). The repetition must consume *everything*
+// between command position and the binary, so an unrelated command in command
+// position cannot lead into a match (`docker exec -it c elide` does not match —
+// `docker` is in none of the alternatives).
+const CMD_PRELUDE =
+	"(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\\s;&|]*|sudo|command|exec|env|time|do|then|else|-[^\\s;&|]*)\\s+)*";
 // The runtime binary as a command word: optional directory prefix, optional `.exe`,
 // and a right boundary rejecting both a longer name (`elidefoo`) and a further path
 // segment (`/home/elide/x`).
@@ -428,6 +447,29 @@ export function applyRuntimeShellOptOut(
 ): BashInterceptorRule[] {
 	if (!isRuntimeShellAllowed(allowShellSetting, env)) return rules;
 	return rules.filter(rule => rule.kind !== RUNTIME_SHELL_RULE_KIND);
+}
+
+/**
+ * The rules a bash command is actually checked against.
+ *
+ * The runtime group is always in force; `bashInterceptor.enabled` gates only the
+ * rest. Those are two different things: the cat/grep/sed rules are a *nudge*
+ * toward the dedicated tools that upstream deliberately made opt-in, whereas the
+ * runtime group is *policy* — the runtime is reached through the innate tools, on
+ * one managed and version-pinned binary. Tying the policy to the nudge toggle
+ * would make it inert on every default install.
+ *
+ * The runtime group keeps its own two gates: tool availability (which is the free
+ * `runtime.enabled` gate, since the runtime tools are registered behind it) and
+ * the `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` opt-out, applied upstream of
+ * this by {@link applyRuntimeShellOptOut}.
+ */
+export function activeBashInterceptorRules(
+	rules: BashInterceptorRule[],
+	interceptorEnabled: boolean,
+): BashInterceptorRule[] {
+	if (interceptorEnabled) return rules;
+	return rules.filter(rule => rule.kind === RUNTIME_SHELL_RULE_KIND);
 }
 
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [

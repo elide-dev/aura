@@ -11,6 +11,7 @@ import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { Settings } from "../config/settings";
+import { activeBashInterceptorRules } from "../config/settings-schema";
 import { applyDirenvPreflight, type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -881,8 +882,17 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		// Check both the original command and the cwd-normalized command so
 		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
 		// or the dedicated-tool command that follows the directory change.
-		if (this.session.settings.get("bashInterceptor.enabled")) {
-			const rules = this.session.settings.getBashInterceptorRules();
+		//
+		// `bashInterceptor.enabled` gates the dedicated-tool nudges only: the
+		// runtime-routing group is always evaluated, because it is policy rather than
+		// a nudge and would otherwise be inert on a default install. It keeps its own
+		// gates — tool availability and the runtime shell opt-out. See
+		// `activeBashInterceptorRules`.
+		const rules = activeBashInterceptorRules(
+			this.session.settings.getBashInterceptorRules(),
+			this.session.settings.get("bashInterceptor.enabled"),
+		);
+		if (rules.length > 0) {
 			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
 			for (const commandToCheck of commandsToCheck) {
 				const interception = checkBashInterception(commandToCheck, ctx?.toolNames ?? [], rules);
