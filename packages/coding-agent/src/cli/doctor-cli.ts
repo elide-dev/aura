@@ -322,7 +322,7 @@ function toolsSection(input: DoctorToolsInput): DoctorEntry[] {
 		entries.push({
 			label: "session-gated",
 			status: "ok",
-			detail: `${input.sessionGated.join(", ")} — registration depends on the live session, not settings`,
+			detail: `${input.sessionGated.join(", ")} — registration depends on the live session or an external tool, not settings`,
 		});
 	}
 	return entries;
@@ -551,6 +551,20 @@ export interface ToolGateSettings {
 }
 
 /**
+ * The gate settings doctor assumes when the settings document cannot be read.
+ * Transcribed from `settings-schema.ts` defaults — `runtime.enabled` and
+ * `debug.enabled` default on, `memory.backend` off, `autolearn.enabled` off —
+ * so a failed read reports what a default install actually has, in neither
+ * direction.
+ */
+export const DEFAULT_TOOL_GATE_SETTINGS: ToolGateSettings = {
+	runtimeEnabled: true,
+	debugEnabled: true,
+	memoryBackend: "off",
+	autolearnEnabled: false,
+};
+
+/**
  * Names whose `createIf` gate needs a live session or an external probe, so
  * doctor cannot decide them: `ask` needs `session.hasUI`, `checkpoint`/`rewind`
  * need `isTopLevelSession(session)`, `lsp` reads `session.enableLsp`, and
@@ -656,13 +670,9 @@ async function gatherTools(): Promise<DoctorToolsInput> {
 			autolearnEnabled: settings.get("autolearn.enabled") !== false,
 		}),
 	);
-	// An unreadable settings document is not evidence that anything is disabled:
-	// fall back to the schema defaults so no tool is reported as gated off on the
-	// strength of a failed read.
-	const gateSettings: ToolGateSettings =
-		"value" in read
-			? read.value
-			: { runtimeEnabled: true, debugEnabled: true, memoryBackend: "off", autolearnEnabled: true };
+	// An unreadable settings document is not evidence of anything either way, so
+	// the fallback is the schema's own defaults; see DEFAULT_TOOL_GATE_SETTINGS.
+	const gateSettings: ToolGateSettings = "value" in read ? read.value : DEFAULT_TOOL_GATE_SETTINGS;
 	return resolveToolGating([...BUILTIN_TOOL_NAMES], gateSettings);
 }
 

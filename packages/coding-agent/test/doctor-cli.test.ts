@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildDoctorReport,
+	DEFAULT_TOOL_GATE_SETTINGS,
 	type DoctorInput,
 	type DoctorReport,
 	formatCheckLine,
@@ -239,7 +240,8 @@ describe("buildDoctorReport", () => {
 		);
 		const entry = section(report, "tools").entries.find(e => e.label === "session-gated");
 		expect(entry?.detail).toContain("ask");
-		expect(entry?.detail).toContain("live session");
+		// `github`'s gate is a `gh` probe, not the session, so the wording covers both.
+		expect(entry?.detail).toContain("live session or an external tool");
 	});
 
 	test("no active tools warns", () => {
@@ -405,6 +407,14 @@ describe("resolveToolGating", () => {
 
 	test("sessionGated never lists a name that is not available", () => {
 		expect(resolveToolGating(["read"], ALL_ON).sessionGated).toEqual([]);
+	});
+
+	test("the unreadable-settings fallback matches the settings-schema defaults", async () => {
+		const { SETTINGS_SCHEMA } = await import("../src/config/settings-schema");
+		expect(DEFAULT_TOOL_GATE_SETTINGS.autolearnEnabled).toBe(SETTINGS_SCHEMA["autolearn.enabled"].default);
+		expect(DEFAULT_TOOL_GATE_SETTINGS.runtimeEnabled).toBe(SETTINGS_SCHEMA["runtime.enabled"].default);
+		expect(DEFAULT_TOOL_GATE_SETTINGS.debugEnabled).toBe(SETTINGS_SCHEMA["debug.enabled"].default);
+		expect(DEFAULT_TOOL_GATE_SETTINGS.memoryBackend).toBe(SETTINGS_SCHEMA["memory.backend"].default);
 	});
 
 	test("every gated name is a real builtin tool name", () => {
