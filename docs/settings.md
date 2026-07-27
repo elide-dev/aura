@@ -499,21 +499,38 @@ runtime:
 
 #### Runtime shell policy
 
-`bashInterceptor` carries a group of rules that route a direct runtime-binary shell
-command to the innate tool that owns the job: a bare invocation or `run …` to `run`,
-`build …` to `build` (`check` is its no-target form), `serve …` to `serve`, and the
-`java`/`javac`/`javap`/`jar`/`jdeps`/`javadoc` subcommands to the matching `jvm_*`
-tool. `bunx`/`npx`/`pnpm dlx` forms under either package name are covered too. This
-is routing enforcement, not a sandbox — the goal is that the model reaches one
-managed, version-pinned runtime through tools that return structured results,
-instead of shelling out. Like every interceptor rule, these apply only while
-`bashInterceptor.enabled` is on, and each one stands down automatically when its
-target tool is not registered — so the whole group is inert when `runtime.enabled`
-is off.
+`bash` carries a group of interceptor rules that route direct shell invocation of the
+runtime binary to the innate tools, so the runtime is reached through one managed,
+version-pinned binary that returns structured results instead of through ad-hoc shell
+commands. `bunx`/`npx`/`pnpm dlx` forms under either package name are covered too, as
+are the usual lead-ins: `sudo`/`env`/`time` and env-assignment prefixes, `$(…)` and
+backtick command substitution, and compound-statement bodies
+(`for f in *; do … done`, `if …; then … fi`).
 
-To opt out, set `runtime.allowShell: true` or export `AURA_ALLOW_ELIDE_SHELL=1`
-(kept under that name for compatibility). Either one drops just this group; the rest
-of the interceptor keeps running.
+Which tool a blocked command is pointed at depends on what is active. `run`, `check`,
+and `build` are always-on tools, so a bare invocation, `run …`, and `build …` name
+them directly. The `jvm_*` tools and `serve` are *discoverable* — absent from the tool
+schema until discovered — and an interceptor rule only ever names a tool that is
+currently registered. So `elide jar …` names `jvm_jar` once the JVM suite is active,
+and otherwise falls through to the generic guidance that names `run` and points at
+the rest of the suite. Either way the command is blocked; only the suggestion
+differs.
+
+This group is **on by default**, unlike the rest of `bashInterceptor`: the
+dedicated-tool nudges (`cat`/`grep`/`sed` → `read`/`grep`/`edit`) stay behind
+`bashInterceptor.enabled`, while the runtime rules are policy and apply regardless.
+They have their own two gates instead:
+
+- **`runtime.enabled`**, for free. A rule never fires when its target tool is not
+  registered, and the runtime tools are all registered behind `runtime.enabled` — so
+  turning the runtime off makes the whole group inert.
+- **The opt-out.** Set `runtime.allowShell: true` or export
+  `AURA_ALLOW_ELIDE_SHELL=1` (kept under that name for compatibility). Either one
+  drops just this group; every other interceptor rule is unaffected.
+
+This is routing enforcement, not a sandbox. Coverage is regex over the command
+string: it does not track quoting, and it does not see through `hub start`, a
+container, or an SSH hop.
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 

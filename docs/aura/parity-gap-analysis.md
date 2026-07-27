@@ -120,6 +120,8 @@ The delta to accept: the interceptor is **regex over the trimmed command**, wher
 
 Opt-out: honor `AURA_ALLOW_ELIDE_SHELL=1` (keep the name — it is documented muscle memory) plus a `runtime.allowShell` setting, checked where the rule set is assembled. A `--allow-elide-shell` flag is optional given the env var.
 
+Known residual after P5: `hub start application:"elide" …` reaches the binary without passing through the bash interceptor, since `hub` is its own tool rather than a shell command. Out of P5's scope and low-priority — the legitimate managed-launch path is already owned by `serve`/`runtime_debug`, which compose the argv through `runtime/spawn` and hand it to `hub` themselves.
+
 ### #34 — runtime output spill (S)
 
 `src/runtime/format.ts` is a private 60k-char clamp that drops the overflow on the floor. Replace it with the machinery `tools/bash.ts` already uses: `tools/output-meta.ts` for truncation metadata and `session/artifacts.ts` to spill the full text, so the model gets a readable handle instead of `… output truncated (N chars total)`. Keep BUCKSHOT's two-shape distinction: stream results (stdout/stderr, tail-biased) vs single-blob reports (`profile`, `jvm_disassemble`, `jvm_deps`, `project_advice`) which cap-and-spill as one unit. Drop the per-stream 60k in favor of the repo-wide budget so runtime tools and `bash` behave identically. Note BUCKSHOT's anti-double-truncation lesson: its global `aura-slim` middleware explicitly *skips* the runtime tools because they already spilled — if the fork's runtime tools start spilling at the source, verify nothing downstream re-caps them.
