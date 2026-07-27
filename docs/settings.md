@@ -491,7 +491,7 @@ runtime:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile` tools executed on the managed runtime. Off disables the tools and the `aura runtime` subcommands that need a binary. |
+| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
 
