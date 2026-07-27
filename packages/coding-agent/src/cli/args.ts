@@ -375,7 +375,8 @@ export function getExtraHelpText(): string {
 
   ${chalk.dim("# Configuration")}
   AURA_PROFILE                - Named profile for isolated agent state (same as --profile)
-  OMP_PROFILE                 - Legacy alias for AURA_PROFILE (used only when AURA_PROFILE is unset)
+  OMP_PROFILE                 - Legacy alias, used only when AURA_PROFILE is not set at all (an empty value still wins)
+  PI_PROFILE                  - Legacy alias, used only when neither of the above is set at all
   Use \`${APP_NAME} --profile <name> --alias <command>\` to create a shell shortcut for a profile
   PI_CODING_AGENT_DIR        - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
   PI_PACKAGE_DIR             - Override package directory (for Nix/Guix store paths)

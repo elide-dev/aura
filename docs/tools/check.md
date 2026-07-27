@@ -1,6 +1,6 @@
 # check
 
-> Validate the current project on the managed runtime: resolve dependencies and compile every source set without producing artifacts or executing user code.
+> Validate the current project on the managed runtime: resolve dependencies and compile every source set without producing artifacts and without running the project's entrypoints or test/build scripts.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/runtime-check.ts`
@@ -28,7 +28,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 1. `RuntimeCheckTool.createIf(session)` returns `null` unless `runtime.enabled` is truthy.
 2. `execute()` requires `session.getRuntimeService?.()`; a missing service throws `The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).`
 3. Params are forwarded with `cwd` defaulted to `session.cwd` as a `runtime/check` request.
-4. `LocalRuntimeEndpoint` resolves (and may auto-provision) the runtime binary, then spawns `<binary> build --no-color` with **no** targets — the runtime's target-less build resolves dependencies and compiles without emitting artifacts and without executing user code.
+4. `LocalRuntimeEndpoint` resolves (and may auto-provision) the runtime binary, then spawns `<binary> build --no-color` with **no** targets — the runtime's target-less build resolves dependencies and compiles without emitting artifacts and without running the project's entrypoints or test/build scripts.
 5. `timeoutMs` and the caller abort signal both kill the process and set `killed`.
 
 ## Modes / Variants
