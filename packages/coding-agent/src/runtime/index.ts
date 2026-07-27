@@ -8,12 +8,32 @@ export { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/loc
 import { RuntimeService } from "./service";
 import { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
 
-let singleton: RuntimeService | undefined;
+let cached: { key: string; service: RuntimeService } | undefined;
 
-/** Process-wide lazy service over the local endpoint. Options apply on first call only. */
+/** Stable cache key over the options that change resolution behaviour. */
+function serviceCacheKey(opts?: LocalEndpointOptions): string {
+	return JSON.stringify({
+		explicitPath: opts?.explicitPath ?? null,
+		autoDownload: opts?.autoDownload ?? null,
+	});
+}
+
+/**
+ * Lazily build a service over the local endpoint, memoized on the options that
+ * affect binary resolution (`explicitPath`, `autoDownload`). Identical options
+ * hand back the cached instance; changed options build a fresh one, so live
+ * edits to `runtime.*` settings take effect on the next call. Discarding an
+ * instance is free because {@link LocalRuntimeEndpoint} holds no state — it
+ * re-resolves the binary on every request.
+ *
+ * Only `explicitPath`/`autoDownload` participate in the key; callers that vary
+ * `env`, `onProgress`, or the test injection hooks must not rely on the cache
+ * noticing (construct the service directly instead).
+ */
 export function getOrCreateRuntimeService(opts?: LocalEndpointOptions): RuntimeService {
-	singleton ??= new RuntimeService(new LocalRuntimeEndpoint(opts));
-	return singleton;
+	const key = serviceCacheKey(opts);
+	if (cached?.key !== key) cached = { key, service: new RuntimeService(new LocalRuntimeEndpoint(opts)) };
+	return cached.service;
 }
 
 /** Runtime settings as read from `runtime.enabled` / `runtime.autoDownload` / `runtime.path`. */
@@ -37,6 +57,7 @@ export function resolveRuntimeEndpointOptions(values: RuntimeSettingsValues): Lo
 	};
 }
 
+/** Drop the memoized service so the next call builds a fresh one. */
 export function resetRuntimeServiceForTests(): void {
-	singleton = undefined;
+	cached = undefined;
 }

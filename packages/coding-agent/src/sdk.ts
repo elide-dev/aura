@@ -1657,8 +1657,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
-			// Settings are read per call so the (first-call-wins) service singleton sees
-			// live values; an explicit runtime.path suppresses auto-download downstream.
+			// Settings are read per call and the service is memoized on them, so an edit
+			// to runtime.* yields a fresh service on the next call; an explicit
+			// runtime.path suppresses auto-download downstream.
 			getRuntimeService: () => {
 				const opts = resolveRuntimeEndpointOptions({
 					enabled: settings.get("runtime.enabled"),
