@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { TAB_GROUPS } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -30,5 +31,9 @@ describe("runtime settings", () => {
 		expect(settings.get("runtime.enabled")).toBe(true);
 		expect(settings.get("runtime.autoDownload")).toBe(true);
 		expect(settings.get("runtime.path")).toBe("");
+	});
+
+	test("the Runtime group is registered for the tools tab", () => {
+		expect(TAB_GROUPS.tools).toContain("Runtime");
 	});
 });
