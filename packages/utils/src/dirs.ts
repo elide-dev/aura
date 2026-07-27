@@ -127,12 +127,27 @@ function getProfileConfigRoot(profile: string | undefined): string {
 	return profile ? path.join(root, "profiles", profile) : root;
 }
 
-function readPiProfileFromEnvSafe(): string | undefined {
-	try {
-		return normalizeProfileName(process.env.PI_PROFILE);
-	} catch {
-		return undefined;
+/**
+ * Highest-precedence profile NAME present in the environment, ignoring the
+ * "explicit default" bypass that {@link resolveProfileEnv} honors.
+ *
+ * {@link resolveProfileEnv} stops at the first *defined* variable, so
+ * `AURA_PROFILE=""` selects the default profile even when `OMP_PROFILE=work` is
+ * set. The pre-profile agent-dir snapshot needs the opposite question answered:
+ * "which profile could a parent's `setProfile` have derived the inherited
+ * `PI_CODING_AGENT_DIR` from?" — and `setProfile` writes all three variables, so
+ * any of them can be that source. Consulted in the same
+ * `AURA_PROFILE` → `OMP_PROFILE` → `PI_PROFILE` precedence order; invalid values
+ * are skipped rather than thrown (a bad env var must not crash a bare import).
+ */
+function readInheritedProfileFromEnvSafe(): string | undefined {
+	for (const key of PROFILE_ENV_KEYS) {
+		try {
+			const name = normalizeProfileName(process.env[key]);
+			if (name) return name;
+		} catch {}
 	}
+	return undefined;
 }
 
 function getProfileAgentDir(profile: string): string {
@@ -342,10 +357,11 @@ class DirResolver {
  * baseline. A value equal to a profile's derived agent dir is profile-derived
  * (propagated by a parent's `setProfile`), so it must NOT be snapshotted as the
  * default-mode baseline — otherwise default mode would resolve to the profile's
- * agent dir. The profile source can be the active profile or a lower-priority
- * `PI_PROFILE` that was bypassed because `OMP_PROFILE` explicitly selected the
- * default profile. Returns `undefined` in those cases so reset falls back to the
- * standard `~/.omp/agent`.
+ * agent dir. The profile source can be the active profile or a lower-precedence
+ * profile var (`OMP_PROFILE`/`PI_PROFILE`) that was bypassed because a
+ * higher-precedence one explicitly selected the default profile; see
+ * {@link readInheritedProfileFromEnvSafe}. Returns `undefined` in those cases so
+ * reset falls back to the standard `~/<CONFIG_DIR_NAME>/agent`.
  */
 function resolvePreProfileAgentDir(
 	profile: string | undefined,
@@ -367,7 +383,7 @@ let activeProfile = readProfileFromEnvSafe();
 function resolveActiveAgentDirOverride(): string | undefined {
 	return activeProfile
 		? undefined
-		: resolvePreProfileAgentDir(undefined, process.env.PI_CODING_AGENT_DIR, readPiProfileFromEnvSafe());
+		: resolvePreProfileAgentDir(undefined, process.env.PI_CODING_AGENT_DIR, readInheritedProfileFromEnvSafe());
 }
 
 let dirs = new DirResolver({
@@ -388,7 +404,7 @@ let dirs = new DirResolver({
 let preProfileAgentDirEnv: string | undefined = resolvePreProfileAgentDir(
 	activeProfile,
 	process.env.PI_CODING_AGENT_DIR,
-	activeProfile ?? readPiProfileFromEnvSafe(),
+	activeProfile ?? readInheritedProfileFromEnvSafe(),
 );
 // Anchor home for the resolver. Captured at module load to stay stable across
 // test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
@@ -445,7 +461,7 @@ export function __resetProfileSnapshotForTests(): void {
 	preProfileAgentDirEnv = resolvePreProfileAgentDir(
 		activeProfile,
 		process.env.PI_CODING_AGENT_DIR,
-		activeProfile ?? readPiProfileFromEnvSafe(),
+		activeProfile ?? readInheritedProfileFromEnvSafe(),
 	);
 }
 
@@ -473,7 +489,7 @@ export function setProfile(profile: string | undefined): void {
 		preProfileAgentDirEnv = resolvePreProfileAgentDir(
 			undefined,
 			process.env.PI_CODING_AGENT_DIR,
-			readPiProfileFromEnvSafe(),
+			readInheritedProfileFromEnvSafe(),
 		);
 	}
 	activeProfile = next;

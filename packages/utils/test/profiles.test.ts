@@ -420,6 +420,71 @@ describe("dirs module import behavior", () => {
 		}
 	});
 
+	it("ignores an inherited profile agent dir bypassed by any higher-precedence profile var", async () => {
+		// The pre-profile snapshot must consider every profile env var, not just
+		// PI_PROFILE: `AURA_PROFILE=""` explicitly selects the default profile while
+		// a lower-precedence OMP_PROFILE/PI_PROFILE still names the profile whose
+		// derived agent dir the parent propagated. Snapshotting that derived dir as
+		// the default-mode baseline would resolve default mode into the profile.
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-dirs-bypassed-profile-"));
+		const probeConfigDir = `.omp-bypassed-profile-${Snowflake.next()}`;
+		try {
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			const workAgentDir = path.join(os.homedir(), probeConfigDir, "profiles", "work", "agent");
+			const defaultAgentDir = path.join(os.homedir(), probeConfigDir, "agent");
+
+			const cases: Array<{ label: string; env: Record<string, string | undefined> }> = [
+				// AURA_PROFILE bypasses OMP_PROFILE.
+				{ label: "aura-over-omp", env: { AURA_PROFILE: "", OMP_PROFILE: "work", PI_PROFILE: undefined } },
+				// AURA_PROFILE bypasses PI_PROFILE with OMP_PROFILE absent.
+				{ label: "aura-over-pi", env: { AURA_PROFILE: "default", OMP_PROFILE: undefined, PI_PROFILE: "work" } },
+			];
+
+			for (const { label, env } of cases) {
+				const probePath = path.join(root, `bypassed-${label}.ts`);
+				await Bun.write(
+					probePath,
+					[
+						`import { getActiveProfile, getAgentDir } from ${JSON.stringify(dirsUrl)};`,
+						"process.stdout.write(JSON.stringify({",
+						"	activeProfile: getActiveProfile() ?? null,",
+						"	agentDir: getAgentDir(),",
+						"}));",
+					].join("\n"),
+				);
+
+				const childEnv: Record<string, string | undefined> = {
+					...process.env,
+					PI_CONFIG_DIR: probeConfigDir,
+					PI_CODING_AGENT_DIR: workAgentDir,
+					...env,
+				};
+				for (const [key, value] of Object.entries(env)) {
+					if (value === undefined) delete childEnv[key];
+				}
+				const proc = Bun.spawn([process.execPath, probePath], {
+					stdout: "pipe",
+					stderr: "pipe",
+					env: childEnv,
+				});
+				const [stdout, stderr, exitCode] = await Promise.all([
+					readStream(proc.stdout as ReadableStream<Uint8Array>),
+					readStream(proc.stderr as ReadableStream<Uint8Array>),
+					proc.exited,
+				]);
+
+				expect(exitCode, stderr).toBe(0);
+				expect(JSON.parse(stdout), label).toEqual({
+					activeProfile: null,
+					agentDir: defaultAgentDir,
+				});
+			}
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+			await fs.rm(path.join(os.homedir(), probeConfigDir), { recursive: true, force: true });
+		}
+	});
+
 	it("honors XDG dir keys from a profile .env applied after the resolver froze", async () => {
 		if (process.platform === "win32") return;
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-profile-env-xdg-"));
