@@ -20,8 +20,14 @@ interface ConfigBase {
 	 * and it is NEVER a write target — {@link ConfigDirEntry.writable} is false and
 	 * every write path must key off a writable entry (or the branded constant).
 	 *
-	 * Project-level only: pre-rebrand *user* state lives under `~/.omp/agent`,
-	 * which the profile/agent-dir helpers in `@oh-my-pi/pi-utils` own.
+	 * Project-level only, and deliberately so — but note the gap this leaves:
+	 * pre-rebrand *user* state under `~/.omp/agent` is NOT on any read path. No
+	 * code reads `~/.omp` anywhere; user-level bases resolve through
+	 * `getConfigAgentDirName()`, i.e. `~/.aura/agent` (or `PI_CONFIG_DIR`). Users
+	 * with pre-rebrand user config can point `PI_CONFIG_DIR=.omp` at it as a
+	 * workaround; adopting it properly means moving the data (sessions and DBs
+	 * included), which belongs in a future `config migrate` step rather than a
+	 * silent second user-level read path.
 	 */
 	legacy?: boolean;
 }

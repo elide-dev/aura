@@ -4,7 +4,25 @@
  * Primary provider for this agent's native configs. Supports all capabilities.
  * Reads the branded project dir (`CONFIG_DIR_NAME`) plus the pre-rebrand
  * `LEGACY_CONFIG_DIR_NAME` (`.omp`) as a read-only legacy base ranked directly
- * below it — file surfaces only, never settings documents (see `loadSettings`).
+ * below it. "Read-only" means nothing is ever WRITTEN there — it does not mean
+ * the content is inert.
+ *
+ * What the legacy base contributes, in full:
+ *   - inert data: `rules/`, `prompts/`, `agents/`, `skills/`, `instructions`,
+ *     `AGENTS.md`, `RULES.md`, `SYSTEM.md`
+ *   - EXECUTABLE surfaces, same as the branded dir: `hooks/pre/*` and
+ *     `hooks/post/*` (auto-fire around tool calls with no approval prompt),
+ *     `tools/*` (custom tools), `extensions/` + `extensions:` modules,
+ *     TS/JS-backed `commands/*` and `mcp.json`/`.mcp.json` servers
+ *   - NOT settings documents: `config.yml` and `settings.json` are skipped for
+ *     legacy dirs (see `loadSettings`), because sections like `tools:` were
+ *     inert before the rebrand and must not activate now
+ *
+ * Allowing the executable surfaces is deliberate: `.omp` is the user's own
+ * pre-rebrand config dir and carries the same trust as `.aura` (and as the
+ * `.claude`/`.codex`/`.gemini` bases, whose hooks and tools this provider's
+ * siblings already load). It is pinned by
+ * `test/discovery/legacy-omp-project-base.test.ts`.
  */
 import * as path from "node:path";
 import { getAgentDir, LEGACY_CONFIG_DIR_NAME, logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
@@ -107,17 +125,37 @@ function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ dir: stri
 	return ancestors;
 }
 
-async function findNearestProjectConfigDir(
+/**
+ * Nearest single-file project config surface (`SYSTEM.md`, `RULES.md`,
+ * `AGENTS.md`), walking up from `cwd` to `repoRoot`.
+ *
+ * Upstream semantics are preserved: the search stops at the nearest ancestor
+ * that owns a non-empty native config dir, so a closer config dir without the
+ * file does not let a further-up one supply it.
+ *
+ * The fork's part: at that ancestor the probe is per FILE across both native
+ * bases — branded first, then the read-only legacy `.omp` dir. Picking a
+ * DIRECTORY instead would let any unrelated branded content (say
+ * `.aura/rules/`) silently mask a legacy `.omp/AGENTS.md`, which is exactly the
+ * incremental-adoption case the legacy base exists for.
+ */
+async function findNearestProjectConfigFile(
 	cwd: string,
+	filename: string,
 	repoRoot?: string | null,
-): Promise<{ dir: string; depth: number } | null> {
+): Promise<{ path: string; content: string; depth: number } | null> {
 	for (const ancestor of getAncestorDirs(cwd, repoRoot)) {
-		// Branded dir first, then the read-only pre-rebrand `.omp` dir, so a
-		// branded file at the same depth always wins.
-		const configDir =
-			(await ifNonEmptyDir(ancestor.dir, PATHS.projectDir)) ??
-			(await ifNonEmptyDir(ancestor.dir, LEGACY_CONFIG_DIR_NAME));
-		if (configDir) return { dir: configDir, depth: ancestor.depth };
+		const configDirs = (
+			await Promise.all([PATHS.projectDir, LEGACY_CONFIG_DIR_NAME].map(base => ifNonEmptyDir(ancestor.dir, base)))
+		).filter((dir): dir is string => dir !== null);
+		if (configDirs.length === 0) continue;
+
+		for (const dir of configDirs) {
+			const filePath = path.join(dir, filename);
+			const content = await readFile(filePath);
+			if (content) return { path: filePath, content, depth: ancestor.depth };
+		}
+		return null;
 	}
 	return null;
 }
@@ -272,18 +310,14 @@ async function loadSystemPrompt(ctx: LoadContext): Promise<LoadResult<SystemProm
 		});
 	}
 
-	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
-	if (nearestProjectConfigDir) {
-		const projectPath = path.join(nearestProjectConfigDir.dir, "SYSTEM.md");
-		const projectContent = await readFile(projectPath);
-		if (projectContent) {
-			items.push({
-				path: projectPath,
-				content: projectContent,
-				level: "project",
-				_source: createSourceMeta(PROVIDER_ID, projectPath, "project"),
-			});
-		}
+	const projectSystemPrompt = await findNearestProjectConfigFile(ctx.cwd, "SYSTEM.md", ctx.repoRoot);
+	if (projectSystemPrompt) {
+		items.push({
+			path: projectSystemPrompt.path,
+			content: projectSystemPrompt.content,
+			level: "project",
+			_source: createSourceMeta(PROVIDER_ID, projectSystemPrompt.path, "project"),
+		});
 	}
 
 	return { items, warnings: [] };
@@ -415,10 +449,9 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 	const userRule = await loadStickyRulesFile(userRulesFile, "user");
 	if (userRule) items.push(userRule);
 
-	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
-	if (nearestProjectConfigDir) {
-		const projectRulesFile = path.join(nearestProjectConfigDir.dir, "RULES.md");
-		const projectRule = await loadStickyRulesFile(projectRulesFile, "project");
+	const projectRulesFile = await findNearestProjectConfigFile(ctx.cwd, "RULES.md", ctx.repoRoot);
+	if (projectRulesFile) {
+		const projectRule = await loadStickyRulesFile(projectRulesFile.path, "project");
 		if (projectRule) items.push(projectRule);
 	}
 
@@ -950,20 +983,15 @@ async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFil
 		});
 	}
 
-	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
-	if (nearestProjectConfigDir) {
-		const projectPath = path.join(nearestProjectConfigDir.dir, "AGENTS.md");
-		const projectContent = await readFile(projectPath);
-		if (projectContent) {
-			items.push({
-				path: projectPath,
-				content: projectContent,
-				level: "project",
-				depth: nearestProjectConfigDir.depth,
-				_source: createSourceMeta(PROVIDER_ID, projectPath, "project"),
-			});
-			return { items, warnings };
-		}
+	const projectContextFile = await findNearestProjectConfigFile(ctx.cwd, "AGENTS.md", ctx.repoRoot);
+	if (projectContextFile) {
+		items.push({
+			path: projectContextFile.path,
+			content: projectContextFile.content,
+			level: "project",
+			depth: projectContextFile.depth,
+			_source: createSourceMeta(PROVIDER_ID, projectContextFile.path, "project"),
+		});
 	}
 	return { items, warnings };
 }

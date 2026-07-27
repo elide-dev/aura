@@ -22,12 +22,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-agent/capability/context-file";
 import { clearCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
+import { type Hook, hookCapability } from "@oh-my-pi/pi-coding-agent/capability/hook";
 import { type MCPServer, mcpCapability } from "@oh-my-pi/pi-coding-agent/capability/mcp";
 import { type Prompt, promptCapability } from "@oh-my-pi/pi-coding-agent/capability/prompt";
 import { type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { type Settings, settingsCapability } from "@oh-my-pi/pi-coding-agent/capability/settings";
 import { type Skill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { type SlashCommand, slashCommandCapability } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
+import { type SystemPrompt, systemPromptCapability } from "@oh-my-pi/pi-coding-agent/capability/system-prompt";
+import { type CustomTool, toolCapability } from "@oh-my-pi/pi-coding-agent/capability/tool";
 import { getConfigDirs } from "@oh-my-pi/pi-coding-agent/config";
 // Importing discovery registers all providers as a side effect.
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
@@ -96,8 +99,9 @@ test("legacy `.omp` is a project-only, non-writable base ranked directly below t
 	expect(projectDirs.find(entry => entry.source === CONFIG_DIR_NAME)?.writable).toBe(true);
 	expect(projectDirs.find(entry => entry.source === LEGACY_CONFIG_DIR_NAME)?.writable).toBe(false);
 
-	// The legacy base is project-local only: pre-rebrand *user* state lives under
-	// `~/.omp/agent`, which the profile/agent-dir helpers own, not this list.
+	// The legacy base is project-local only. Pre-rebrand *user* state under
+	// `~/.omp/agent` is NOT on any read path (see config.ts); `PI_CONFIG_DIR=.omp`
+	// is the workaround until a `config migrate` step exists.
 	const userDirs = getConfigDirs("agents", { project: false });
 	expect(userDirs.some(entry => entry.source === LEGACY_CONFIG_DIR_NAME)).toBe(false);
 	expect(userDirs.every(entry => entry.writable)).toBe(true);
@@ -153,6 +157,54 @@ test("legacy `.omp/AGENTS.md` and `.omp/RULES.md` load; branded files win", asyn
 	const sticky2 = rules2.filter(rule => rule.name === "RULES@project");
 	expect(sticky2).toHaveLength(1);
 	expect(sticky2[0].content).toContain("branded sticky rule");
+});
+
+test("a non-empty branded dir does not mask a legacy single-file surface it lacks", async () => {
+	// Incremental adoption: the project has started using `.aura/` for one surface
+	// but its AGENTS.md / RULES.md / SYSTEM.md still live in `.omp/`. The probe is
+	// per FILE, so unrelated branded content cannot hide them.
+	writeFile(projectFile(CONFIG_DIR_NAME, "rules", "branded-only.md"), "branded rule\n");
+	writeFile(projectFile(LEGACY_CONFIG_DIR_NAME, "AGENTS.md"), "legacy project context\n");
+	writeFile(projectFile(LEGACY_CONFIG_DIR_NAME, "RULES.md"), "legacy sticky rule\n");
+	writeFile(projectFile(LEGACY_CONFIG_DIR_NAME, "SYSTEM.md"), "legacy system prompt\n");
+
+	const contextFiles = await load<ContextFile>(contextFileCapability.id);
+	expect(contextFiles.find(file => file.content.includes("legacy project context"))).toBeDefined();
+
+	const rules = await load<Rule>(ruleCapability.id);
+	expect(rules.find(rule => rule.name === "RULES@project")?.content).toContain("legacy sticky rule");
+
+	const systemPrompts = await load<SystemPrompt>(systemPromptCapability.id);
+	expect(systemPrompts.find(item => item.content.includes("legacy system prompt"))).toBeDefined();
+
+	// A branded file at the same ancestor still wins over the legacy one.
+	writeFile(projectFile(CONFIG_DIR_NAME, "SYSTEM.md"), "branded system prompt\n");
+	clearCache();
+	const systemPrompts2 = await load<SystemPrompt>(systemPromptCapability.id);
+	const projectPrompts = systemPrompts2.filter(item => item._source.level === "project");
+	expect(projectPrompts).toHaveLength(1);
+	expect(projectPrompts[0].content).toContain("branded system prompt");
+});
+
+test("legacy `.omp` executable surfaces load too — hooks and custom tools", async () => {
+	// Deliberate and documented: the legacy base carries the same trust as the
+	// branded dir (and as `.claude`/`.codex`/`.gemini`), so `hooks/`, `tools/`,
+	// `extensions/` and TS-backed commands run from it. Pinned so the decision
+	// cannot be reversed by accident.
+	writeFile(projectFile(LEGACY_CONFIG_DIR_NAME, "hooks", "pre", "bash.sh"), "#!/bin/sh\nexit 0\n");
+	writeFile(
+		projectFile(LEGACY_CONFIG_DIR_NAME, "tools", "legacy-tool.ts"),
+		"export default { name: 'legacy_tool', description: 'legacy tool', parameters: {}, execute: async () => 'ok' };\n",
+	);
+
+	const hooks = await load<Hook>(hookCapability.id);
+	const legacyHook = hooks.find(hook => hook.path === projectFile(LEGACY_CONFIG_DIR_NAME, "hooks", "pre", "bash.sh"));
+	expect(legacyHook).toBeDefined();
+	expect(legacyHook?.type).toBe("pre");
+	expect(legacyHook?.tool).toBe("bash");
+
+	const tools = await load<CustomTool>(toolCapability.id);
+	expect(tools.some(tool => tool.path === projectFile(LEGACY_CONFIG_DIR_NAME, "tools", "legacy-tool.ts"))).toBe(true);
 });
 
 test("legacy `.omp/agents/` is discovered; branded `.aura/agents/` wins on the same agent name", async () => {
