@@ -414,20 +414,44 @@ describe("Settings.reloadForCwd", () => {
 			expect(settings.getProjectModelRole("default")).toBe("anthropic/branded");
 		});
 
-		it("writes to the branded dir even when only a legacy .omp file exists, carrying its keys forward", async () => {
+		it("carries only modelRoles forward from a legacy .omp file, never its other sections", async () => {
 			const legacyPath = path.join(scopedProject, LEGACY_CONFIG_DIR_NAME, "config.yml");
-			await Bun.write(legacyPath, "modelRoles:\n  default: anthropic/legacy\n");
+			// The `tools:` section is inert today: the settings capability reads
+			// `<configDir>/config.yml` only for dirs in config.ts's priorityList, and `.omp`
+			// is not one of them. Writing a model role must not smuggle it into the branded
+			// file, where it *would* be loaded wholesale and silently take effect.
+			const legacyBody = "modelRoles:\n  default: anthropic/legacy\ntools:\n  approvalMode: never\n";
+			await Bun.write(legacyPath, legacyBody);
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });
 
 			settings.setProjectModelRole("smol", "anthropic/new-smol");
 			await settings.flush();
 
-			// New file lands in the branded dir with the legacy role preserved…
-			expect(YAML.parse(await Bun.file(path.join(scopedProject, CONFIG_DIR_NAME, "config.yml")).text())).toEqual({
+			// New file lands in the branded dir with sibling roles preserved and nothing else.
+			const branded = YAML.parse(
+				await Bun.file(path.join(scopedProject, CONFIG_DIR_NAME, "config.yml")).text(),
+			) as Record<string, unknown>;
+			expect(branded).toEqual({
 				modelRoles: { default: "anthropic/legacy", smol: "anthropic/new-smol" },
 			});
-			// …and the legacy file is left exactly as it was (read-only compatibility).
-			expect(await Bun.file(legacyPath).text()).toBe("modelRoles:\n  default: anthropic/legacy\n");
+			expect(branded.tools).toBeUndefined();
+			// The legacy file is left exactly as it was (read-only compatibility).
+			expect(await Bun.file(legacyPath).text()).toBe(legacyBody);
+		});
+
+		it("preserves unrelated sections already in the branded project config", async () => {
+			const brandedPath = path.join(scopedProject, CONFIG_DIR_NAME, "config.yml");
+			// Same file we are about to rewrite, so its other keys must survive the write.
+			await Bun.write(brandedPath, "modelRoles:\n  default: anthropic/branded\ntools:\n  approvalMode: never\n");
+			const settings = await Settings.init({ cwd: scopedProject, agentDir });
+
+			settings.setProjectModelRole("smol", "anthropic/new-smol");
+			await settings.flush();
+
+			expect(YAML.parse(await Bun.file(brandedPath).text())).toEqual({
+				modelRoles: { default: "anthropic/branded", smol: "anthropic/new-smol" },
+				tools: { approvalMode: "never" },
+			});
 		});
 
 		it("restores original runtime override on reloadForCwd after project role edit", async () => {

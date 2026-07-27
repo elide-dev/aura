@@ -1062,8 +1062,34 @@ export class Settings {
 	async #loadProjectConfigYaml(): Promise<RawSettings> {
 		const branded = await this.#loadYamlIfPresent(this.#projectConfigPath());
 		if (branded) return branded;
-		const legacy = path.join(this.#cwd, LEGACY_CONFIG_DIR_NAME, "config.yml");
-		return (await this.#loadYamlIfPresent(legacy)) ?? {};
+		return (await this.#loadYamlIfPresent(this.#legacyProjectConfigPath())) ?? {};
+	}
+
+	/** Pre-rebrand project config. Read-only: consulted for `modelRoles`, never written. */
+	#legacyProjectConfigPath(): string {
+		return path.join(this.#cwd, LEGACY_CONFIG_DIR_NAME, "config.yml");
+	}
+
+	/**
+	 * Merge base for a project-config write.
+	 *
+	 * When the branded file exists, seed from it wholesale — we are rewriting that very
+	 * file and must not drop keys the user put there.
+	 *
+	 * When only a pre-rebrand `.omp/config.yml` exists, seed with its `modelRoles` slice
+	 * and *nothing else*. The legacy file is consulted for model roles alone, but the
+	 * branded file is loaded wholesale by the settings capability (`discovery/builtin.ts`
+	 * reads `<configDir>/config.yml` for every dir in `config.ts`'s `priorityList`, which
+	 * lists `.aura` but not `.omp`). Copying any other legacy section across would
+	 * activate config that was inert before the write — a `tools:` block in a legacy file
+	 * must not start taking effect just because someone changed a model role.
+	 */
+	async #projectConfigWriteBase(): Promise<RawSettings> {
+		const branded = await this.#loadYamlIfPresent(this.#projectConfigPath());
+		if (branded) return branded;
+		const legacy = await this.#loadYamlIfPresent(this.#legacyProjectConfigPath());
+		const legacyRoles = getByPath(legacy ?? {}, ["modelRoles"]);
+		return isRecord(legacyRoles) ? { modelRoles: { ...legacyRoles } } : {};
 	}
 
 	async #loadYaml(filePath: string): Promise<RawSettings> {
@@ -1838,9 +1864,9 @@ export class Settings {
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
 			await withFileLock(projectConfigPath, async () => {
-				// Seed from whichever file the read path resolved, so a legacy `.omp` project
-				// carries its existing keys forward into the branded file instead of losing them.
-				const projectSettings = await this.#loadProjectConfigYaml();
+				// Carries sibling model roles forward without importing anything else a legacy
+				// file may hold — see #projectConfigWriteBase.
+				const projectSettings = await this.#projectConfigWriteBase();
 
 				const projectRoles = getByPath(this.#project, ["modelRoles"]);
 				for (const role of modifiedModelRoles) {
