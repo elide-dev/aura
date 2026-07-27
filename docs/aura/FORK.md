@@ -71,7 +71,8 @@ read fallback, writes never legacy); keep those alongside upstream's.
 - `packages/coding-agent/src/tools/runtime-*.ts`, `src/prompts/tools/runtime-*.md`
 - `packages/coding-agent/src/modes/theme/aura.json` — the `aura` built-in theme
   registered by the `theme.ts` row above
-- `packages/coding-agent/test/runtime-*.test.ts`, `test/aura-bin.test.ts`,
+- `packages/coding-agent/test/runtime-*.test.ts`, `test/doctor-cli.test.ts`,
+  `test/doctor-command-registration.test.ts`, `test/aura-bin.test.ts`,
   `test/aura-theme.test.ts`, `packages/utils/test/branding.test.ts` — fork-owned
   tests; safe to keep verbatim through any upstream merge
 - `packages/coding-agent/test/discovery/legacy-omp-project-base.test.ts`,
