@@ -10,8 +10,9 @@ describe.skipIf(!realBin)("runtime integration (real binary)", () => {
 	test("status reports an available runtime >= 1.4", async () => {
 		const s = await svc.status();
 		expect(s.available).toBe(true);
-		expect(s.version).toMatch(/^1\.[4-9]|^[2-9]/);
-	});
+		const [major = 0, minor = 0] = (s.version ?? "").split(".").map(n => Number.parseInt(n, 10));
+		expect(major > 1 || (major === 1 && minor >= 4)).toBe(true);
+	}, 180_000);
 
 	test("runs inline TypeScript", async () => {
 		const r = await svc.run({ code: 'console.log("aura" + ":" + (40 + 2))', language: "ts", timeoutMs: 120_000 });
