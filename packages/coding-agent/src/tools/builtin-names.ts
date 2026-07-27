@@ -32,6 +32,12 @@ export const BUILTIN_TOOL_NAMES = [
 	"build",
 	"insights",
 	"profile",
+	"jvm_run",
+	"jvm_disassemble",
+	"jvm_format",
+	"jvm_jar",
+	"jvm_deps",
+	"jvm_javadoc",
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];

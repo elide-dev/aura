@@ -50,6 +50,12 @@ import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { HubTool, isIrcEnabled } from "./hub";
 import { InspectImageTool } from "./inspect-image";
+import { JvmDepsTool } from "./jvm-deps";
+import { JvmDisassembleTool } from "./jvm-disassemble";
+import { JvmFormatTool } from "./jvm-format";
+import { JvmJarTool } from "./jvm-jar";
+import { JvmJavadocTool } from "./jvm-javadoc";
+import { JvmRunTool } from "./jvm-run";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
@@ -428,6 +434,12 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	build: RuntimeBuildTool.createIf,
 	insights: RuntimeInsightsTool.createIf,
 	profile: RuntimeProfileTool.createIf,
+	jvm_run: JvmRunTool.createIf,
+	jvm_disassemble: JvmDisassembleTool.createIf,
+	jvm_format: JvmFormatTool.createIf,
+	jvm_jar: JvmJarTool.createIf,
+	jvm_deps: JvmDepsTool.createIf,
+	jvm_javadoc: JvmJavadocTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {

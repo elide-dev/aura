@@ -480,7 +480,7 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `l
 
 ### Runtime
 
-The `run`, `check`, `build`, `insights`, and `profile` tools execute on a managed runtime binary. All five are gated on `runtime.enabled`; when it is off, none of them register.
+The `run`, `check`, `build`, `insights`, and `profile` tools execute on a managed runtime binary, as do the six JVM tools (`jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc`), which compile and run Java/Kotlin on the embedded JVM. All eleven are gated on `runtime.enabled`; when it is off, none of them register.
 
 ```yaml
 runtime:
@@ -491,11 +491,11 @@ runtime:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
+| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile` and `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
 
-See [run](./tools/run.md), [check](./tools/check.md), [build](./tools/build.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for per-tool behavior.
+See [run](./tools/run.md), [check](./tools/check.md), [build](./tools/build.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for per-tool behavior, and [jvm_run](./tools/jvm_run.md), [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), [jvm_deps](./tools/jvm_deps.md), [jvm_javadoc](./tools/jvm_javadoc.md) for the JVM suite. `jvm_jar` (create) and `jvm_javadoc` are the only runtime tools that write into your project, and both refuse an existing output unless `overwrite: true` is passed.
 
 ### Native computer use
 
