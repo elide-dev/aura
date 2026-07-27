@@ -34,6 +34,32 @@ describe("runtime binary resolution", () => {
 		expect(r).toEqual({ binaryPath: a, source: "env" });
 	});
 
+	test("a set-but-dead AURA_RUNTIME_BIN is an error, not a fallthrough to ELIDE_BIN", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-rt-"));
+		tmpDirs.push(dir);
+		const b = await makeFakeBinary(dir, "b/elide");
+		const r = await resolveRuntimeBinary({ env: { AURA_RUNTIME_BIN: "/nope/elide", ELIDE_BIN: b } });
+		expect(r).toBeNull();
+	});
+
+	test("a set-but-dead ELIDE_BIN stops resolution rather than falling through", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-rt-"));
+		tmpDirs.push(dir);
+		const r = await resolveRuntimeBinary({ env: { ELIDE_BIN: path.join(dir, "gone/elide") } });
+		expect(r).toBeNull();
+	});
+
+	test("an empty or unset env override is skipped normally", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-rt-"));
+		tmpDirs.push(dir);
+		const b = await makeFakeBinary(dir, "b/elide");
+		expect(await resolveRuntimeBinary({ env: { AURA_RUNTIME_BIN: "", ELIDE_BIN: b } })).toEqual({
+			binaryPath: b,
+			source: "env",
+		});
+		expect(await resolveRuntimeBinary({ env: { ELIDE_BIN: b } })).toEqual({ binaryPath: b, source: "env" });
+	});
+
 	test("nonexistent explicit path returns null rather than a lie", async () => {
 		const r = await resolveRuntimeBinary({ explicitPath: "/nope/elide", env: {}, disablePathLookup: true });
 		expect(r).toBeNull();

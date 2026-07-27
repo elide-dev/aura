@@ -70,9 +70,14 @@ export async function resolveRuntimeBinary(opts: ResolveOptions = {}): Promise<R
 		if (await isFile(opts.explicitPath)) return { binaryPath: opts.explicitPath, source: "flag" };
 		return null; // an explicit path that doesn't exist is an error, not a fallthrough
 	}
+	// A set env override is as binding as an explicit path: pointing it at a missing
+	// file is a misconfiguration to surface, not a reason to quietly run some other
+	// binary the user did not ask for. Unset (or empty) overrides skip normally.
 	for (const key of ["AURA_RUNTIME_BIN", "ELIDE_BIN"] as const) {
 		const p = env[key];
-		if (p && (await isFile(p))) return { binaryPath: p, source: "env" };
+		if (!p) continue;
+		if (await isFile(p)) return { binaryPath: p, source: "env" };
+		return null;
 	}
 	const managed = await findBinaryInTree(managedVersionDir());
 	if (managed) return { binaryPath: managed, source: "managed" };
