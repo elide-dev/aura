@@ -1,6 +1,14 @@
 import type { RuntimeExecResult } from "./protocol";
 
-const MAX_OUTPUT_CHARS = 60_000;
+/**
+ * Last-resort per-stream ceiling. Large tool output is meant to be handled by the
+ * central artifact spill (`tools.artifactSpillThreshold`, default 50KB — see
+ * `tools/output-meta.ts`), which preserves the full text as an artifact and keeps a
+ * head/tail inline. Anything this function truncates is destroyed before the spill
+ * can see it, so the cap sits far above the default threshold — and above every
+ * setting short of the 500KB/1MB extremes — and only guards a runaway stream.
+ */
+const MAX_OUTPUT_CHARS = 400_000;
 
 function cap(text: string): string {
 	if (text.length <= MAX_OUTPUT_CHARS) return text;

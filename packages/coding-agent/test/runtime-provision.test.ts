@@ -129,19 +129,23 @@ describe("runtime provisioning", () => {
 	// Some networks (captive portals, ISP resolvers that hijack NXDOMAIN) answer for
 	// `.invalid` names, which would turn this case into a false failure about someone
 	// else's DNS. Probed once above; skipped rather than failed when that happens.
-	test.skipIf(invalidNameResolves)("an unresolvable host is reported as unreachable, not as a timeout", async () => {
-		const err = await provisionRuntime({
-			baseUrl: `http://${UNRESOLVABLE_HOST}`,
-			dist: { file: "fake.txz", sha256: archiveSha, archive: "txz" },
-			version: "0.0.0-test",
-			targetRoot: path.join(workRoot, "managed-dns"),
-			// Long enough that DNS failure, not the deadline, is what surfaces.
-			connectTimeoutMs: 15_000,
-		}).catch(e => e);
-		expect(err).toBeInstanceOf(RuntimeRpcError);
-		expect((err as RuntimeRpcError).code).toBe("download-failed");
-		expect((err as RuntimeRpcError).message).toContain("cannot reach");
-	}, 20_000);
+	test.skipIf(invalidNameResolves)(
+		"an unresolvable host is reported as unreachable, not as a timeout",
+		async () => {
+			const err = await provisionRuntime({
+				baseUrl: `http://${UNRESOLVABLE_HOST}`,
+				dist: { file: "fake.txz", sha256: archiveSha, archive: "txz" },
+				version: "0.0.0-test",
+				targetRoot: path.join(workRoot, "managed-dns"),
+				// Long enough that DNS failure, not the deadline, is what surfaces.
+				connectTimeoutMs: 15_000,
+			}).catch(e => e);
+			expect(err).toBeInstanceOf(RuntimeRpcError);
+			expect((err as RuntimeRpcError).code).toBe("download-failed");
+			expect((err as RuntimeRpcError).message).toContain("cannot reach");
+		},
+		20_000,
+	);
 
 	test("a body that goes quiet is reported as a stall, not as unreachable", async () => {
 		const err = await provisionRuntime({

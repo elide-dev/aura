@@ -45,6 +45,23 @@ describe("run tool", () => {
 		expect(result?.details).toMatchObject({ exitCode: 0 });
 	});
 
+	test("output well past any artifact spill threshold survives formatting intact", () => {
+		// The inner cap exists only as a last-resort ceiling; the central artifact spill
+		// (tools.artifactSpillThreshold, default 50KB) must be what trims large output,
+		// so anything in that neighbourhood has to pass through byte-for-byte.
+		const big = "x".repeat(200_000);
+		const text = formatExecResult({ exitCode: 0, stdout: big, stderr: "", durationMs: 1, killed: false });
+		expect(text).toBe(big);
+		expect(text).not.toContain("output truncated");
+	});
+
+	test("the last-resort cap still truncates with a notice", () => {
+		const huge = "y".repeat(500_000);
+		const text = formatExecResult({ exitCode: 0, stdout: huge, stderr: "", durationMs: 1, killed: false });
+		expect(text).toContain("… output truncated (500000 chars total)");
+		expect(text.length).toBeLessThan(huge.length);
+	});
+
 	test("nonzero exit is surfaced in the formatted output", () => {
 		const text = formatExecResult({ exitCode: 2, stdout: "", stderr: "boom", durationMs: 3, killed: false });
 		expect(text).toContain("exit code 2");
