@@ -118,8 +118,9 @@ async function downloadToFile(
 		});
 	} finally {
 		// A failing flush (disk full, for one) must not replace whatever typed error is
-		// already in flight. On the success path a short write is caught downstream by
-		// the checksum comparison, so swallowing here costs no correctness.
+		// already in flight. On the success path a short write is caught downstream when
+		// extraction fails on the truncated archive (the checksum hashes the network
+		// bytes, not the file), so swallowing here costs no correctness.
 		try {
 			await sink.end();
 		} catch {
