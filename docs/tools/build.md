@@ -43,7 +43,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 - Approval: `approval = "exec"`.
 
 ## Limits & Caps
-- Output text capped at `60_000` characters per stream.
+- Output text capped at `400_000` characters per stream — a last-resort bound only; the central artifact spill (`tools.artifactSpillThreshold`) handles large output well below it.
 - No implicit timeout; builds are unbounded unless `timeoutMs` is supplied.
 - Requires runtime >= 1.4.
 

@@ -13,12 +13,18 @@ const UNRESOLVABLE_HOST = "aura-runtime-does-not-exist.invalid";
 /**
  * Whether this host's resolver answers for `.invalid` anyway (NXDOMAIN-hijacking
  * networks). Probed at module scope, not in `beforeAll`, because `test.skipIf` is
- * evaluated when the test is registered — before any hook has run.
+ * evaluated when the test is registered — before any hook has run. The probe is
+ * time-bounded so a wedged resolver cannot stall importing this file; a probe that
+ * does not answer in time counts as "does not resolve", which is the case the test
+ * below is written for anyway.
  */
-const invalidNameResolves = await dns
-	.lookup(UNRESOLVABLE_HOST)
-	.then(() => true)
-	.catch(() => false);
+const invalidNameResolves = await Promise.race([
+	dns
+		.lookup(UNRESOLVABLE_HOST)
+		.then(() => true)
+		.catch(() => false),
+	new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2_000).unref?.()),
+]);
 
 let server: ReturnType<typeof Bun.serve>;
 let archive: Uint8Array;

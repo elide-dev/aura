@@ -50,7 +50,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 - Approval: `approval = "exec"`.
 
 ## Limits & Caps
-- Output text capped at `60_000` characters per stream — tracing reports for busy programs can hit this, so prefer `cpusampling` or a smaller workload over retrying.
+- Output text capped at `400_000` characters per stream. The cap is a last-resort bound well above the artifact-spill threshold (`tools.artifactSpillThreshold`, default 50KB), so a large tracing report spills to an artifact — with a head/tail kept inline — instead of being truncated. Prefer `cpusampling` over `tracing` for busy programs to keep the inline report readable, not to dodge the cap.
 - No implicit timeout; unbounded unless `timeoutMs` is supplied.
 - Requires runtime >= 1.4.
 
