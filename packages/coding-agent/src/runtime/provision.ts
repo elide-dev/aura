@@ -11,15 +11,132 @@ export interface ProvisionOptions {
 	dist?: RuntimeDistEntry;
 	/** Install root override (tests). Defaults to managedRuntimeRoot(). */
 	targetRoot?: string;
-	/** Network guard (ms) for the download. An unreachable host can hang instead of refusing; default 120s. */
+	/**
+	 * Deadline (ms) for the response headers to arrive — the connect phase only. An
+	 * unreachable host can hang instead of refusing, so this bounds the wait. Default 30s.
+	 * The body transfer is deliberately uncapped; see {@link stallTimeoutMs}.
+	 */
 	timeoutMs?: number;
+	/**
+	 * Abort the body transfer when no bytes arrive for this long (ms). Default 60s.
+	 * This replaces an overall transfer cap so a healthy-but-slow download on a thin
+	 * link is never killed for taking a while.
+	 */
+	stallTimeoutMs?: number;
 	onProgress?: (message: string) => void;
 }
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+const DEFAULT_STALL_TIMEOUT_MS = 60_000;
+
+/**
+ * Stream `url` into `destPath`, hashing as it goes, and return the sha256 hex.
+ *
+ * Two independent guards, each with its own error message so the caller can tell
+ * "your network is down" from "the server went quiet" from "this is just slow":
+ * `connectTimeoutMs` bounds the wait for response headers, and `stallTimeoutMs`
+ * bounds the gap between body chunks. Streaming (rather than buffering the whole
+ * archive) also keeps peak memory flat regardless of dist size.
+ */
+async function downloadToFile(
+	url: string,
+	destPath: string,
+	connectTimeoutMs: number,
+	stallTimeoutMs: number,
+): Promise<string> {
+	const controller = new AbortController();
+	let connectTimedOut = false;
+	let stalled = false;
+
+	const connectTimer = setTimeout(() => {
+		connectTimedOut = true;
+		controller.abort();
+	}, connectTimeoutMs);
+	let response: Response;
+	try {
+		response = await fetch(url, { signal: controller.signal });
+	} catch (cause) {
+		if (connectTimedOut) {
+			throw new RuntimeRpcError(
+				"download-failed",
+				`Runtime download failed: ${url} did not respond within ${connectTimeoutMs}ms.`,
+				{ url, connectTimeoutMs },
+			);
+		}
+		throw new RuntimeRpcError("download-failed", `Runtime download failed: cannot reach ${url}.`, {
+			url,
+			cause: String(cause),
+		});
+	} finally {
+		clearTimeout(connectTimer);
+	}
+	if (!response.ok) {
+		throw new RuntimeRpcError("download-failed", `Runtime download failed: HTTP ${response.status} for ${url}.`, {
+			url,
+			status: response.status,
+		});
+	}
+	const body = response.body;
+	if (!body) {
+		throw new RuntimeRpcError("download-failed", `Runtime download failed: empty response body for ${url}.`, { url });
+	}
+
+	const hasher = new Bun.CryptoHasher("sha256");
+	const sink = Bun.file(destPath).writer();
+	const reader = body.getReader();
+	let stallTimer: ReturnType<typeof setTimeout> | undefined;
+	const armStallTimer = () => {
+		stallTimer = setTimeout(() => {
+			stalled = true;
+			controller.abort();
+		}, stallTimeoutMs);
+	};
+	try {
+		for (;;) {
+			armStallTimer();
+			let chunk: Awaited<ReturnType<typeof reader.read>>;
+			try {
+				chunk = await reader.read();
+			} finally {
+				clearTimeout(stallTimer);
+			}
+			if (chunk.done) break;
+			hasher.update(chunk.value);
+			sink.write(chunk.value);
+		}
+	} catch (cause) {
+		if (stalled) {
+			throw new RuntimeRpcError(
+				"download-failed",
+				`Runtime download stalled: no data from ${url} for ${stallTimeoutMs}ms.`,
+				{ url, stallTimeoutMs },
+			);
+		}
+		throw new RuntimeRpcError("download-failed", `Runtime download failed: transfer from ${url} broke off.`, {
+			url,
+			cause: String(cause),
+		});
+	} finally {
+		await sink.end();
+	}
+	return hasher.digest("hex");
+}
+
+/**
+ * In-flight provisions keyed by `<targetRoot>\0<version>`. Two cold-start callers
+ * racing for the same install would otherwise both download, and the loser's
+ * install step could tear down the winner's tree while it is already in use.
+ */
+const inFlight = new Map<string, Promise<string>>();
 
 /**
  * Download → sha256-verify → extract → atomic rename into
  * `<targetRoot>/<version>/`. Returns the runtime binary path. Idempotent:
  * an existing install for `version` short-circuits without network access.
+ *
+ * Concurrency-safe: concurrent calls for the same `<targetRoot>/<version>` share
+ * a single download and install (only the first caller's `onProgress` is driven),
+ * and a completed install by another process is adopted rather than replaced.
  */
 export async function provisionRuntime(opts: ProvisionOptions = {}): Promise<string> {
 	const version = opts.version ?? ELIDE_VERSION;
@@ -34,33 +151,41 @@ export async function provisionRuntime(opts: ProvisionOptions = {}): Promise<str
 	const existing = await findBinaryInTree(versionDir);
 	if (existing) return existing;
 
+	const key = `${root}\u0000${version}`;
+	const joined = inFlight.get(key);
+	if (joined) return joined;
+	const task = installRuntime(opts, { version, dist, root, versionDir }).finally(() => {
+		if (inFlight.get(key) === task) inFlight.delete(key);
+	});
+	inFlight.set(key, task);
+	return task;
+}
+
+interface InstallTarget {
+	version: string;
+	dist: RuntimeDistEntry;
+	root: string;
+	versionDir: string;
+}
+
+/** The uncoordinated download+install body. Always reached through {@link provisionRuntime}. */
+async function installRuntime(opts: ProvisionOptions, target: InstallTarget): Promise<string> {
+	const { version, dist, root, versionDir } = target;
 	const progress = opts.onProgress ?? (() => {});
 	const url = distDownloadUrl(dist, opts.baseUrl);
-	const staging = path.join(root, `.staging-${process.pid}-${Date.now()}`);
+	const staging = path.join(root, `.staging-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 	await fs.mkdir(staging, { recursive: true });
 	try {
 		progress(`Downloading runtime ${version}…`);
-		let response: Response;
-		try {
-			response = await fetch(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000) });
-		} catch (cause) {
-			throw new RuntimeRpcError("download-failed", `Runtime download failed: cannot reach ${url}.`, {
-				url,
-				cause: String(cause),
-			});
-		}
-		if (!response.ok) {
-			throw new RuntimeRpcError("download-failed", `Runtime download failed: HTTP ${response.status} for ${url}.`, {
-				url,
-				status: response.status,
-			});
-		}
-		const bytes = new Uint8Array(await response.arrayBuffer());
+		const archivePath = path.join(staging, dist.file);
+		const actual = await downloadToFile(
+			url,
+			archivePath,
+			opts.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+			opts.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS,
+		);
 
 		progress("Verifying checksum…");
-		const hasher = new Bun.CryptoHasher("sha256");
-		hasher.update(bytes);
-		const actual = hasher.digest("hex");
 		if (actual !== dist.sha256) {
 			throw new RuntimeRpcError("download-failed", "Runtime download failed checksum verification.", {
 				url,
@@ -70,8 +195,6 @@ export async function provisionRuntime(opts: ProvisionOptions = {}): Promise<str
 		}
 
 		progress("Extracting…");
-		const archivePath = path.join(staging, dist.file);
-		await Bun.write(archivePath, bytes);
 		const extractDir = path.join(staging, "extract");
 		await fs.mkdir(extractDir, { recursive: true });
 		const argv =
@@ -88,9 +211,19 @@ export async function provisionRuntime(opts: ProvisionOptions = {}): Promise<str
 
 		const binary = await findBinaryInTree(extractDir);
 		if (!binary) {
-			throw new RuntimeRpcError("download-failed", "Runtime archive did not contain a bin/elide binary.", { url });
+			throw new RuntimeRpcError("download-failed", "Runtime archive did not contain the expected runtime binary.", {
+				url,
+			});
 		}
 
+		// No-clobber install. Another process may have finished installing this version
+		// while we were downloading; blowing its tree away would break a runtime that is
+		// already in use. Only replace `versionDir` when it holds no usable binary.
+		const raced = await findBinaryInTree(versionDir);
+		if (raced) {
+			progress(`Runtime ${version} installed.`);
+			return raced;
+		}
 		await fs.rm(versionDir, { recursive: true, force: true });
 		await fs.mkdir(path.dirname(versionDir), { recursive: true });
 		await fs.rename(extractDir, versionDir);
