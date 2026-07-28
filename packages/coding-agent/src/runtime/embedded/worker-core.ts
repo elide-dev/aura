@@ -3,6 +3,8 @@ import { RuntimeRpcError } from "../protocol";
 import { openEmbeddedNativeLibrary, type EmbeddedNativeLibrary } from "./abi";
 import { decodeEmbeddedResponse } from "./codec";
 import {
+	EMBEDDED_DIRECT_CONTROL_WORKER_ARG,
+	EMBEDDED_DIRECT_EXECUTION_WORKER_ARG,
 	EMBEDDED_CONTROL_WORKER_ARG,
 	EMBEDDED_EXECUTION_WORKER_ARG,
 	type ControlWorkerRequest,
@@ -372,7 +374,10 @@ export function spawnEmbeddedExecutionWorker(): EmbeddedWorkerHandle<ExecutionWo
 	const hostEntry = workerHostEntry();
 	const worker = hostEntry
 		? new Worker(hostEntry, { type: "module", argv: [EMBEDDED_EXECUTION_WORKER_ARG] })
-		: new Worker(new URL("./worker-entry.ts", import.meta.url).href, { type: "module" });
+		: new Worker(new URL("./worker-entry.ts", import.meta.url).href, {
+				type: "module",
+				argv: [EMBEDDED_DIRECT_EXECUTION_WORKER_ARG],
+			});
 	return wrapWorker(worker);
 }
 
@@ -380,7 +385,10 @@ export function spawnEmbeddedControlWorker(): EmbeddedWorkerHandle<ControlWorker
 	const hostEntry = workerHostEntry();
 	const worker = hostEntry
 		? new Worker(hostEntry, { type: "module", argv: [EMBEDDED_CONTROL_WORKER_ARG] })
-		: new Worker(new URL("./control-worker-entry.ts", import.meta.url).href, { type: "module" });
+		: new Worker(new URL("./control-worker-entry.ts", import.meta.url).href, {
+				type: "module",
+				argv: [EMBEDDED_DIRECT_CONTROL_WORKER_ARG],
+			});
 	return wrapWorker(worker);
 }
 

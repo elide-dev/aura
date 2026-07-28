@@ -34,6 +34,7 @@ and after every upstream merge.
 | `packages/coding-agent/src/sdk.ts` | wires selected/composite runtime settings onto the lazy `toolSession.getRuntimeService` accessor; tracks services created during startup for failure cleanup; gives only the root `Main` session the cache-disposal callback so subagents share but never close its runtime |
 | `packages/coding-agent/src/session/agent-session-types.ts` | adds the optional root-owned `disposeRuntimeService` lifecycle callback to `AgentSessionConfig` |
 | `packages/coding-agent/src/session/agent-session.ts` | accepts the runtime disposal callback only for main sessions and runs it once inside the existing bounded parallel teardown |
+| `packages/coding-agent/test/runtime-integration.test.ts` | when `AURA_RUNTIME_EMBEDDED_LIB` names a packaged shared library, derives the sibling packaged process binary so the same real-library command also exercises the existing process-adapter/JVM integration suite |
 | `packages/metaharness/agent/omp_local.py` | Harbor's local-agent adapter stages generated gateway routing and benchmark config under the branded `~/.aura/agent` directory so Aura finds `models.yml` and does not fail before its first model request |
 | `packages/metaharness/src/runner.ts` | accepts `--path` for deterministic local Harbor capability tasks in addition to registry datasets, allowing Aura's runtime benchmark to execute checked-in/materialized task fixtures |
 | `packages/metaharness/src/runner.test.ts` | covers Aura's local Harbor `--path` launch contract alongside registry dataset launches |
@@ -112,8 +113,10 @@ read fallback, writes never legacy); keep those alongside upstream's.
   `test/aura-bin.test.ts`, `test/aura-theme.test.ts`,
   `packages/utils/test/branding.test.ts` — fork-owned tests, including embedded
   library precedence/file-type contracts, ABI copy/free/state ownership, dual-Worker
-  protocol/death/ordered-shutdown behavior, runtime status/doctor selection diagnostics,
-  and LF/tab path row-forging regressions; safe to keep verbatim through any upstream merge
+  protocol/death/ordered-shutdown behavior, real-library source-tool execution and
+  process-parity/reuse/cancellation/timeout/FIFO isolation coverage, runtime
+  status/doctor selection diagnostics, and LF/tab path row-forging regressions; safe
+  to keep verbatim through any upstream merge
 - `packages/coding-agent/test/discovery/legacy-omp-project-base.test.ts`,
   `test/legacy-omp-compat-paths.test.ts`, `test/cli-help-profile-env.test.ts` —
   legacy `.omp` compat contract: file surfaces load, `.aura` wins conflicts, a

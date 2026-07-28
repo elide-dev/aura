@@ -6,7 +6,10 @@ import { RuntimeService } from "../src/runtime/service";
 import { LocalRuntimeEndpoint } from "../src/runtime/transport/local";
 import { matchRuntimeEndpoint } from "../src/tools/runtime-launch";
 
-const realBin = process.env.AURA_RUNTIME_BIN ?? process.env.ELIDE_BIN ?? Bun.which("elide") ?? undefined;
+const embeddedLib = process.env.AURA_RUNTIME_EMBEDDED_LIB;
+const packagedBin =
+	embeddedLib === undefined ? undefined : path.resolve(path.dirname(embeddedLib), "..", "bin", "elide");
+const realBin = process.env.AURA_RUNTIME_BIN ?? process.env.ELIDE_BIN ?? packagedBin ?? Bun.which("elide") ?? undefined;
 
 describe.skipIf(!realBin)("runtime integration (real binary)", () => {
 	const svc = new RuntimeService(new LocalRuntimeEndpoint({ explicitPath: realBin, autoDownload: false }));

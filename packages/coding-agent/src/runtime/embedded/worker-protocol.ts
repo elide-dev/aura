@@ -2,6 +2,8 @@ import type { RuntimeErrorCode } from "../protocol";
 
 export const EMBEDDED_EXECUTION_WORKER_ARG = "__omp_worker_runtime_embed";
 export const EMBEDDED_CONTROL_WORKER_ARG = "__omp_worker_runtime_embed_control";
+export const EMBEDDED_DIRECT_EXECUTION_WORKER_ARG = "__omp_worker_runtime_embed_direct";
+export const EMBEDDED_DIRECT_CONTROL_WORKER_ARG = "__omp_worker_runtime_embed_control_direct";
 
 export type ExecutionWorkerRequest =
 	| { type: "probe"; id: number }
