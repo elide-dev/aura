@@ -29,6 +29,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
+import { RUNTIME_PROTOCOL_LINE } from "./cli/version-identity";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import {
@@ -1109,7 +1110,9 @@ export async function runRootCommand(
 	const modelRegistry = logger.time("modelRegistry:init", () => new ModelRegistry(authStorage));
 
 	if (parsedArgs.version) {
-		writeStartupNotice(parsedArgs, `${VERSION}\n`);
+		// Same identity the top-level `aura --version` interception prints (cli.ts):
+		// version first, then the runtime protocol version, matching `aura runtime status`.
+		writeStartupNotice(parsedArgs, `${VERSION}\n${RUNTIME_PROTOCOL_LINE}\n`);
 		process.exit(0);
 	}
 

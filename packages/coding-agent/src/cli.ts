@@ -374,6 +374,15 @@ export async function runCli(argv: string[]): Promise<void> {
 	// (the `--smoke-test` precedent directly above). Exit code follows the same
 	// hard-failure contract as `doctor`: nonzero only for a too-old Bun or a
 	// runtime that is enabled but unavailable.
+	// `--version` / `-v`: handled here rather than by the CLI runner so the
+	// identity block can name the runtime protocol version alongside VERSION
+	// (the runner lives in pi-utils and must not learn about the runtime layer).
+	// The first line is unchanged from what the runner printed.
+	if (resolvedArgv[0] === "--version" || resolvedArgv[0] === "-v") {
+		const { formatVersionIdentity } = await import("./cli/version-identity");
+		process.stdout.write(`${formatVersionIdentity(APP_NAME)}\n`);
+		return;
+	}
 	if (resolvedArgv[0] === "--check") {
 		const { getProjectDir } = await import("@oh-my-pi/pi-utils");
 		const [{ runDoctorCommand }, { Settings }] = await Promise.all([
