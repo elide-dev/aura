@@ -412,6 +412,14 @@ export const RUNTIME_SHELL_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 		"jvm_javadoc",
 		"Use the `jvm_javadoc` tool instead of driving API doc generation through the shell.",
 	),
+	// `project` covers `project advice` (the only subcommand under it the tools
+	// own); without this the generic rule below would tell the model to reach for
+	// `run`, which is the wrong tool for a read-only query.
+	runtimeShellRule(
+		"project",
+		"project_advice",
+		"Use the `project_advice` tool instead of asking the runtime for project guidance through the shell — it reads the same directory and returns the same report.",
+	),
 	{
 		kind: RUNTIME_SHELL_RULE_KIND,
 		pattern: `${CMD_POS}${CMD_PRELUDE}${RUNTIME_PACKAGE_RUNNER}`,

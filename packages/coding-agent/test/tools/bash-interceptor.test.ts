@@ -220,6 +220,7 @@ describe("default runtime shell rules", () => {
 		"jvm_jar",
 		"jvm_deps",
 		"jvm_javadoc",
+		"project_advice",
 	];
 
 	it.each([
@@ -251,6 +252,7 @@ describe("default runtime shell rules", () => {
 		["elide jar -- --list --file app.jar", "jvm_jar"],
 		["elide jdeps -- app.jar", "jvm_deps"],
 		["elide javadoc -- -d apidocs Main.java", "jvm_javadoc"],
+		["elide project advice", "project_advice"],
 	])("routes %s to the %s tool", (command, expected) => {
 		const result = checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES);
 		expect(result.block).toBe(true);
