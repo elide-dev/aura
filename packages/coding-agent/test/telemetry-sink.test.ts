@@ -87,6 +87,9 @@ describe("otlp sink", () => {
 				recordedAt: Date.now(),
 				provider: "anthropic",
 				accountKey: "acct-1",
+				// Present in the fixture on purpose: the assertions below prove the
+				// default path drops it rather than that it was never there.
+				email: "a@example.com",
 				limitId: "five_hour",
 				label: "5 hour",
 				windowLabel: "5h",

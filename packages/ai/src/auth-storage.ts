@@ -3133,8 +3133,14 @@ export class AuthStorage {
 	 */
 	#recordUsageHistory(request: UsageRequestDescriptor, report: UsageReport): void {
 		const record = this.#store.recordUsageSnapshots;
-		if (!record || report.limits.length === 0) return;
+		if (report.limits.length === 0) return;
+		if (!record && !this.#usageSnapshotListener) return;
 		const entries = this.#usageEntriesFromReport(request, report);
+		// Observers see every fresh snapshot regardless of whether the store can
+		// persist it — durable history is optional (broker-backed stores have
+		// none) and a store write failure must not silence telemetry.
+		this.#notifyUsageSnapshots(entries);
+		if (!record) return;
 		try {
 			record.call(this.#store, entries);
 		} catch (error) {
@@ -3143,7 +3149,6 @@ export class AuthStorage {
 				error: String(error),
 			});
 		}
-		this.#notifyUsageSnapshots(entries);
 	}
 
 	/** Flatten a report's limits into per-limit history rows attributed to the fetched credential. */
