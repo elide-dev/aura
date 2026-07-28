@@ -81,7 +81,13 @@ import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
-import { createTelemetryExportConfig, initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
+import {
+	createTelemetryExportConfig,
+	initTelemetryExport,
+	isTelemetryExportEnabled,
+	type SessionMode,
+	trackSessionLifecycle,
+} from "./telemetry-export";
 import { concreteThinkingLevel, parseConfiguredThinkingLevel } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import {
@@ -1552,6 +1558,26 @@ export async function runRootCommand(
 		);
 		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
+		}
+
+		// OTEL: session.started / session.ended. Only wired when an exporter is
+		// actually configured, so the bus stays subscriber-free (and emission a
+		// no-op) in the common case. This is the single-top-level-session branch;
+		// ACP (many concurrent sessions per process) is not covered here.
+		if (isTelemetryExportEnabled()) {
+			const telemetryMode: SessionMode =
+				mode === "rpc" || mode === "rpc-ui" ? "rpc" : isInteractive ? "tui" : "print";
+			const lifecycle = trackSessionLifecycle({
+				sessionId: session.sessionManager.getSessionId(),
+				mode: telemetryMode,
+				resumed: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
+				getStats: () => session.getSessionStats(),
+			});
+			// Registered AFTER initTelemetryExport's own postmortem hook, so (reverse
+			// order) this runs first and the ended event is flushed by the OTel shutdown.
+			postmortem.register("telemetry-session-lifecycle", reason => {
+				lifecycle.end(String(reason));
+			});
 		}
 
 		if (modelFallbackMessage) {

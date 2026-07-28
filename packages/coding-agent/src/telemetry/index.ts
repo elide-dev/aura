@@ -3,4 +3,5 @@ export * from "./events";
 export * from "./identity";
 export * from "./init";
 export * from "./metrics";
+export * from "./publishers/session-lifecycle";
 export * from "./sink-otlp";
