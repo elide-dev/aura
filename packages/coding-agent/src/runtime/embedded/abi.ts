@@ -268,6 +268,8 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 	open(request: Uint8Array): { handle: bigint; response: Uint8Array } {
 		return this.#operation(false, () => {
 			const result = this.#bindings.open(request);
+			const ownsRuntime = result.status === 0 && validHandle(result.handle);
+			if (ownsRuntime) this.#runtimes.add(result.handle);
 			try {
 				const response = consumeResponse("open", result);
 				if (!validHandle(result.handle)) {
@@ -275,10 +277,9 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 						handle: result.handle.toString(),
 					});
 				}
-				this.#runtimes.add(result.handle);
 				return { handle: result.handle, response };
 			} catch (error) {
-				if (result.status === 0 && validHandle(result.handle)) this.#discardRuntime(result.handle);
+				if (ownsRuntime) this.#discardRuntime(result.handle);
 				throw error;
 			}
 		});
@@ -348,7 +349,8 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 	#discardRuntime(handle: bigint): void {
 		try {
 			const result = this.#bindings.closeRuntime(handle);
-			if (result.response) result.response.free();
+			if (result.status === 0) this.#runtimes.delete(handle);
+			result.response?.free();
 		} catch {
 			// Preserve the malformed open failure; this path is best-effort native cleanup only.
 		}

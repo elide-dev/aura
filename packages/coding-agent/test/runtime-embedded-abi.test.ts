@@ -164,6 +164,25 @@ describe("embedded native ABI ownership", () => {
 		expect(bindings.events).not.toContain("oversized:copy");
 	});
 
+	test("keeps the library loaded when malformed open cleanup cannot close the runtime", () => {
+		const bindings = new FakeBindings();
+		bindings.openResult = {
+			status: 0,
+			handle: 77n,
+			response: bindings.buffer("malformed-open", [], BigInt(MAX_EMBEDDED_RESPONSE_BYTES) + 1n),
+		};
+		bindings.closeResult = { status: 2, response: bindings.buffer("failed-open-cleanup", [1]) };
+		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);
+
+		expectInternalError(() => library.open(new Uint8Array([1])), "safety limit");
+		library.closeLibrary();
+
+		expect(bindings.closeRuntimeCount).toBe(1);
+		expect(bindings.events).toContain("malformed-open:free");
+		expect(bindings.events).toContain("failed-open-cleanup:free");
+		expect(bindings.closeLibraryCount).toBe(0);
+	});
+
 	test("treats status-zero close as terminal even when its response is malformed", () => {
 		const bindings = new FakeBindings();
 		bindings.closeResult = {
