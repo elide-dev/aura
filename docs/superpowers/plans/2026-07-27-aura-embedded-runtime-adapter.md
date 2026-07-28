@@ -154,6 +154,7 @@ git commit -m "feat(runtime): add embedded protocol codec"
 
 **Files:**
 - Create: `packages/coding-agent/src/runtime/embedded/resolve.ts`
+- Modify: `packages/coding-agent/src/runtime/index.ts`
 - Modify: `packages/coding-agent/src/config/settings-schema.ts`
 - Modify: `packages/coding-agent/src/runtime/protocol.ts:238-247`
 - Modify: `packages/coding-agent/src/cli/runtime-cli.ts`
@@ -247,7 +248,7 @@ Add the two settings to `docs/settings.md` under the existing Runtime section. S
 cd packages/coding-agent
 bun test test/runtime-embedded-resolve.test.ts test/runtime-settings-wiring.test.ts test/runtime-cli.test.ts test/doctor-cli.test.ts
 cd ../..
-git add packages/coding-agent/src/runtime/embedded/resolve.ts packages/coding-agent/src/config/settings-schema.ts packages/coding-agent/src/runtime/protocol.ts packages/coding-agent/src/cli/runtime-cli.ts packages/coding-agent/src/cli/doctor-cli.ts packages/coding-agent/test/runtime-embedded-resolve.test.ts packages/coding-agent/test/runtime-settings-wiring.test.ts packages/coding-agent/test/runtime-cli.test.ts packages/coding-agent/test/doctor-cli.test.ts docs/settings.md docs/aura/FORK.md
+git add packages/coding-agent/src/runtime/embedded/resolve.ts packages/coding-agent/src/runtime/index.ts packages/coding-agent/src/config/settings-schema.ts packages/coding-agent/src/runtime/protocol.ts packages/coding-agent/src/cli/runtime-cli.ts packages/coding-agent/src/cli/doctor-cli.ts packages/coding-agent/test/runtime-embedded-resolve.test.ts packages/coding-agent/test/runtime-settings-wiring.test.ts packages/coding-agent/test/runtime-cli.test.ts packages/coding-agent/test/doctor-cli.test.ts docs/settings.md docs/aura/FORK.md
 git commit -m "feat(runtime): configure embedded adapter selection"
 ```
 
