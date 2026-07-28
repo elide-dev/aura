@@ -13,7 +13,7 @@ and after every upstream merge.
 | `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura, LEGACY_CONFIG_DIR_NAME=.omp (read-only compat for pre-rebrand project dirs); profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE; `readInheritedProfileFromEnvSafe` (was `readPiProfileFromEnvSafe`) scans all three profile vars in that precedence for the pre-profile `PI_CODING_AGENT_DIR` snapshot, since `setProfile` writes all three |
 | `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE; handles the top-level `--check` flag (one-line clean-env health probe, no model/network/provisioning) before delegating |
 | `packages/coding-agent/src/task/discovery.ts` | `TASK_AGENT_CONFIG_SOURCES` derives from CONFIG_DIR_NAME + LEGACY_CONFIG_DIR_NAME (was a single hardcoded `".omp"`; stale value filtered out all project/user agent dirs after rebrand). Project agent dirs are consumed in priority order so `.aura/agents` beats legacy `.omp/agents` on a name collision, and `projectAgentsDir` only ever reports a writable base |
-| `packages/coding-agent/package.json` | bin: aura alias alongside omp |
+| `packages/coding-agent/package.json` | bin: aura alias alongside omp; runtime dependency `capnp-es@0.0.14` for checked-in embedded-protocol readers/writers, plus package-local `typescript@5.9.3` dev peer so that capnp-es codegen does not resolve the workspace's incompatible native-preview TypeScript 7 package |
 | `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` theme in `BUILTIN_THEMES` (import + entry), mirroring `dark`/`light` |
 | `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`); `theme.light` unchanged; `runtime.*` settings (`runtime.enabled`, `runtime.autoDownload`, `runtime.path`, `runtime.allowShell`) added to the `tools` tab. Runtime shell policy: `RUNTIME_SHELL_INTERCEPTOR_RULES` (routing direct runtime-binary shell commands to `run`/`build`/`serve`/`jvm_*`/`project_advice`) spread onto the tail of `DEFAULT_BASH_INTERCEPTOR_RULES`, plus `RUNTIME_SHELL_RULE_KIND`, `isRuntimeShellAllowed`, `applyRuntimeShellOptOut`, `activeBashInterceptorRules` (the always-on split — see the `tools/bash.ts` row), and an optional `kind?: string` group tag on `BashInterceptorRule`. The rules need no `runtime.enabled` check of their own — `checkBashInterception` already skips a rule whose `tool` is absent from `availableTools`, so the group is inert when the runtime tools are unregistered (`tools/bash-interceptor.ts` is therefore unforked) |
 | `packages/coding-agent/src/tools/bash.ts` | the interception block no longer sits behind `if (settings.get("bashInterceptor.enabled"))`; it selects its rules through `activeBashInterceptorRules(getBashInterceptorRules(), settings.get("bashInterceptor.enabled"))` and runs whenever that is non-empty. The runtime-routing group is therefore always evaluated (it is policy, and would be inert on every default install since `bashInterceptor.enabled` defaults to `false`), while upstream's deliberately-softened cat/grep/sed nudges stay behind the toggle exactly as before. The runtime group keeps its own two gates: tool availability and the `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` opt-out. Resolve an upstream conflict here by keeping upstream's loop body and re-applying the rule-selection call |
@@ -45,7 +45,7 @@ and after every upstream merge.
 | `package.json` | exposes root `bench:runtime` as the one-command entrypoint for Aura's matched-arm runtime evaluation |
 | `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` / `runtime.allowShell` and linking the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out |
 | `AGENTS.md` | appended the `## Aura fork conventions` section (points contributors at this file, states the runtime naming rule, locates specs/plans) |
-| `bun.lock` | one line: the `aura` bin entry mirroring the `packages/coding-agent/package.json` change. Regenerate with `bun install` rather than resolving a merge conflict by hand |
+| `bun.lock` | `aura` bin entry plus the exact `capnp-es@0.0.14` runtime dependency and coding-agent-local `typescript@5.9.3` generator peer. Regenerate with `bun install` rather than resolving a merge conflict by hand |
 
 ### Upstream tests de-hardcoded for the rebrand
 
@@ -78,7 +78,11 @@ read fallback, writes never legacy); keep those alongside upstream's.
 
 ## Fork-added files and directories (additive, no merge risk)
 
-- `packages/coding-agent/src/runtime/` — runtime capability core
+- `packages/coding-agent/src/runtime/` — runtime capability core; `src/runtime/embedded/`
+  contains the handwritten embedded wire adapter, schema identity constants, and
+  checked-in TypeScript generated from WHIPLASH's canonical Cap'n Proto closure
+- `scripts/sync-embedded-runtime-protocol.ts` — canonical WHIPLASH schema-closure
+  generation, fingerprinting, and checked-in drift verification
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts`
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts`
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
