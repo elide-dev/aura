@@ -31,7 +31,7 @@ const encoder = new TextEncoder();
 function serializeResponse(
 	requestId: bigint,
 	build: (response: EmbeddedResponse) => void,
-	protocolVersion = ProtocolVersion.V2,
+	protocolVersion: ProtocolVersion = ProtocolVersion.V2,
 ): Uint8Array {
 	const message = new Message();
 	const response = message.initRoot(EmbeddedResponse);
