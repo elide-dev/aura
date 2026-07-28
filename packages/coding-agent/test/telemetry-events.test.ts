@@ -1,5 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { emitTelemetryEvent, subscribeTelemetry, type TelemetryEvent } from "../src/telemetry/events";
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+	emitTelemetryEvent,
+	getActiveTelemetrySessionId,
+	setActiveTelemetrySessionId,
+	subscribeTelemetry,
+	type TelemetryEvent,
+} from "../src/telemetry/events";
 
 describe("telemetry event bus", () => {
 	it("delivers events to subscribers and supports unsubscribe", () => {
@@ -24,5 +30,24 @@ describe("telemetry event bus", () => {
 		expect(seen).toEqual(["compaction.savings"]);
 		u1();
 		u2();
+	});
+});
+
+describe("active telemetry session id", () => {
+	afterEach(() => {
+		setActiveTelemetrySessionId(undefined);
+	});
+
+	it("defaults to undefined and round-trips", () => {
+		expect(getActiveTelemetrySessionId()).toBeUndefined();
+		setActiveTelemetrySessionId("s1");
+		expect(getActiveTelemetrySessionId()).toBe("s1");
+		setActiveTelemetrySessionId(undefined);
+		expect(getActiveTelemetrySessionId()).toBeUndefined();
+	});
+
+	it("treats blank ids as unattributed", () => {
+		setActiveTelemetrySessionId("   ");
+		expect(getActiveTelemetrySessionId()).toBeUndefined();
 	});
 });

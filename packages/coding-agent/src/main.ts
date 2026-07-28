@@ -86,6 +86,7 @@ import {
 	initTelemetryExport,
 	isTelemetryExportEnabled,
 	type SessionMode,
+	setActiveTelemetrySessionId,
 	trackSessionLifecycle,
 } from "./telemetry-export";
 import { concreteThinkingLevel, parseConfiguredThinkingLevel } from "./thinking";
@@ -1567,6 +1568,9 @@ export async function runRootCommand(
 		if (isTelemetryExportEnabled()) {
 			const telemetryMode: SessionMode =
 				mode === "rpc" || mode === "rpc-ui" ? "rpc" : isInteractive ? "tui" : "print";
+			// One top-level session for the life of the process: attribute every
+			// turn to it. ACP sets this per prompt turn instead (many sessions).
+			setActiveTelemetrySessionId(session.sessionManager.getSessionId());
 			const lifecycle = trackSessionLifecycle({
 				sessionId: session.sessionManager.getSessionId(),
 				mode: telemetryMode,

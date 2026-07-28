@@ -34,7 +34,7 @@ import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { Settings } from "../config/settings";
-import { emitTelemetryEvent } from "./events";
+import { emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
 import { buildResourceAttributes } from "./identity";
 import { AuraMetricRecorder } from "./metrics";
 import { registerOtlpSink } from "./sink-otlp";
@@ -132,8 +132,13 @@ export function createTelemetryExportConfig(
 		},
 		onRunEnd: (summary, coverage) => {
 			config?.onRunEnd?.(summary, coverage);
-			emitTelemetryEvent({ type: "turn.completed", summary, coverage });
-			emitRunSummaryLog(summary, coverage);
+			// The loop reports run aggregates without session identity; the host
+			// stamps the owning session (see setActiveTelemetrySessionId). One
+			// telemetry config is shared by every session in the process — notably
+			// the ACP server's — so this must be read per event, never captured.
+			const sessionId = getActiveTelemetrySessionId();
+			emitTelemetryEvent({ type: "turn.completed", sessionId, summary, coverage });
+			emitRunSummaryLog(sessionId, summary, coverage);
 		},
 		onCostDelta: delta => {
 			config?.onCostDelta?.(delta);
@@ -347,11 +352,12 @@ function signalEnabled(
 	return true;
 }
 
-function emitRunSummaryLog(summary: AgentRunSummary, coverage: AgentRunCoverage): void {
+function emitRunSummaryLog(sessionId: string | undefined, summary: AgentRunSummary, coverage: AgentRunCoverage): void {
 	emitOtelLog(
 		"info",
 		"agent run completed",
 		{
+			...(sessionId ? { "session.id": sessionId } : {}),
 			"aura.agent.step_count": summary.stepCount,
 			"aura.agent.chats.total": summary.chats.total,
 			"aura.agent.chats.total_latency_ms": summary.chats.totalLatencyMs,

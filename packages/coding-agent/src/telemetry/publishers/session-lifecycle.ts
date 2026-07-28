@@ -27,6 +27,11 @@ export function trackSessionLifecycle(options: SessionLifecycleOptions): Session
 
 	const unsubscribe = subscribeTelemetry(event => {
 		if (event.type !== "turn.completed") return;
+		// Scope to this session. An unattributed turn (`undefined`) is counted by
+		// every live tracker — the backward-safe reading, and exact in the common
+		// single-session process; a turn attributed to ANOTHER session never is,
+		// so concurrent ACP sessions can no longer inflate each other's activeMs.
+		if (event.sessionId !== undefined && event.sessionId !== options.sessionId) return;
 		activeMs += (event.summary.chats?.totalLatencyMs ?? 0) + (event.summary.tools?.totalLatencyMs ?? 0);
 	});
 

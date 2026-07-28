@@ -70,6 +70,12 @@ import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS } from "../../stt/models";
+import {
+	isTelemetryExportEnabled,
+	type SessionLifecycleTracker,
+	setActiveTelemetrySessionId,
+	trackSessionLifecycle,
+} from "../../telemetry";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { ToolError } from "../../tools/tool-errors";
@@ -468,6 +474,12 @@ export class AcpAgent implements Agent {
 	#clientCapabilities: ClientCapabilities | undefined;
 	#cancelCleanupTimeoutMs = ACP_CANCEL_CLEANUP_TIMEOUT_MS;
 	#blobs = new BlobStore(getBlobsDir());
+	/**
+	 * session.started/ended publishers, keyed by ACP session id. Populated only
+	 * when an OTLP exporter is live, so the telemetry bus stays subscriber-free
+	 * (and emission a no-op) otherwise.
+	 */
+	#lifecycleTrackers = new Map<string, SessionLifecycleTracker>();
 
 	constructor(connection: AgentSideConnection, createSession: CreateAcpSession, initialSession?: AgentSession) {
 		this.#connection = connection;
@@ -715,6 +727,11 @@ export class AcpAgent implements Agent {
 			record.promptTurn.unsubscribe = record.session.subscribe(event => {
 				this.#trackPromptEvent(record, event);
 			});
+
+			// Attribute the agent loop's run-level telemetry (turn.completed) to this
+			// session: the loop's onRunEnd hook carries no session identity, and one
+			// telemetry config is shared by every session in this process.
+			if (this.#lifecycleTrackers.size > 0) setActiveTelemetrySessionId(record.session.sessionId);
 
 			this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
 				this.#finishPrompt(record, undefined, error);
@@ -1045,7 +1062,7 @@ export class AcpAgent implements Agent {
 			await this.#disposeStandaloneSession(session);
 			throw error;
 		}
-		return await this.#registerPreparedSession(session, mcpServers);
+		return await this.#registerPreparedSession(session, mcpServers, false);
 	}
 
 	async #loadManagedSession(sessionId: string, cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
@@ -1094,7 +1111,7 @@ export class AcpAgent implements Agent {
 			await this.#disposeStandaloneSession(session);
 			throw error;
 		}
-		return await this.#registerPreparedSession(session, params.mcpServers ?? []);
+		return await this.#registerPreparedSession(session, params.mcpServers ?? [], true);
 	}
 
 	async #openStoredSession(
@@ -1113,10 +1130,14 @@ export class AcpAgent implements Agent {
 			await this.#disposeStandaloneSession(session);
 			throw error;
 		}
-		return await this.#registerPreparedSession(session, mcpServers);
+		return await this.#registerPreparedSession(session, mcpServers, true);
 	}
 
-	async #registerPreparedSession(session: AgentSession, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
+	async #registerPreparedSession(
+		session: AgentSession,
+		mcpServers: McpServer[],
+		resumed: boolean,
+	): Promise<ManagedSessionRecord> {
 		const record = this.#createManagedSessionRecord(session);
 		session.setClientBridge(createAcpClientBridge(this.#connection, session.sessionId, this.#clientCapabilities));
 		// `record.lifetimeUnsubscribe` is installed in `#scheduleBootstrapUpdates`
@@ -1125,6 +1146,7 @@ export class AcpAgent implements Agent {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
 			this.#sessions.set(session.sessionId, record);
+			this.#startLifecycleTelemetry(record, resumed);
 			return record;
 		} catch (error) {
 			await this.#disposeSessionRecord(record);
@@ -2507,7 +2529,44 @@ export class AcpAgent implements Agent {
 		}
 	}
 
+	/**
+	 * Begin session.started/ended telemetry for a newly registered ACP session.
+	 *
+	 * Best-effort by construction: a telemetry failure must never take down the
+	 * session it is observing, so tracker creation is wrapped.
+	 */
+	#startLifecycleTelemetry(record: ManagedSessionRecord, resumed: boolean): void {
+		if (!isTelemetryExportEnabled()) return;
+		const sessionId = record.session.sessionId;
+		try {
+			this.#lifecycleTrackers.set(
+				sessionId,
+				trackSessionLifecycle({
+					sessionId,
+					mode: "acp",
+					resumed,
+					getStats: () => record.session.getSessionStats(),
+				}),
+			);
+		} catch (error) {
+			logger.debug("Failed to start ACP session telemetry", { sessionId, error });
+		}
+	}
+
+	/** Emit session.ended for `sessionId`, if a tracker was started for it. */
+	#endLifecycleTelemetry(sessionId: string, reason: string): void {
+		const tracker = this.#lifecycleTrackers.get(sessionId);
+		if (!tracker) return;
+		this.#lifecycleTrackers.delete(sessionId);
+		try {
+			tracker.end(reason);
+		} catch (error) {
+			logger.debug("Failed to end ACP session telemetry", { sessionId, error });
+		}
+	}
+
 	async #disposeSessionRecord(record: ManagedSessionRecord, reason?: postmortem.Reason): Promise<void> {
+		this.#endLifecycleTelemetry(record.session.sessionId, reason ? String(reason) : "acp_session_disposed");
 		record.lifetimeUnsubscribe?.();
 		if (record.mcpManager) {
 			try {
@@ -2540,6 +2599,15 @@ export class AcpAgent implements Agent {
 		}
 
 		this.#disposePromise = (async () => {
+			// Emit session.ended for every live session up front, synchronously:
+			// postmortem runs its callbacks concurrently, so the OTLP providers may
+			// already be shutting down while the awaits below (MCP disconnects,
+			// session teardown) run. Trackers end exactly once, so the
+			// #disposeSessionRecord calls below see nothing left to do.
+			for (const sessionId of Array.from(this.#lifecycleTrackers.keys())) {
+				this.#endLifecycleTelemetry(sessionId, reason ? String(reason) : "acp_agent_disposed");
+			}
+
 			const records = Array.from(this.#sessions.entries());
 			this.#sessions.clear();
 			await Promise.all(

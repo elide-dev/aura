@@ -31,6 +31,7 @@ describe("session lifecycle publisher", () => {
 			// a completed turn accumulates active time
 			emitTelemetryEvent({
 				type: "turn.completed",
+				sessionId: undefined,
 				summary: { chats: { totalLatencyMs: 2000 }, tools: { totalLatencyMs: 500 } } as never,
 				coverage: {} as never,
 			});
@@ -98,6 +99,7 @@ describe("session lifecycle publisher", () => {
 			tracker.end("exit");
 			emitTelemetryEvent({
 				type: "turn.completed",
+				sessionId: undefined,
 				summary: { chats: { totalLatencyMs: 900 }, tools: { totalLatencyMs: 100 } } as never,
 				coverage: {} as never,
 			});
@@ -109,4 +111,61 @@ describe("session lifecycle publisher", () => {
 			unsubscribe();
 		}
 	});
+
+	it("scopes activeMs to its own sessionId (unattributed turns still count)", () => {
+		const seen: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(e => seen.push(e));
+		try {
+			const tracker = trackSessionLifecycle({
+				sessionId: "s4",
+				mode: "acp",
+				resumed: false,
+				getStats: () => stats,
+			});
+
+			emitTurn("other-session", 300, 200); // foreign: must not inflate
+			emitTurn("s4", 100, 0); // own turn
+			emitTurn(undefined, 50, 0); // unattributed: backward-safe, counts
+
+			tracker.end("acp_session_disposed");
+
+			const ended = seen.filter(e => e.type === "session.ended");
+			expect(ended).toHaveLength(1);
+			expect(ended[0]).toMatchObject({ sessionId: "s4", mode: "acp", activeMs: 150 });
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it("keeps concurrent trackers independent", () => {
+		const seen: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(e => seen.push(e));
+		try {
+			const a = trackSessionLifecycle({ sessionId: "a", mode: "acp", resumed: false, getStats: () => stats });
+			const b = trackSessionLifecycle({ sessionId: "b", mode: "acp", resumed: true, getStats: () => stats });
+
+			emitTurn("a", 10, 5);
+			emitTurn("b", 1000, 0);
+
+			a.end("closed");
+			b.end("closed");
+
+			const ended = seen.filter(e => e.type === "session.ended");
+			expect(ended.map(e => (e.type === "session.ended" ? [e.sessionId, e.activeMs] : []))).toEqual([
+				["a", 15],
+				["b", 1000],
+			]);
+		} finally {
+			unsubscribe();
+		}
+	});
 });
+
+function emitTurn(sessionId: string | undefined, chatMs: number, toolMs: number): void {
+	emitTelemetryEvent({
+		type: "turn.completed",
+		sessionId,
+		summary: { chats: { totalLatencyMs: chatMs }, tools: { totalLatencyMs: toolMs } } as never,
+		coverage: {} as never,
+	});
+}
