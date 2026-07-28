@@ -101,6 +101,43 @@ describe("otlp sink", () => {
 		const utilization = metrics.find(m => m.descriptor.name === "aura.usage_limit.utilization");
 		expect(utilization?.dataPoints[0]?.value).toBeCloseTo(0.42);
 		expect(utilization?.dataPoints[0]?.attributes["aura.usage_limit.id"]).toBe("five_hour");
+		// Identity is opt-in: by default only a digest of the account key ships.
+		expect(utilization?.dataPoints[0]?.attributes["aura.account.key"]).toBeUndefined();
+		expect(utilization?.dataPoints[0]?.attributes["aura.account.email"]).toBeUndefined();
+		expect(utilization?.dataPoints[0]?.attributes["aura.account.hash"]).toMatch(/^[0-9a-f]{12}$/);
+
+		unregister();
+		await provider.shutdown();
+	});
+
+	it("exports account email and key only when identity export is opted in", async () => {
+		const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+		const provider = new MeterProvider({
+			readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+		});
+		const recorder = new AuraMetricRecorder(provider.getMeter("test"), { includeAccountIdentity: true });
+		const unregister = registerOtlpSink({ recorder, emitLog: () => {} });
+
+		emitTelemetryEvent({
+			type: "usage_limit.snapshot",
+			entry: {
+				recordedAt: Date.now(),
+				provider: "anthropic",
+				accountKey: "acct-1",
+				email: "a@example.com",
+				limitId: "five_hour",
+				label: "5 hour",
+				windowLabel: "5h",
+				usedFraction: 0.42,
+			},
+		});
+
+		const metrics = await collect(exporter, provider);
+		const attributes = metrics.find(m => m.descriptor.name === "aura.usage_limit.utilization")?.dataPoints[0]
+			?.attributes;
+		expect(attributes?.["aura.account.key"]).toBe("acct-1");
+		expect(attributes?.["aura.account.email"]).toBe("a@example.com");
+		expect(attributes?.["aura.account.hash"]).toBeUndefined();
 
 		unregister();
 		await provider.shutdown();

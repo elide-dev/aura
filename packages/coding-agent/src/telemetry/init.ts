@@ -262,7 +262,9 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 			readers: [new PeriodicExportingMetricReader({ exporter })],
 		});
 		metrics.setGlobalMeterProvider(meterProvider);
-		metricRecorder = new AuraMetricRecorder(metrics.getMeter("aura"));
+		metricRecorder = new AuraMetricRecorder(metrics.getMeter("aura"), {
+			includeAccountIdentity: settings?.get("telemetry.identity.account") ?? false,
+		});
 	}
 
 	if (signalConfig.log) {

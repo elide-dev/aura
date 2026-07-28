@@ -7,6 +7,7 @@
  * OpenTelemetry directly. Instruments are created once per meter; a recorder is
  * only constructed when a real MeterProvider is registered.
  */
+import { createHash } from "node:crypto";
 import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent, ToolStatus } from "@oh-my-pi/pi-agent-core";
 import type { Attributes, Counter, Gauge, Histogram, Meter } from "@opentelemetry/api";
 import type {
@@ -36,8 +37,15 @@ export class AuraMetricRecorder {
 	readonly #compactionEffectiveness: Histogram<Attributes>;
 	readonly #snapcompactTokensSaved: Counter<Attributes>;
 	readonly #usageLimitUtilization: Gauge<Attributes>;
+	/**
+	 * Opt-in (`telemetry.identity.account`). Off, usage-limit series carry only a
+	 * short hash of the account key — stable enough to separate series, but no
+	 * credential identity or email leaves the process.
+	 */
+	readonly #includeAccountIdentity: boolean;
 
-	constructor(meter: Meter) {
+	constructor(meter: Meter, options?: { includeAccountIdentity?: boolean }) {
+		this.#includeAccountIdentity = options?.includeAccountIdentity ?? false;
 		this.#tokenUsage = meter.createHistogram("gen_ai.client.token.usage", {
 			description: "Token usage reported by GenAI chat calls.",
 			unit: "{token}",
@@ -201,13 +209,16 @@ export class AuraMetricRecorder {
 	recordUsageLimit(event: UsageLimitSnapshotTelemetry): void {
 		const entry = event.entry;
 		if (entry.usedFraction === undefined) return;
+		const identity = this.#includeAccountIdentity
+			? { "aura.account.email": entry.email, "aura.account.key": entry.accountKey }
+			: { "aura.account.hash": hashAccountKey(entry.accountKey) };
 		this.#usageLimitUtilization.record(
 			entry.usedFraction,
 			metricAttributes({
 				"gen_ai.provider.name": entry.provider,
 				"aura.usage_limit.id": entry.limitId,
 				"aura.usage_limit.window": entry.windowLabel,
-				"aura.account.key": entry.accountKey,
+				...identity,
 			}),
 		);
 	}
@@ -220,6 +231,14 @@ export class AuraMetricRecorder {
 		if (!value || value <= 0) return;
 		this.#tokenUsage.record(value, metricAttributes({ ...baseAttrs, "gen_ai.token.type": tokenType }));
 	}
+}
+
+/**
+ * Stable, non-reversible series key for one account. The account key embeds the
+ * email and credential identity, so only its digest is exported by default.
+ */
+function hashAccountKey(accountKey: string): string {
+	return createHash("sha256").update(accountKey).digest("hex").slice(0, 12);
 }
 
 /** Drop null/undefined and coerce non-primitives so OTel never sees an invalid attribute value. */

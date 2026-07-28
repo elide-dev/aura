@@ -1258,6 +1258,7 @@ export class AuthStorage {
 	#usageFetch: typeof fetch;
 	#usageRequestTimeoutMs: number;
 	#usageLogger?: UsageLogger;
+	#usageSnapshotListener?: (entries: UsageHistoryEntry[]) => void;
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
@@ -3133,12 +3134,26 @@ export class AuthStorage {
 	#recordUsageHistory(request: UsageRequestDescriptor, report: UsageReport): void {
 		const record = this.#store.recordUsageSnapshots;
 		if (!record || report.limits.length === 0) return;
+		const entries = this.#usageEntriesFromReport(request, report);
+		try {
+			record.call(this.#store, entries);
+		} catch (error) {
+			this.#usageLogger?.debug("usage history record failed", {
+				provider: request.provider,
+				error: String(error),
+			});
+		}
+		this.#notifyUsageSnapshots(entries);
+	}
+
+	/** Flatten a report's limits into per-limit history rows attributed to the fetched credential. */
+	#usageEntriesFromReport(request: UsageRequestDescriptor, report: UsageReport): UsageHistoryEntry[] {
 		const recordedAt = Number.isFinite(report.fetchedAt) && report.fetchedAt > 0 ? report.fetchedAt : Date.now();
 		const accountKey = this.#buildUsageCacheIdentity(request.credential);
 		const metadata = report.metadata ?? {};
 		const metaEmail = typeof metadata.email === "string" ? metadata.email : undefined;
 		const metaAccountId = typeof metadata.accountId === "string" ? metadata.accountId : undefined;
-		const entries: UsageHistoryEntry[] = report.limits.map(limit => ({
+		return report.limits.map(limit => ({
 			recordedAt,
 			provider: request.provider,
 			accountKey,
@@ -3151,14 +3166,30 @@ export class AuthStorage {
 			status: limit.status,
 			resetsAt: limit.window?.resetsAt,
 		}));
+	}
+
+	/**
+	 * Observer invoked whenever fresh usage-limit snapshots are recorded (polled
+	 * reports and header ingests). Telemetry-only; pass `undefined` to clear.
+	 */
+	setUsageSnapshotListener(listener: ((entries: UsageHistoryEntry[]) => void) | undefined): void {
+		this.#usageSnapshotListener = listener;
+	}
+
+	#notifyUsageSnapshots(entries: UsageHistoryEntry[]): void {
+		const listener = this.#usageSnapshotListener;
+		if (!listener || entries.length === 0) return;
 		try {
-			record.call(this.#store, entries);
-		} catch (error) {
-			this.#usageLogger?.debug("usage history record failed", {
-				provider: request.provider,
-				error: String(error),
-			});
+			listener(entries);
+		} catch {
+			// Telemetry observer; must never affect auth/usage paths.
 		}
+	}
+
+	/** Same as `#notifyUsageSnapshots`, but skips the row mapping when nobody is listening. */
+	#notifyUsageSnapshotsFromReport(request: UsageRequestDescriptor, report: UsageReport): void {
+		if (!this.#usageSnapshotListener || report.limits.length === 0) return;
+		this.#notifyUsageSnapshots(this.#usageEntriesFromReport(request, report));
 	}
 
 	/**
@@ -3289,9 +3320,8 @@ export class AuthStorage {
 		const credential = this.#resolveActiveOAuthCredential(provider, options?.sessionId);
 		if (!credential) return false;
 
-		const cacheKey = this.#buildUsageReportCacheKey(
-			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
-		);
+		const usageRequest = this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl);
+		const cacheKey = this.#buildUsageReportCacheKey(usageRequest);
 		const now = Date.now();
 		const parsedReport = parseHeaders(headers, now);
 		if (!parsedReport) return false;
@@ -3313,7 +3343,10 @@ export class AuthStorage {
 		const storeIngest = this.#store.ingestUsageReport?.bind(this.#store);
 		if (storeIngest) {
 			const ingested = storeIngest(provider, credential, report);
-			if (ingested) this.#usageHeaderIngestAt.set(cacheKey, now);
+			if (ingested) {
+				this.#usageHeaderIngestAt.set(cacheKey, now);
+				this.#notifyUsageSnapshotsFromReport(usageRequest, report);
+			}
 			return ingested;
 		}
 
@@ -3357,6 +3390,9 @@ export class AuthStorage {
 		const expiresAt = Math.max(priorEntry?.expiresAt ?? now - 1, now - 1);
 		this.#usageCache.set(cacheKey, { value: merged, expiresAt });
 		this.#usageHeaderIngestAt.set(cacheKey, now);
+		// Only the freshly parsed header limits are new; merged carries forward
+		// prior full-report rows that have not changed since their own fetch.
+		this.#notifyUsageSnapshotsFromReport(usageRequest, report);
 		return true;
 	}
 

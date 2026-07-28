@@ -83,6 +83,7 @@ import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prom
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
 import {
 	createTelemetryExportConfig,
+	emitTelemetryEvent,
 	initTelemetryExport,
 	isTelemetryExportEnabled,
 	type SessionMode,
@@ -1431,6 +1432,11 @@ export async function runRootCommand(
 	await logger.time("initTelemetryExport", () => initTelemetryExport({ settings: settingsInstance }));
 	if (isTelemetryExportEnabled()) {
 		sessionOptions.telemetry = createTelemetryExportConfig(sessionOptions.telemetry);
+		// Subscription utilization: every fresh usage-limit snapshot (polled report
+		// or per-chat header ingest) becomes a gauge sample.
+		authStorage.setUsageSnapshotListener(entries => {
+			for (const entry of entries) emitTelemetryEvent({ type: "usage_limit.snapshot", entry });
+		});
 	}
 
 	// Handle CLI --api-key as runtime override (not persisted)
