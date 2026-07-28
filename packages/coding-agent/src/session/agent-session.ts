@@ -169,8 +169,11 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
-import { type CompactionTrigger, emitTelemetryEvent } from "../telemetry/events";
-import { compactionEndToTelemetry } from "../telemetry/publishers/compaction";
+import {
+	type AutoCompactionTelemetry,
+	createAutoCompactionTelemetry,
+	withManualCompactionTelemetry,
+} from "../telemetry/publishers/compaction";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -247,6 +250,7 @@ import {
 	shouldEvaluateCodexAutoRedeem,
 	shouldPromptCodexAutoRedeem,
 } from "./codex-auto-reset";
+import { COMPACT_MODES } from "./compact-modes";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
@@ -494,11 +498,14 @@ export class AgentSession {
 	readonly #maintenance: SessionMaintenance;
 
 	/**
-	 * Auto-compaction telemetry stopwatch, set on `auto_compaction_start` and
-	 * consumed by the matching `auto_compaction_end`. Only the automatic flow uses
-	 * it — `compact()` times itself inline.
+	 * Auto-compaction stopwatch/publisher, driven by the
+	 * `auto_compaction_start`/`auto_compaction_end` session events. `compact()`
+	 * publishes its own manual events via {@link withManualCompactionTelemetry}.
 	 */
-	#compactionTelemetryStart: { at: number; trigger: CompactionTrigger } | undefined;
+	readonly #compactionTelemetry: AutoCompactionTelemetry = createAutoCompactionTelemetry({
+		sessionId: () => this.sessionManager.getSessionId(),
+		contextTokens: () => this.getContextUsage()?.tokens,
+	});
 
 	// Branch summarization state
 	#branchSummaryAbortController: AbortController | undefined = undefined;
@@ -3198,7 +3205,7 @@ export class AgentSession {
 			};
 			await this.#extensionRunner.emit(extensionEvent);
 		} else if (event.type === "auto_compaction_start") {
-			this.#compactionTelemetryStart = { at: performance.now(), trigger: event.reason };
+			this.#compactionTelemetry.start(event.reason);
 			await this.#extensionRunner.emit({
 				type: "auto_compaction_start",
 				reason: event.reason,
@@ -3214,27 +3221,14 @@ export class AgentSession {
 				errorMessage: event.errorMessage,
 				skipped: event.skipped,
 			});
-			const start = this.#compactionTelemetryStart;
-			this.#compactionTelemetryStart = undefined;
-			// Telemetry must never break compaction: a failure here is swallowed.
-			try {
-				emitTelemetryEvent(
-					compactionEndToTelemetry({
-						sessionId: this.sessionManager.getSessionId(),
-						trigger: start?.trigger ?? "threshold",
-						action: event.action,
-						result: event.result,
-						aborted: event.aborted,
-						willRetry: event.willRetry,
-						skipped: event.skipped,
-						tokensAfter: this.getContextUsage()?.tokens,
-						errorMessage: event.errorMessage,
-						durationMs: start ? performance.now() - start.at : 0,
-					}),
-				);
-			} catch (err) {
-				logger.debug("compaction telemetry emit failed", { err: String(err) });
-			}
+			this.#compactionTelemetry.end({
+				action: event.action,
+				result: event.result,
+				aborted: event.aborted,
+				willRetry: event.willRetry,
+				skipped: event.skipped,
+				errorMessage: event.errorMessage,
+			});
 		} else if (event.type === "auto_retry_start") {
 			await this.#extensionRunner.emit({
 				type: "auto_retry_start",
@@ -4068,58 +4062,37 @@ export class AgentSession {
 	}
 
 	/** Compact the active session history. */
-	async compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
-		const startedAt = performance.now();
-		const tokensBefore = this.getContextUsage()?.tokens;
-		try {
-			const result = await this.#maintenance.compact(customInstructions, options);
-			this.#emitManualCompactionTelemetry({
-				options,
-				outcome: "ok",
-				tokensBefore: result.tokensBefore || tokensBefore,
-				tokensAfter: this.getContextUsage()?.tokens,
-				startedAt,
-			});
-			return result;
-		} catch (error) {
-			this.#emitManualCompactionTelemetry({
-				options,
-				outcome: "error",
-				tokensBefore,
-				startedAt,
-				errorMessage: error instanceof Error ? error.message : String(error),
-			});
-			// Always the ORIGINAL failure: telemetry never masks a compaction error.
-			throw error;
-		}
+	compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
+		// The wrapper owns every telemetry concern here (guarded token reads,
+		// guarded emit, original error re-thrown) so this path cannot be broken by
+		// observing it.
+		return withManualCompactionTelemetry(
+			{
+				sessionId: () => this.sessionManager.getSessionId(),
+				contextTokens: () => this.getContextUsage()?.tokens,
+				strategy: () => this.#manualCompactionStrategy(options),
+			},
+			() => this.#maintenance.compact(customInstructions, options),
+		);
 	}
 
-	/** Publish a manual (`/compact`) compaction event; never throws into `compact()`. */
-	#emitManualCompactionTelemetry(facts: {
-		options: CompactOptions | undefined;
-		outcome: "ok" | "error";
-		tokensBefore: number | undefined;
-		tokensAfter?: number;
-		startedAt: number;
-		errorMessage?: string;
-	}): void {
-		try {
-			emitTelemetryEvent({
-				type: "compaction.completed",
-				sessionId: this.sessionManager.getSessionId(),
-				// `mode` is the one-off `/compact` subcommand override; absent means
-				// the configured strategy ran, which is context-full summarization.
-				strategy: facts.options?.mode ?? "context-full",
-				trigger: "manual",
-				outcome: facts.outcome,
-				tokensBefore: facts.tokensBefore,
-				tokensAfter: facts.tokensAfter,
-				durationMs: performance.now() - facts.startedAt,
-				errorMessage: facts.errorMessage,
-			});
-		} catch (err) {
-			logger.debug("compaction telemetry emit failed", { err: String(err) });
-		}
+	/**
+	 * The compaction strategy a manual `/compact` actually ran, in the same
+	 * vocabulary the automatic path reports (`event.action`).
+	 *
+	 * `options.mode` is the one-off subcommand — `soft`/`remote` are transport
+	 * choices that both resolve to a `context-full` summary — so it is mapped
+	 * through the mode table rather than reported raw. Without a subcommand the
+	 * configured `compaction.strategy` applies, but only `snapcompact` changes
+	 * what manual compaction does; `handoff`/`shake`/`off` are automatic-flow
+	 * behaviours that the manual path does not take (see `SessionMaintenance.
+	 * compact`, which branches on `snapcompact` alone), so they report the
+	 * in-place summary that actually ran.
+	 */
+	#manualCompactionStrategy(options: CompactOptions | undefined): string {
+		const override = options?.mode ? COMPACT_MODES.find(m => m.name === options.mode)?.overrides.strategy : undefined;
+		if (override) return override;
+		return this.settings.get("compaction.strategy") === "snapcompact" ? "snapcompact" : "context-full";
 	}
 
 	/** Cancel active manual, automatic, and handoff maintenance. */

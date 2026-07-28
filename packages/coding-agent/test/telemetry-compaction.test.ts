@@ -2,8 +2,18 @@ import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { trace } from "@opentelemetry/api";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { emitTelemetryEvent, subscribeTelemetry, type TelemetryEvent } from "../src/telemetry/events";
-import { compactionEndToTelemetry, withSnapcompactSavingsTelemetry } from "../src/telemetry/publishers/compaction";
+import {
+	type CompactionCompletedTelemetry,
+	emitTelemetryEvent,
+	subscribeTelemetry,
+	type TelemetryEvent,
+} from "../src/telemetry/events";
+import {
+	compactionEndToTelemetry,
+	createAutoCompactionTelemetry,
+	withManualCompactionTelemetry,
+	withSnapcompactSavingsTelemetry,
+} from "../src/telemetry/publishers/compaction";
 import { registerOtlpSink } from "../src/telemetry/sink-otlp";
 
 describe("compaction telemetry mapping", () => {
@@ -198,5 +208,227 @@ describe("compaction span synthesis", () => {
 
 		await provider.shutdown();
 		trace.disable();
+	});
+});
+
+/** Collect compaction.completed events published while `run` executes. */
+async function captureCompactions(run: () => Promise<void> | void): Promise<CompactionCompletedTelemetry[]> {
+	const events: CompactionCompletedTelemetry[] = [];
+	const dispose = subscribeTelemetry(event => {
+		if (event.type === "compaction.completed") events.push(event);
+	});
+	try {
+		await run();
+	} finally {
+		dispose();
+	}
+	return events;
+}
+
+describe("auto compaction publisher", () => {
+	it("pairs start with end, carrying the start trigger and the measured duration", async () => {
+		let clock = 1_000;
+		const telemetry = createAutoCompactionTelemetry({
+			sessionId: () => "s1",
+			contextTokens: () => 18_000,
+			now: () => clock,
+		});
+
+		const events = await captureCompactions(() => {
+			telemetry.start("overflow");
+			clock = 1_450;
+			telemetry.end({
+				action: "context-full",
+				result: { summary: "s", firstKeptEntryId: "e", tokensBefore: 90_000 },
+				aborted: false,
+				willRetry: false,
+				skipped: false,
+				errorMessage: undefined,
+			});
+		});
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			trigger: "overflow",
+			strategy: "context-full",
+			outcome: "ok",
+			tokensBefore: 90_000,
+			// Read AFTER the rewrite, so it reflects the compacted context.
+			tokensAfter: 18_000,
+			durationMs: 450,
+		});
+	});
+
+	it("reports an end with no matching start, and never reuses a consumed start", async () => {
+		const telemetry = createAutoCompactionTelemetry({
+			sessionId: () => "s1",
+			contextTokens: () => undefined,
+			now: () => 0,
+		});
+		const end = {
+			action: "shake" as const,
+			result: undefined,
+			aborted: false,
+			willRetry: false,
+			skipped: true,
+			errorMessage: undefined,
+		};
+
+		const events = await captureCompactions(() => {
+			telemetry.start("idle");
+			telemetry.end(end);
+			telemetry.end(end);
+		});
+
+		expect(events.map(e => e.trigger)).toEqual(["idle", "threshold"]);
+		expect(events.every(e => e.durationMs === 0)).toBe(true);
+	});
+
+	it("swallows a failing context read rather than breaking the session-event dispatcher", async () => {
+		const telemetry = createAutoCompactionTelemetry({
+			sessionId: () => "s1",
+			contextTokens: () => {
+				throw new Error("estimator blew up");
+			},
+			now: () => 0,
+		});
+
+		const events = await captureCompactions(() => {
+			telemetry.start("threshold");
+			expect(() =>
+				telemetry.end({
+					action: "context-full",
+					result: { summary: "s", firstKeptEntryId: "e", tokensBefore: 5 },
+					aborted: false,
+					willRetry: false,
+					skipped: false,
+					errorMessage: undefined,
+				}),
+			).not.toThrow();
+		});
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.tokensAfter).toBeUndefined();
+	});
+});
+
+describe("manual compaction publisher", () => {
+	const result = { summary: "s", firstKeptEntryId: "e", tokensBefore: 80_000 };
+
+	it("emits ok with before/after tokens and the resolved strategy", async () => {
+		let clock = 0;
+		let tokens = 80_000;
+		const events = await captureCompactions(async () => {
+			const returned = await withManualCompactionTelemetry(
+				{
+					sessionId: () => "s1",
+					contextTokens: () => tokens,
+					strategy: () => "snapcompact",
+					now: () => clock,
+				},
+				async () => {
+					clock = 700;
+					tokens = 12_000;
+					return result;
+				},
+			);
+			expect(returned).toBe(result);
+		});
+
+		expect(events).toEqual([
+			{
+				type: "compaction.completed",
+				sessionId: "s1",
+				trigger: "manual",
+				strategy: "snapcompact",
+				outcome: "ok",
+				tokensBefore: 80_000,
+				tokensAfter: 12_000,
+				durationMs: 700,
+			},
+		]);
+	});
+
+	it("re-throws the ORIGINAL error instance and emits outcome error", async () => {
+		const failure = new Error("Nothing to compact (session too small)");
+		let thrown: unknown;
+
+		const events = await captureCompactions(async () => {
+			try {
+				await withManualCompactionTelemetry(
+					{
+						sessionId: () => "s1",
+						contextTokens: () => 42,
+						strategy: () => "context-full",
+						now: () => 0,
+					},
+					async () => {
+						throw failure;
+					},
+				);
+			} catch (err) {
+				thrown = err;
+			}
+		});
+
+		expect(thrown).toBe(failure);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			outcome: "error",
+			trigger: "manual",
+			tokensBefore: 42,
+			errorMessage: "Nothing to compact (session too small)",
+		});
+		expect(events[0]?.tokensAfter).toBeUndefined();
+	});
+
+	it("still returns the result when the post-success context read throws", async () => {
+		let compacted = false;
+		const events = await captureCompactions(async () => {
+			const returned = await withManualCompactionTelemetry(
+				{
+					sessionId: () => "s1",
+					contextTokens: () => {
+						// Mirrors getContextUsage() re-estimating the whole branch: cheap
+						// before, and blowing up on the rewritten history afterwards.
+						if (compacted) throw new Error("estimator blew up");
+						return 80_000;
+					},
+					strategy: () => "context-full",
+					now: () => 0,
+				},
+				async () => {
+					compacted = true;
+					return result;
+				},
+			);
+			expect(returned).toBe(result);
+		});
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.outcome).toBe("ok");
+		expect(events[0]?.tokensAfter).toBeUndefined();
+	});
+
+	it("never lets a subscriber or sessionId failure reject a successful compact", async () => {
+		const dispose = subscribeTelemetry(() => {
+			throw new Error("subscriber exploded");
+		});
+		try {
+			const returned = await withManualCompactionTelemetry(
+				{
+					sessionId: () => {
+						throw new Error("no session");
+					},
+					contextTokens: () => 1,
+					strategy: () => "context-full",
+					now: () => 0,
+				},
+				async () => result,
+			);
+			expect(returned).toBe(result);
+		} finally {
+			dispose();
+		}
 	});
 });
