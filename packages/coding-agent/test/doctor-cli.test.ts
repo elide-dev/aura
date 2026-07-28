@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	buildDoctorReport,
 	DEFAULT_TOOL_GATE_SETTINGS,
@@ -38,6 +40,12 @@ function healthyInput(overrides: Partial<DoctorInput> = {}): DoctorInput {
 				binaryPath: "/home/u/.aura/agent/runtime/1.4.1/elide",
 				source: "managed",
 				protocolVersion: 2,
+				adapter: "auto",
+				effectiveAdapter: "embedded",
+				embeddedLibraryPath: "/home/u/.aura/agent/runtime/1.4.1/lib/libelide_embed.so",
+				embeddedLibrarySource: "managed",
+				embeddedAbiVersion: 1,
+				embeddedSchemaHash: "8a6b5aa3",
 			},
 		},
 		natives: { loaded: true, version: "17.1.3", target: "linux-x64-modern" },
@@ -183,6 +191,71 @@ describe("buildDoctorReport", () => {
 		expect(entry?.detail).toContain("v2");
 		// A protocol skew is not one of the two hard failures.
 		expect(report.exitCode).toBe(0);
+	});
+
+	test("runtime diagnostics render requested/effective adapter and sanitized shortened paths", () => {
+		const binaryPath = `${path.join(os.homedir(), ".aura", "runtime", "bin", "runtime")}\u001b[31m`;
+		const libraryPath = `${path.join(os.homedir(), ".aura", "runtime", "lib", "libelide_embed.so")}\u001b[32m`;
+		const report = buildDoctorReport(
+			healthyInput({
+				runtime: {
+					enabled: true,
+					protocolVersion: 2,
+					status: {
+						available: true,
+						version: "1.4.1",
+						binaryPath,
+						source: "managed",
+						protocolVersion: 2,
+						adapter: "auto",
+						effectiveAdapter: "embedded",
+						embeddedLibraryPath: libraryPath,
+						embeddedLibrarySource: "env",
+						embeddedAbiVersion: 1,
+						embeddedSchemaHash: "8a6b5aa3",
+					},
+				},
+			}),
+		);
+		const entries = section(report, "runtime").entries;
+		expect(entries.find(entry => entry.label === "adapter")?.detail).toBe("auto");
+		expect(entries.find(entry => entry.label === "effective adapter")?.detail).toBe("embedded");
+		expect(entries.find(entry => entry.label === "binary")?.detail).toBe("~/.aura/runtime/bin/runtime");
+		expect(entries.find(entry => entry.label === "embedded runtime library")?.detail).toBe(
+			"~/.aura/runtime/lib/libelide_embed.so",
+		);
+		expect(entries.find(entry => entry.label === "embedded runtime library source")?.detail).toBe("env");
+		expect(entries.find(entry => entry.label === "ABI")?.detail).toBe("1");
+		expect(entries.find(entry => entry.label === "schema")?.detail).toBe("8a6b5aa3");
+		const text = formatDoctorReport(report, { color: false });
+		expect(text).not.toContain("\u001b");
+		expect(text).not.toContain(os.homedir());
+	});
+
+	test("unavailable runtime diagnostics retain adapter selection context", () => {
+		const report = buildDoctorReport(
+			healthyInput({
+				runtime: {
+					enabled: true,
+					protocolVersion: 2,
+					status: {
+						available: false,
+						guidance: "configure the embedded runtime library",
+						protocolVersion: 2,
+						adapter: "embedded",
+						effectiveAdapter: "embedded",
+						embeddedLibraryPath: "/opt/aura/lib/runtime.so",
+						embeddedLibrarySource: "setting",
+					},
+				},
+			}),
+		);
+		const entries = section(report, "runtime").entries;
+		expect(entries.find(entry => entry.label === "adapter")?.detail).toBe("embedded");
+		expect(entries.find(entry => entry.label === "embedded runtime library")?.detail).toBe(
+			"/opt/aura/lib/runtime.so",
+		);
+		expect(report.exitCode).toBe(1);
 	});
 
 	test("runtime probe failure without a status is reported, not thrown", () => {

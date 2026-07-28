@@ -24,6 +24,7 @@
  * `diagnose`/`stats` hooks exist rather than invoking them (the Hindsight
  * backend's would talk to a server).
  */
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
@@ -35,6 +36,7 @@ import {
 import type { DoctorCheck } from "../extensibility/plugins/types";
 import { RUNTIME_PROTOCOL_VERSION } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
+import { shortenPath } from "../tools/render-utils";
 
 // ---------------------------------------------------------------------------
 // Report shape
@@ -234,6 +236,35 @@ function protocolEntry(input: DoctorRuntimeInput): DoctorEntry {
 	return { label: "protocol", status: "ok", detail: `v${reported}` };
 }
 
+function runtimeSelectionEntries(status: RuntimeStatusResult): DoctorEntry[] {
+	const entries: DoctorEntry[] = [];
+	if (status.adapter) entries.push({ label: "adapter", status: "ok", detail: status.adapter });
+	if (status.effectiveAdapter) {
+		entries.push({ label: "effective adapter", status: "ok", detail: status.effectiveAdapter });
+	}
+	if (status.embeddedLibraryPath) {
+		entries.push({
+			label: "embedded runtime library",
+			status: "ok",
+			detail: shortenPath(sanitizeText(status.embeddedLibraryPath)),
+		});
+	}
+	if (status.embeddedLibrarySource) {
+		entries.push({
+			label: "embedded runtime library source",
+			status: "ok",
+			detail: status.embeddedLibrarySource,
+		});
+	}
+	if (status.embeddedAbiVersion !== undefined) {
+		entries.push({ label: "ABI", status: "ok", detail: String(status.embeddedAbiVersion) });
+	}
+	if (status.embeddedSchemaHash !== undefined) {
+		entries.push({ label: "schema", status: "ok", detail: status.embeddedSchemaHash });
+	}
+	return entries;
+}
+
 function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 	const protocol = protocolEntry(input);
 	if (!input.enabled) {
@@ -258,6 +289,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 		];
 	}
 	const status = input.status;
+	const selection = runtimeSelectionEntries(status);
 	if (!status.available) {
 		return [
 			{
@@ -265,15 +297,18 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 				status: "fail",
 				detail: `enabled, but unavailable${status.guidance ? ` — ${status.guidance}` : ""}`,
 			},
+			...selection,
 			protocol,
 		];
 	}
 	const entries: DoctorEntry[] = [
 		{ label: "state", status: "ok", detail: `available (version ${status.version ?? "unknown"})` },
 	];
-	if (status.binaryPath) entries.push({ label: "binary", status: "ok", detail: status.binaryPath });
+	if (status.binaryPath) {
+		entries.push({ label: "binary", status: "ok", detail: shortenPath(sanitizeText(status.binaryPath)) });
+	}
 	if (status.source) entries.push({ label: "source", status: "ok", detail: status.source });
-	entries.push(protocol);
+	entries.push(...selection, protocol);
 	return entries;
 }
 

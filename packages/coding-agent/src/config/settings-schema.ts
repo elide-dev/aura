@@ -626,6 +626,31 @@ export const SETTINGS_SCHEMA = {
 			description: "Innate run/check/build/insights/profile tools executed on the managed runtime.",
 		},
 	},
+	"runtime.adapter": {
+		type: "enum",
+		values: ["process", "embedded", "auto"] as const,
+		default: "process",
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Runtime adapter",
+			description:
+				"Select process execution, require the embedded runtime library, or select it automatically when available.",
+			options: [
+				{ value: "process", label: "Process", description: "Execute through the managed runtime process." },
+				{
+					value: "embedded",
+					label: "Embedded",
+					description: "Require the embedded runtime library; never fall back when it is unavailable.",
+				},
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Use the embedded runtime library when available, otherwise use the runtime process.",
+				},
+			],
+		},
+	},
 	"runtime.autoDownload": {
 		type: "boolean",
 		default: true,
@@ -644,6 +669,16 @@ export const SETTINGS_SCHEMA = {
 			group: "Runtime",
 			label: "Runtime binary path",
 			description: "Explicit runtime binary; overrides discovery and disables auto-download.",
+		},
+	},
+	"runtime.embeddedPath": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Embedded runtime library path",
+			description: "Explicit embedded runtime library; overrides environment and installed-library discovery.",
 		},
 	},
 	"runtime.allowShell": {

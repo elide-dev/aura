@@ -485,17 +485,25 @@ The `run`, `check`, `build`, `insights`, and `profile` tools execute on a manage
 ```yaml
 runtime:
   enabled: true
+  adapter: process
   autoDownload: true
   path: ""
+  embeddedPath: ""
   allowShell: false
 ```
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile`, `runtime_debug`/`serve`, and `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
+| `runtime.adapter` | `process` \| `embedded` \| `auto` | `process` | Select the runtime process, require the embedded runtime library, or choose the library automatically when it is available and compatible. Explicit `embedded` mode never falls back to the process adapter when the library is missing or incompatible. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
+| `runtime.embeddedPath` | string | `""` | Explicit embedded runtime library path. A nonblank value is binding and takes precedence over `AURA_RUNTIME_EMBEDDED_LIB` and installed-library discovery. |
 | `runtime.allowShell` | boolean | `false` | Stop routing direct runtime-binary shell commands to the innate tools. See below. |
+
+The process adapter remains the default. In explicit `embedded` mode, an unavailable or incompatible embedded runtime library is an error rather than a silent process fallback. `auto` records both the requested adapter and the effective adapter in runtime status; it uses the process when no library is present, but does not hide a present library that fails compatibility checks.
+
+Embedded library resolution checks a nonblank `runtime.embeddedPath`, then a nonblank `AURA_RUNTIME_EMBEDDED_LIB`, then the pinned managed runtime version's `lib` directory, and finally the `lib` directory adjacent to an already-resolved real runtime binary. Candidates must be regular files. Resolution never scans `PATH` for shared libraries.
 
 #### Runtime shell policy
 

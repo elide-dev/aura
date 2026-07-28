@@ -1,4 +1,10 @@
 export { ELIDE_VERSION, MINIMUM_RUNTIME_VERSION } from "./dist";
+export {
+	embeddedRuntimeLibraryName,
+	resolveEmbeddedRuntimeLibrary,
+	type ResolvedEmbeddedRuntimeLibrary,
+	type ResolveEmbeddedRuntimeLibraryOptions,
+} from "./embedded/resolve";
 export { deriveJvmMainClass, JVM_BYTECODE_RELEASE } from "./jvm";
 export * from "./protocol";
 export { provisionRuntime } from "./provision";
@@ -7,6 +13,7 @@ export * from "./service";
 export { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
 
 import { RuntimeService } from "./service";
+import type { RuntimeAdapter } from "./protocol";
 import { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
 
 let cached: { key: string; service: RuntimeService } | undefined;
@@ -37,19 +44,25 @@ export function getOrCreateRuntimeService(opts?: LocalEndpointOptions): RuntimeS
 	return cached.service;
 }
 
-/** Runtime settings as read from `runtime.enabled` / `runtime.autoDownload` / `runtime.path`. */
+/** Runtime settings as read from the `runtime.*` settings group. */
 export interface RuntimeSettingsValues {
 	enabled: boolean;
 	autoDownload: boolean;
 	/** Explicit binary path; empty/whitespace means "discover". An explicit path disables auto-download. */
 	path: string;
+	/** Requested execution adapter. Process remains the default. */
+	adapter: RuntimeAdapter;
+	/** Explicit embedded runtime library path; empty/whitespace means "discover". */
+	embeddedPath: string;
 }
 
 /**
  * Map runtime settings onto endpoint options. Returns `undefined` when the runtime is disabled,
  * which is the signal to expose no service at all.
  */
-export function resolveRuntimeEndpointOptions(values: RuntimeSettingsValues): LocalEndpointOptions | undefined {
+export function resolveRuntimeEndpointOptions(
+	values: Pick<RuntimeSettingsValues, "enabled" | "autoDownload" | "path">,
+): LocalEndpointOptions | undefined {
 	if (!values.enabled) return undefined;
 	const explicit = values.path.trim();
 	return {

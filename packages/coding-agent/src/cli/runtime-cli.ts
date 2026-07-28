@@ -2,6 +2,7 @@
  * `aura runtime <action>` implementation, kept free of oclif plumbing so tests can
  * drive it with a stub service and capture output line-by-line.
  */
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import {
 	type LocalEndpointOptions,
@@ -12,6 +13,7 @@ import {
 	resolveRuntimeEndpointOptions,
 } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
+import { shortenPath } from "../tools/render-utils";
 
 export interface RuntimeCommandArgs {
 	action: "status";
@@ -33,6 +35,8 @@ export function readRuntimeSettings(): RuntimeSettingsValues {
 		enabled: settings.get("runtime.enabled"),
 		autoDownload: settings.get("runtime.autoDownload"),
 		path: settings.get("runtime.path") ?? "",
+		adapter: settings.get("runtime.adapter"),
+		embeddedPath: settings.get("runtime.embeddedPath") ?? "",
 	};
 }
 
@@ -59,22 +63,46 @@ export function createStatusRuntime(values: RuntimeSettingsValues = readRuntimeS
 	return new RuntimeService(new LocalRuntimeEndpoint(opts));
 }
 
+
+function formatRuntimeSelection(status: RuntimeStatusResult): string[] {
+	const lines: string[] = [];
+	if (status.adapter) lines.push(`  adapter: ${status.adapter}`);
+	if (status.effectiveAdapter) lines.push(`  effective adapter: ${status.effectiveAdapter}`);
+	if (status.embeddedLibraryPath) {
+		lines.push(`  embedded runtime library: ${shortenPath(sanitizeText(status.embeddedLibraryPath))}`);
+	}
+	if (status.embeddedLibrarySource) {
+		lines.push(`  embedded runtime library source: ${status.embeddedLibrarySource}`);
+	}
+	if (status.embeddedAbiVersion !== undefined) lines.push(`  ABI: ${status.embeddedAbiVersion}`);
+	if (status.embeddedSchemaHash !== undefined) lines.push(`  schema: ${status.embeddedSchemaHash}`);
+	return lines;
+}
+
 /**
- * Human-readable status block. Never names the underlying binary vendor: the
- * user-facing noun is "the runtime".
+ * Human-readable status block. Prose uses only "the runtime"; resolved
+ * filesystem paths remain factual and may contain internal artifact names.
  */
 export function formatRuntimeStatus(status: RuntimeStatusResult): string {
+	const selection = formatRuntimeSelection(status);
 	if (!status.available) {
-		return ["runtime: unavailable", status.guidance ? `  ${status.guidance}` : undefined].filter(Boolean).join("\n");
+		return [
+			"runtime: unavailable",
+			...selection,
+			status.guidance ? `  ${status.guidance}` : undefined,
+		]
+			.filter((line): line is string => line !== undefined)
+			.join("\n");
 	}
 	return [
 		"runtime: available",
 		`  version:  ${status.version ?? "unknown"}`,
-		status.binaryPath ? `  binary:   ${status.binaryPath}` : undefined,
+		status.binaryPath ? `  binary:   ${shortenPath(sanitizeText(status.binaryPath))}` : undefined,
 		status.source ? `  source:   ${status.source}` : undefined,
+		...selection,
 		`  protocol: v${status.protocolVersion}`,
 	]
-		.filter(Boolean)
+		.filter((line): line is string => line !== undefined)
 		.join("\n");
 }
 

@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,9 +29,9 @@ export function managedVersionDir(version = ELIDE_VERSION): string {
 
 const BINARY_NAMES = process.platform === "win32" ? ["elide.exe", "elide.cmd", "elide"] : ["elide"];
 
-async function isFile(p: string): Promise<boolean> {
+export async function isRegularFile(filePath: string): Promise<boolean> {
 	try {
-		return (await fs.stat(p)).isFile();
+		return (await fs.stat(filePath)).isFile();
 	} catch {
 		return false;
 	}
@@ -47,11 +48,11 @@ export async function findBinaryInTree(dir: string): Promise<string | null> {
 	// direct hit: dir/bin/elide
 	for (const name of BINARY_NAMES) {
 		const direct = path.join(dir, "bin", name);
-		if (await isFile(direct)) return direct;
+		if (await isRegularFile(direct)) return direct;
 	}
 	for (const entry of entries) {
 		const child = path.join(dir, entry);
-		let stat: Awaited<ReturnType<typeof fs.stat>>;
+		let stat: Stats;
 		try {
 			stat = await fs.stat(child);
 		} catch {
@@ -67,7 +68,7 @@ export async function findBinaryInTree(dir: string): Promise<string | null> {
 export async function resolveRuntimeBinary(opts: ResolveOptions = {}): Promise<ResolvedRuntime | null> {
 	const env = opts.env ?? process.env;
 	if (opts.explicitPath) {
-		if (await isFile(opts.explicitPath)) return { binaryPath: opts.explicitPath, source: "flag" };
+		if (await isRegularFile(opts.explicitPath)) return { binaryPath: opts.explicitPath, source: "flag" };
 		return null; // an explicit path that doesn't exist is an error, not a fallthrough
 	}
 	// A set env override is as binding as an explicit path: pointing it at a missing
@@ -76,7 +77,7 @@ export async function resolveRuntimeBinary(opts: ResolveOptions = {}): Promise<R
 	for (const key of ["AURA_RUNTIME_BIN", "ELIDE_BIN"] as const) {
 		const p = env[key];
 		if (!p) continue;
-		if (await isFile(p)) return { binaryPath: p, source: "env" };
+		if (await isRegularFile(p)) return { binaryPath: p, source: "env" };
 		return null;
 	}
 	const managed = await findBinaryInTree(managedVersionDir());
