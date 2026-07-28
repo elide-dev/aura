@@ -806,7 +806,7 @@ export const SETTINGS_SCHEMA = {
 
 	"theme.light": {
 		type: "string",
-		default: "light",
+		default: "aura-light",
 		ui: {
 			tab: "appearance",
 			group: "Theme",
