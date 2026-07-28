@@ -299,6 +299,15 @@ function createHostHarness(): HostHarness {
 	return { host: new EmbeddedWorkerHost(factories), execution, control, events };
 }
 
+function ownedTransferBuffer(bytes: Uint8Array): ArrayBuffer {
+	const buffer = bytes.buffer;
+	if (!(buffer instanceof ArrayBuffer)) throw new Error("worker response did not own a transferable ArrayBuffer");
+	if (bytes.byteOffset !== 0 || bytes.byteLength !== buffer.byteLength) {
+		throw new Error("worker response did not own its complete transferable ArrayBuffer");
+	}
+	return buffer;
+}
+
 async function expectInternalRejection(promise: Promise<unknown>, message: string): Promise<void> {
 	let thrown: unknown;
 	try {
@@ -336,7 +345,7 @@ describe("embedded worker cores", () => {
 		for (const id of [2, 3, 4, 5]) {
 			const sent = responseForId(transport.sent, id);
 			if (!("response" in sent.message)) throw new Error(`response ${id} did not contain bytes`);
-			expect(sent.transfer).toEqual([sent.message.response.buffer]);
+			expect(sent.transfer).toEqual([ownedTransferBuffer(sent.message.response)]);
 		}
 		void core;
 	});
@@ -395,7 +404,7 @@ describe("embedded worker cores", () => {
 		expect(validated).toEqual([{ bytes: new Uint8Array([12]), requestId: 1234567890123456789n }]);
 		const cancelled = responseForId(transport.sent, 3);
 		if (!("response" in cancelled.message)) throw new Error("cancel response did not contain bytes");
-		expect(cancelled.transfer).toEqual([cancelled.message.response.buffer]);
+		expect(cancelled.transfer).toEqual([ownedTransferBuffer(cancelled.message.response)]);
 
 		transport.emit({ type: "shutdown", id: 4 });
 		await flushWorkerQueue();
