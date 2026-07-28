@@ -2,7 +2,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getOrCreateRuntimeService } from "../../coding-agent/src/runtime";
+import {
+	EmbeddedRuntimeEndpoint,
+	LocalRuntimeEndpoint,
+	type RuntimeExecResult,
+	RuntimeRpcError,
+	type RuntimeRunParams,
+	RuntimeService,
+} from "../../coding-agent/src/runtime";
 import { readBenchmarkSnapshot } from "./benchmarks";
 import { materializeRuntimeTasks, RUNTIME_TASKS } from "./runtime-benchmark-suite";
 
@@ -71,7 +78,61 @@ export interface MicroResult {
 	ratio: number;
 }
 
-interface CliOptions {
+export interface AdapterMicroResult {
+	name: string;
+	/** Process p50; null for the embedded-only cold-open row. */
+	processMs: number | null;
+	processP95Ms: number | null;
+	embeddedMs: number;
+	embeddedP95Ms: number;
+	/** Process p50 divided by embedded p50; null when the row is not comparable. */
+	speedup: number | null;
+	p95Speedup: number | null;
+}
+
+export type AdapterMicrobenchmarkOutcome =
+	| { kind: "skipped"; message: string }
+	| { kind: "completed"; results: AdapterMicroResult[] };
+
+export interface AdapterMicrobenchmarkConfig {
+	iterations: number;
+	processBinaryPath: string;
+	embeddedLibraryPath: string;
+	env?: NodeJS.ProcessEnv;
+}
+
+export interface AdapterBenchmarkRuntime {
+	run(params: RuntimeRunParams, signal?: AbortSignal): Promise<RuntimeExecResult>;
+	close(): Promise<void>;
+}
+
+export interface TimedAdapterSample<T> {
+	durationMs: number;
+	value: T;
+}
+
+export interface AdapterCaseOptions<T> {
+	name: string;
+	iterations: number;
+	process: () => Promise<TimedAdapterSample<T>>;
+	embedded: () => Promise<TimedAdapterSample<T>>;
+	validate: (value: T) => void;
+}
+
+export interface AdapterMicrobenchmarkDependencies {
+	createProcessService: (config: AdapterMicrobenchmarkConfig) => AdapterBenchmarkRuntime;
+	createEmbeddedService: (config: AdapterMicrobenchmarkConfig) => AdapterBenchmarkRuntime;
+	runCases: (
+		config: AdapterMicrobenchmarkConfig,
+		processService: AdapterBenchmarkRuntime,
+		embeddedService: AdapterBenchmarkRuntime,
+	) => Promise<AdapterMicroResult[]>;
+}
+
+export const ADAPTER_MICROBENCHMARK_SKIPPED =
+	"Adapter comparison skipped: no embedded runtime library was supplied (use --embedded-lib=<path> or AURA_RUNTIME_EMBEDDED_LIB).";
+
+export interface RuntimeBenchmarkCliOptions {
 	model: string;
 	thinking: string;
 	attempts: number;
@@ -82,6 +143,7 @@ interface CliOptions {
 	taskIds: string[];
 	microIterations: number;
 	mode: "all" | "agent" | "micro";
+	embeddedLib: string | undefined;
 }
 
 export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
@@ -186,6 +248,7 @@ export function formatComparison(
 	baseline: ArmSummary,
 	runtime: ArmSummary,
 	micro: MicroResult[],
+	adapter: AdapterMicrobenchmarkOutcome = { kind: "skipped", message: ADAPTER_MICROBENCHMARK_SKIPPED },
 ): string {
 	const basePass = percentage(baseline.pass, baseline.trials);
 	const runtimePass = percentage(runtime.pass, runtime.trials);
@@ -240,6 +303,23 @@ export function formatComparison(
 			);
 		}
 	}
+	lines.push("", "## Runtime adapter microbenchmarks", "");
+	if (adapter.kind === "skipped") {
+		lines.push(adapter.message);
+	} else {
+		lines.push("| Case | Process runtime | Embedded runtime | Speedup |", "|---|---:|---:|---:|");
+		for (const result of adapter.results) {
+			if (result.processMs === null || result.processP95Ms === null) {
+				lines.push(
+					`| ${result.name} | — | ${result.embeddedMs.toFixed(2)} ms (single cold sample) | Not comparable |`,
+				);
+				continue;
+			}
+			lines.push(
+				`| ${result.name} | ${formatAdapterLatency(result.processMs, result.processP95Ms)} | ${formatAdapterLatency(result.embeddedMs, result.embeddedP95Ms)} | ${formatAdapterSpeedup(result)} |`,
+			);
+		}
+	}
 	return `${lines.join("\n")}\n`;
 }
 
@@ -247,6 +327,99 @@ function median(values: number[]): number {
 	const sorted = values.toSorted((a, b) => a - b);
 	const mid = Math.floor(sorted.length / 2);
 	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function percentile(values: readonly number[], quantile: number): number {
+	if (values.length === 0) throw new Error("adapter samples must not be empty");
+	for (const value of values) {
+		if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid adapter sample duration: ${value}`);
+	}
+	const sorted = values.toSorted((a, b) => a - b);
+	const rank = (sorted.length - 1) * quantile;
+	const lower = Math.floor(rank);
+	const upper = Math.ceil(rank);
+	if (lower === upper) return sorted[lower];
+	return sorted[lower] + (sorted[upper] - sorted[lower]) * (rank - lower);
+}
+
+export function summarizeAdapterSamples(
+	name: string,
+	processSamples: readonly number[] | null,
+	embeddedSamples: readonly number[],
+): AdapterMicroResult {
+	const embeddedMs = percentile(embeddedSamples, 0.5);
+	const embeddedP95Ms = percentile(embeddedSamples, 0.95);
+	if (processSamples === null) {
+		return {
+			name,
+			processMs: null,
+			processP95Ms: null,
+			embeddedMs,
+			embeddedP95Ms,
+			speedup: null,
+			p95Speedup: null,
+		};
+	}
+	const processMs = percentile(processSamples, 0.5);
+	const processP95Ms = percentile(processSamples, 0.95);
+	return {
+		name,
+		processMs,
+		processP95Ms,
+		embeddedMs,
+		embeddedP95Ms,
+		speedup: processMs / embeddedMs,
+		p95Speedup: processP95Ms / embeddedP95Ms,
+	};
+}
+
+export async function measureAdapterCase<T>(options: AdapterCaseOptions<T>): Promise<AdapterMicroResult> {
+	if (!Number.isSafeInteger(options.iterations) || options.iterations < 1) {
+		throw new Error("adapter benchmark iterations must be a positive integer");
+	}
+	options.validate((await options.process()).value);
+	options.validate((await options.embedded()).value);
+	const processSamples: number[] = [];
+	const embeddedSamples: number[] = [];
+	const accept = async (
+		operation: () => Promise<TimedAdapterSample<T>>,
+		samples: number[],
+	): Promise<void> => {
+		const sample = await operation();
+		options.validate(sample.value);
+		if (!Number.isFinite(sample.durationMs) || sample.durationMs <= 0) {
+			throw new Error(`invalid adapter sample duration: ${sample.durationMs}`);
+		}
+		samples.push(sample.durationMs);
+	};
+	for (let iteration = 0; iteration < options.iterations; iteration++) {
+		if (iteration % 2 === 0) {
+			await accept(options.process, processSamples);
+			await accept(options.embedded, embeddedSamples);
+		} else {
+			await accept(options.embedded, embeddedSamples);
+			await accept(options.process, processSamples);
+		}
+	}
+	return summarizeAdapterSamples(options.name, processSamples, embeddedSamples);
+}
+
+export function validateAdapterOutput(result: RuntimeExecResult, expectedStdout: string): void {
+	if (result.exitCode !== 0) throw new Error(`expected exit code 0, received ${result.exitCode}`);
+	if (result.stdout !== expectedStdout) {
+		throw new Error(`expected stdout ${JSON.stringify(expectedStdout)}, received ${JSON.stringify(result.stdout)}`);
+	}
+	if (result.stderr !== "") throw new Error(`expected empty stderr, received ${JSON.stringify(result.stderr)}`);
+	if (result.killed) throw new Error("expected runtime execution not to be killed");
+}
+
+function formatAdapterLatency(p50Ms: number, p95Ms: number): string {
+	return `${p50Ms.toFixed(2)} ms p50 / ${p95Ms.toFixed(2)} ms p95`;
+}
+
+function formatAdapterSpeedup(result: AdapterMicroResult): string {
+	if (result.speedup === null || result.p95Speedup === null) return "Not comparable";
+	return `${result.speedup.toFixed(2)}× p50 / ${result.p95Speedup.toFixed(2)}× p95`;
 }
 
 async function measure(iterations: number, operation: () => Promise<void>): Promise<number> {
@@ -269,6 +442,7 @@ async function runProcess(command: string[], cwd?: string): Promise<void> {
 
 export async function runMicrobenchmarks(iterations: number): Promise<MicroResult[]> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-runtime-micro-"));
+	const service = new RuntimeService(new LocalRuntimeEndpoint({ autoDownload: true }));
 	try {
 		const python = Bun.which("python3");
 		const bun = Bun.which("bun");
@@ -276,7 +450,6 @@ export async function runMicrobenchmarks(iterations: number): Promise<MicroResul
 		const java = Bun.which("java");
 		if (!python || !bun || !javac || !java)
 			throw new Error("microbenchmarks require python3, bun, javac, and java on PATH");
-		const service = getOrCreateRuntimeService({ autoDownload: true });
 		const pythonPath = path.join(root, "work.py");
 		const tsPath = path.join(root, "work.ts");
 		const javaPath = path.join(root, "Main.java");
@@ -403,12 +576,224 @@ export async function runMicrobenchmarks(iterations: number): Promise<MicroResul
 		);
 		return results;
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		try {
+			await service.close();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	}
 }
 
-function parseCli(argv: string[]): CliOptions {
-	const opts: CliOptions = {
+interface RuntimeAdapterRunCase {
+	name: string;
+	params: RuntimeRunParams;
+	expectedStdout: string;
+}
+
+interface CancellationObservation {
+	code: string;
+	message: string;
+}
+
+type CancellationSettlement = { kind: "resolved" } | { kind: "rejected"; error: unknown };
+
+const ADAPTER_COLD_JS = {
+	code: 'console.log("adapter-cold-js")',
+	language: "js",
+} satisfies RuntimeRunParams;
+
+const ADAPTER_RUN_CASES: readonly RuntimeAdapterRunCase[] = [
+	{
+		name: "Warm JS startup",
+		params: { code: 'console.log("adapter-js-startup")', language: "js" },
+		expectedStdout: "adapter-js-startup\n",
+	},
+	{
+		name: "Warm TS startup",
+		params: {
+			code: 'const value: number = 42; console.log(`adapter-ts-startup:${value}`)',
+			language: "ts",
+		},
+		expectedStdout: "adapter-ts-startup:42\n",
+	},
+	{
+		name: "Warm Python startup",
+		params: { code: 'print("adapter-python-startup")', language: "python" },
+		expectedStdout: "adapter-python-startup\n",
+	},
+	{
+		name: "JS compute",
+		params: {
+			code: "let total = 0; for (let i = 0; i < 200000; i++) total += i * i; console.log(total);",
+			language: "js",
+		},
+		expectedStdout: "2666646666700000\n",
+	},
+	{
+		name: "TS compute",
+		params: {
+			code: "let total: number = 0; for (let i = 0; i < 200000; i++) total += i * i; console.log(total);",
+			language: "ts",
+		},
+		expectedStdout: "2666646666700000\n",
+	},
+	{
+		name: "Python compute",
+		params: { code: "print(sum(i * i for i in range(200000)))", language: "python" },
+		expectedStdout: "2666646666700000\n",
+	},
+];
+
+const ADAPTER_CANCELLATION_PARAMS = {
+	code: "while (true) {}",
+	language: "js",
+} satisfies RuntimeRunParams;
+const ADAPTER_CANCELLATION_ENTER_DELAY_MS = 250;
+const ADAPTER_CANCELLATION_BOUND_MS = 15_000;
+const ADAPTER_CANCELLED_MESSAGE = "Runtime execution was cancelled.";
+
+async function timedRuntimeRun(
+	service: AdapterBenchmarkRuntime,
+	params: RuntimeRunParams,
+): Promise<TimedAdapterSample<RuntimeExecResult>> {
+	const startedAt = performance.now();
+	const value = await service.run(params);
+	return { durationMs: performance.now() - startedAt, value };
+}
+
+async function measureEmbeddedCold(
+	embeddedService: AdapterBenchmarkRuntime,
+): Promise<AdapterMicroResult> {
+	const sample = await timedRuntimeRun(embeddedService, ADAPTER_COLD_JS);
+	validateAdapterOutput(sample.value, "adapter-cold-js\n");
+	return summarizeAdapterSamples("Embedded cold open + first JS", null, [sample.durationMs]);
+}
+
+async function settleWithin<T>(pending: Promise<T>, timeoutMs: number): Promise<T> {
+	const timeout = Promise.withResolvers<T>();
+	const timer: NodeJS.Timeout = setTimeout(
+		() => timeout.reject(new Error(`runtime cancellation exceeded ${timeoutMs} ms`)),
+		timeoutMs,
+	);
+	try {
+		return await Promise.race([pending, timeout.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function timedCancellation(
+	service: AdapterBenchmarkRuntime,
+): Promise<TimedAdapterSample<CancellationObservation>> {
+	const controller = new AbortController();
+	const active = service.run(ADAPTER_CANCELLATION_PARAMS, controller.signal).then<CancellationSettlement>(
+		() => ({ kind: "resolved" }),
+		error => ({ kind: "rejected", error }),
+	);
+	await Bun.sleep(ADAPTER_CANCELLATION_ENTER_DELAY_MS);
+	const startedAt = performance.now();
+	controller.abort();
+	const settlement = await settleWithin(active, ADAPTER_CANCELLATION_BOUND_MS);
+	const durationMs = performance.now() - startedAt;
+	if (settlement.kind === "resolved") throw new Error("runtime cancellation unexpectedly completed the infinite guest");
+	if (!(settlement.error instanceof RuntimeRpcError)) {
+		if (settlement.error instanceof Error) throw settlement.error;
+		throw new Error(`runtime cancellation failed: ${String(settlement.error)}`);
+	}
+	return {
+		durationMs,
+		value: { code: settlement.error.code, message: settlement.error.message },
+	};
+}
+
+function validateCancellation(observation: CancellationObservation): void {
+	if (observation.code !== "cancelled" || observation.message !== ADAPTER_CANCELLED_MESSAGE) {
+		throw new Error(
+			`expected cancellation ${JSON.stringify({ code: "cancelled", message: ADAPTER_CANCELLED_MESSAGE })}, received ${JSON.stringify(observation)}`,
+		);
+	}
+}
+
+async function runAdapterCases(
+	config: AdapterMicrobenchmarkConfig,
+	processService: AdapterBenchmarkRuntime,
+	embeddedService: AdapterBenchmarkRuntime,
+): Promise<AdapterMicroResult[]> {
+	const results = [await measureEmbeddedCold(embeddedService)];
+	for (const benchmarkCase of ADAPTER_RUN_CASES) {
+		results.push(
+			await measureAdapterCase({
+				name: benchmarkCase.name,
+				iterations: config.iterations,
+				process: () => timedRuntimeRun(processService, benchmarkCase.params),
+				embedded: () => timedRuntimeRun(embeddedService, benchmarkCase.params),
+				validate: result => validateAdapterOutput(result, benchmarkCase.expectedStdout),
+			}),
+		);
+	}
+	results.push(
+		await measureAdapterCase({
+			name: "Cancellation latency",
+			iterations: config.iterations,
+			process: () => timedCancellation(processService),
+			embedded: () => timedCancellation(embeddedService),
+			validate: validateCancellation,
+		}),
+	);
+	return results;
+}
+
+const DEFAULT_ADAPTER_DEPENDENCIES: AdapterMicrobenchmarkDependencies = {
+	createProcessService: config =>
+		new RuntimeService(
+			new LocalRuntimeEndpoint({
+				explicitPath: config.processBinaryPath,
+				autoDownload: false,
+				env: config.env,
+			}),
+		),
+	createEmbeddedService: config =>
+		new RuntimeService(
+			new EmbeddedRuntimeEndpoint({
+				embeddedPath: config.embeddedLibraryPath,
+				explicitPath: config.processBinaryPath,
+				env: config.env,
+			}),
+		),
+	runCases: runAdapterCases,
+};
+
+export async function runAdapterMicrobenchmarks(
+	config: AdapterMicrobenchmarkConfig,
+	dependencies: AdapterMicrobenchmarkDependencies = DEFAULT_ADAPTER_DEPENDENCIES,
+): Promise<AdapterMicroResult[]> {
+	if (!Number.isSafeInteger(config.iterations) || config.iterations < 1) {
+		throw new Error("adapter benchmark iterations must be a positive integer");
+	}
+	const services: AdapterBenchmarkRuntime[] = [];
+	try {
+		const processService = dependencies.createProcessService(config);
+		services.push(processService);
+		const embeddedService = dependencies.createEmbeddedService(config);
+		services.push(embeddedService);
+		return await dependencies.runCases(config, processService, embeddedService);
+	} finally {
+		const closed = await Promise.allSettled(services.map(service => service.close()));
+		const failure = closed.find(result => result.status === "rejected");
+		if (failure?.status === "rejected") throw failure.reason;
+	}
+}
+
+export function packagedRuntimeBinaryForLibrary(libraryPath: string): string {
+	return path.resolve(path.dirname(libraryPath), "..", "bin", "elide");
+}
+
+export function parseRuntimeBenchmarkCli(
+	argv: string[],
+	env: NodeJS.ProcessEnv = process.env,
+): RuntimeBenchmarkCliOptions {
+	const envEmbeddedLib = env.AURA_RUNTIME_EMBEDDED_LIB?.trim();
+	const opts: RuntimeBenchmarkCliOptions = {
 		model: "openai-codex/gpt-5.6-sol",
 		thinking: "xhigh",
 		attempts: 2,
@@ -419,6 +804,7 @@ function parseCli(argv: string[]): CliOptions {
 		taskIds: RUNTIME_TASKS.map(task => task.id),
 		microIterations: 5,
 		mode: "all",
+		embeddedLib: envEmbeddedLib || undefined,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const [flag, inline] = argv[i].split("=", 2);
@@ -448,6 +834,12 @@ function parseCli(argv: string[]): CliOptions {
 			case "--micro-iterations":
 				opts.microIterations = Number(take());
 				break;
+			case "--embedded-lib": {
+				const embeddedLib = take().trim();
+				if (embeddedLib === "") throw new Error("--embedded-lib must be a non-empty path");
+				opts.embeddedLib = embeddedLib;
+				break;
+			}
 			case "--agent-only":
 				opts.mode = "agent";
 				break;
@@ -471,7 +863,7 @@ function parseCli(argv: string[]): CliOptions {
 }
 
 async function main(): Promise<void> {
-	const opts = parseCli(process.argv.slice(2));
+	const opts = parseRuntimeBenchmarkCli(process.argv.slice(2));
 	const taskRoot = path.join(opts.jobsDir, "_bench", opts.prefix, "tasks");
 	let micro: MicroResult[] = [];
 	if (opts.mode !== "micro") {
@@ -489,6 +881,20 @@ async function main(): Promise<void> {
 		}
 	}
 	if (opts.mode !== "agent") micro = await runMicrobenchmarks(opts.microIterations);
+	let adapter: AdapterMicrobenchmarkOutcome = { kind: "skipped", message: ADAPTER_MICROBENCHMARK_SKIPPED };
+	if (opts.embeddedLib && opts.mode === "agent") {
+		adapter = { kind: "skipped", message: "Adapter comparison skipped: --agent-only disables microbenchmarks." };
+	} else if (opts.embeddedLib) {
+		adapter = {
+			kind: "completed",
+			results: await runAdapterMicrobenchmarks({
+				iterations: opts.microIterations,
+				processBinaryPath: packagedRuntimeBinaryForLibrary(opts.embeddedLib),
+				embeddedLibraryPath: opts.embeddedLib,
+				env: process.env,
+			}),
+		};
+	}
 	const empty = (arm: BenchmarkArm): ArmSummary => ({
 		arm,
 		tasks: 0,
@@ -509,7 +915,7 @@ async function main(): Promise<void> {
 	const runtime =
 		opts.mode === "micro" ? empty("runtime") : summarizeArm(opts.jobsDir, opts.prefix, "runtime", opts.taskIds);
 	const reportPath = path.join(opts.jobsDir, "_bench", `${opts.prefix}-runtime-comparison.md`);
-	await Bun.write(reportPath, formatComparison(opts.prefix, baseline, runtime, micro));
+	await Bun.write(reportPath, formatComparison(opts.prefix, baseline, runtime, micro, adapter));
 	process.stdout.write(`Runtime benchmark report: ${reportPath}\n`);
 }
 
