@@ -284,6 +284,7 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 	unregisterTelemetrySink = registerOtlpSink({
 		recorder: metricRecorder,
 		emitLog: (level, body, attributes, eventName) => emitOtelLog(level, body, attributes, eventName),
+		traceEnabled: traceProvider !== undefined,
 	});
 
 	const flushTimer = setInterval(() => {

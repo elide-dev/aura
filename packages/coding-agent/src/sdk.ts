@@ -160,6 +160,7 @@ import {
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import type { StructuredSubagentSchemaMode } from "./task/types";
+import { withSnapcompactSavingsTelemetry } from "./telemetry/publishers/compaction";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -2918,8 +2919,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							shape: settings.get("snapcompact.shape"),
 						},
 						// Journal the tokens each imaged tool result keeps off the wire
-						// (frames never reach session.jsonl, so this is their only trace).
-						createSnapcompactSavingsRecorder(() => sessionManager.getSessionFile() ?? null),
+						// (frames never reach session.jsonl, so this is their only trace),
+						// and mirror the same savings onto the telemetry bus.
+						withSnapcompactSavingsTelemetry(
+							createSnapcompactSavingsRecorder(() => sessionManager.getSessionFile() ?? null),
+						),
 					)
 				: undefined;
 		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {

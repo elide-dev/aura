@@ -4,8 +4,9 @@
  * registered when an OTLP provider is live (init.ts).
  */
 import type { logger } from "@oh-my-pi/pi-utils";
+import { type Attributes, context, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { LogAttributes } from "@opentelemetry/api-logs";
-import { subscribeTelemetry, type TelemetryEvent } from "./events";
+import { type CompactionCompletedTelemetry, subscribeTelemetry, type TelemetryEvent } from "./events";
 import type { AuraMetricRecorder } from "./metrics";
 
 export type EmitOtelLog = (level: logger.LogLevel, body: string, attributes: LogAttributes, eventName: string) => void;
@@ -13,6 +14,13 @@ export type EmitOtelLog = (level: logger.LogLevel, body: string, attributes: Log
 export interface OtlpSinkDeps {
 	recorder?: AuraMetricRecorder;
 	emitLog: EmitOtelLog;
+	/**
+	 * Whether a real trace provider is registered. Only then does the sink
+	 * synthesize spans for events the agent loop does not already trace — without
+	 * a provider the global tracer hands back non-recording spans, so the work
+	 * would be pure overhead.
+	 */
+	traceEnabled?: boolean;
 }
 
 /** Subscribe the OTLP sink to the telemetry bus; returns a disposer. */
@@ -26,7 +34,7 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 			deps.emitLog(
 				"info",
 				"session started",
-				logAttributes({
+				otelAttributes({
 					"session.id": event.sessionId,
 					"aura.session.mode": event.mode,
 					"aura.session.resumed": event.resumed,
@@ -39,7 +47,7 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 			deps.emitLog(
 				"info",
 				"session ended",
-				logAttributes({
+				otelAttributes({
 					"session.id": event.sessionId,
 					"aura.session.mode": event.mode,
 					"aura.session.duration_ms": event.durationMs,
@@ -71,7 +79,7 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 			deps.emitLog(
 				event.outcome === "error" ? "warn" : "info",
 				"compaction completed",
-				logAttributes({
+				otelAttributes({
 					"session.id": event.sessionId,
 					"aura.compaction.strategy": event.strategy,
 					"aura.compaction.trigger": event.trigger,
@@ -83,6 +91,7 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 				}),
 				"aura.compaction.completed",
 			);
+			if (deps.traceEnabled) synthesizeCompactionSpan(event);
 			break;
 		case "compaction.savings":
 			deps.recorder?.recordCompactionSavings(event);
@@ -93,9 +102,38 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 	}
 }
 
+/**
+ * Emit a retroactive `aura.compaction` span.
+ *
+ * Compaction is reported to the bus only once it has finished, so the span is
+ * back-dated by the measured duration and closed immediately. It is parented to
+ * whatever context is active at emit time (usually the turn that triggered the
+ * compaction).
+ */
+function synthesizeCompactionSpan(event: CompactionCompletedTelemetry): void {
+	const now = Date.now();
+	const span = trace.getTracer("aura-telemetry").startSpan(
+		"aura.compaction",
+		{
+			startTime: new Date(now - Math.max(0, event.durationMs)),
+			attributes: otelAttributes({
+				"session.id": event.sessionId,
+				"aura.compaction.strategy": event.strategy,
+				"aura.compaction.trigger": event.trigger,
+				"aura.compaction.outcome": event.outcome,
+				"aura.compaction.tokens_before": event.tokensBefore,
+				"aura.compaction.tokens_after": event.tokensAfter,
+			}),
+		},
+		context.active(),
+	);
+	if (event.outcome === "error") span.setStatus({ code: SpanStatusCode.ERROR, message: event.errorMessage });
+	span.end(new Date(now));
+}
+
 /** Optional event fields arrive as undefined; OTel rejects those, so drop them. */
-function logAttributes(fields: Record<string, string | number | boolean | undefined>): LogAttributes {
-	const out: LogAttributes = {};
+function otelAttributes(fields: Record<string, string | number | boolean | undefined>): Attributes {
+	const out: Attributes = {};
 	for (const key in fields) {
 		const value = fields[key];
 		if (value !== undefined) out[key] = value;

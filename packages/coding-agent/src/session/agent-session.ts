@@ -169,6 +169,8 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
+import { type CompactionTrigger, emitTelemetryEvent } from "../telemetry/events";
+import { compactionEndToTelemetry } from "../telemetry/publishers/compaction";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -490,6 +492,13 @@ export class AgentSession {
 	#movedFromEmptySessionFile?: string;
 
 	readonly #maintenance: SessionMaintenance;
+
+	/**
+	 * Auto-compaction telemetry stopwatch, set on `auto_compaction_start` and
+	 * consumed by the matching `auto_compaction_end`. Only the automatic flow uses
+	 * it — `compact()` times itself inline.
+	 */
+	#compactionTelemetryStart: { at: number; trigger: CompactionTrigger } | undefined;
 
 	// Branch summarization state
 	#branchSummaryAbortController: AbortController | undefined = undefined;
@@ -3189,6 +3198,7 @@ export class AgentSession {
 			};
 			await this.#extensionRunner.emit(extensionEvent);
 		} else if (event.type === "auto_compaction_start") {
+			this.#compactionTelemetryStart = { at: performance.now(), trigger: event.reason };
 			await this.#extensionRunner.emit({
 				type: "auto_compaction_start",
 				reason: event.reason,
@@ -3204,6 +3214,27 @@ export class AgentSession {
 				errorMessage: event.errorMessage,
 				skipped: event.skipped,
 			});
+			const start = this.#compactionTelemetryStart;
+			this.#compactionTelemetryStart = undefined;
+			// Telemetry must never break compaction: a failure here is swallowed.
+			try {
+				emitTelemetryEvent(
+					compactionEndToTelemetry({
+						sessionId: this.sessionManager.getSessionId(),
+						trigger: start?.trigger ?? "threshold",
+						action: event.action,
+						result: event.result,
+						aborted: event.aborted,
+						willRetry: event.willRetry,
+						skipped: event.skipped,
+						tokensAfter: this.getContextUsage()?.tokens,
+						errorMessage: event.errorMessage,
+						durationMs: start ? performance.now() - start.at : 0,
+					}),
+				);
+			} catch (err) {
+				logger.debug("compaction telemetry emit failed", { err: String(err) });
+			}
 		} else if (event.type === "auto_retry_start") {
 			await this.#extensionRunner.emit({
 				type: "auto_retry_start",
@@ -4037,8 +4068,58 @@ export class AgentSession {
 	}
 
 	/** Compact the active session history. */
-	compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
-		return this.#maintenance.compact(customInstructions, options);
+	async compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
+		const startedAt = performance.now();
+		const tokensBefore = this.getContextUsage()?.tokens;
+		try {
+			const result = await this.#maintenance.compact(customInstructions, options);
+			this.#emitManualCompactionTelemetry({
+				options,
+				outcome: "ok",
+				tokensBefore: result.tokensBefore || tokensBefore,
+				tokensAfter: this.getContextUsage()?.tokens,
+				startedAt,
+			});
+			return result;
+		} catch (error) {
+			this.#emitManualCompactionTelemetry({
+				options,
+				outcome: "error",
+				tokensBefore,
+				startedAt,
+				errorMessage: error instanceof Error ? error.message : String(error),
+			});
+			// Always the ORIGINAL failure: telemetry never masks a compaction error.
+			throw error;
+		}
+	}
+
+	/** Publish a manual (`/compact`) compaction event; never throws into `compact()`. */
+	#emitManualCompactionTelemetry(facts: {
+		options: CompactOptions | undefined;
+		outcome: "ok" | "error";
+		tokensBefore: number | undefined;
+		tokensAfter?: number;
+		startedAt: number;
+		errorMessage?: string;
+	}): void {
+		try {
+			emitTelemetryEvent({
+				type: "compaction.completed",
+				sessionId: this.sessionManager.getSessionId(),
+				// `mode` is the one-off `/compact` subcommand override; absent means
+				// the configured strategy ran, which is context-full summarization.
+				strategy: facts.options?.mode ?? "context-full",
+				trigger: "manual",
+				outcome: facts.outcome,
+				tokensBefore: facts.tokensBefore,
+				tokensAfter: facts.tokensAfter,
+				durationMs: performance.now() - facts.startedAt,
+				errorMessage: facts.errorMessage,
+			});
+		} catch (err) {
+			logger.debug("compaction telemetry emit failed", { err: String(err) });
+		}
 	}
 
 	/** Cancel active manual, automatic, and handoff maintenance. */
