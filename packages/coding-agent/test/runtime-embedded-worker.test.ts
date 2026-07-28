@@ -25,9 +25,11 @@ interface SentMessage<Message> {
 class MemoryTransport<Inbound, Outbound> implements EmbeddedWorkerTransport<Inbound, Outbound> {
 	readonly sent: SentMessage<Outbound>[] = [];
 	closeCount = 0;
+	failSend: ((message: Outbound) => boolean) | undefined;
 	#handler: ((message: Inbound) => void) | undefined;
 
 	send(message: Outbound, transfer: Bun.Transferable[] = []): void {
+		if (this.failSend?.(message)) throw new Error("synthetic worker transport failure");
 		this.sent.push({ message, transfer });
 	}
 
@@ -98,6 +100,8 @@ function responseForId<Response extends { id: number }>(responses: SentMessage<R
 class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse> {
 	readonly sent: SentMessage<ExecutionWorkerRequest>[] = [];
 	terminateCount = 0;
+	respondToProbe = true;
+	respondToOpen = true;
 	readonly #events: string[];
 	readonly #messageHandlers = new Set<(message: ExecutionWorkerResponse) => void>();
 	readonly #errorHandlers = new Set<(error: Error) => void>();
@@ -110,20 +114,22 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 	send(message: ExecutionWorkerRequest, transfer: Bun.Transferable[] = []): void {
 		this.sent.push({ message, transfer });
 		if (message.type === "probe") {
-			queueMicrotask(() => this.emit({ type: "probed", id: message.id }));
+			if (this.respondToProbe) queueMicrotask(() => this.emit({ type: "probed", id: message.id }));
 			return;
 		}
 		if (message.type === "open") {
 			this.#events.push("execution:open");
-			queueMicrotask(() =>
-				this.emit({
-					type: "opened",
-					id: message.id,
-					libraryPath: "/real/libelide_embed.so",
-					handle: 88n,
-					response: new Uint8Array([1]),
-				}),
-			);
+			if (this.respondToOpen) {
+				queueMicrotask(() =>
+					this.emit({
+						type: "opened",
+						id: message.id,
+						libraryPath: "/real/libelide_embed.so",
+						handle: 88n,
+						response: new Uint8Array([1]),
+					}),
+				);
+			}
 			return;
 		}
 		if (message.type === "call") {
@@ -158,6 +164,30 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 		for (const handler of this.#messageHandlers) handler(message);
 	}
 
+	releaseProbe(): void {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ExecutionWorkerRequest, { type: "probe" }>> =>
+				candidate.message.type === "probe",
+		);
+		if (!request) throw new Error("missing execution probe");
+		this.emit({ type: "probed", id: request.message.id });
+	}
+
+	releaseOpen(): void {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ExecutionWorkerRequest, { type: "open" }>> =>
+				candidate.message.type === "open",
+		);
+		if (!request) throw new Error("missing execution open");
+		this.emit({
+			type: "opened",
+			id: request.message.id,
+			libraryPath: "/real/libelide_embed.so",
+			handle: 88n,
+			response: new Uint8Array([1]),
+		});
+	}
+
 	releaseLatestCall(response: Uint8Array): number {
 		const request = this.sent.findLast(
 			(candidate): candidate is SentMessage<Extract<ExecutionWorkerRequest, { type: "call" }>> =>
@@ -177,6 +207,8 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, ControlWorkerResponse> {
 	readonly sent: SentMessage<ControlWorkerRequest>[] = [];
 	terminateCount = 0;
+	respondToProbe = true;
+	exitBeforeShutdownAck = false;
 	readonly #events: string[];
 	readonly #messageHandlers = new Set<(message: ControlWorkerResponse) => void>();
 	readonly #errorHandlers = new Set<(error: Error) => void>();
@@ -189,7 +221,7 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 	send(message: ControlWorkerRequest, transfer: Bun.Transferable[] = []): void {
 		this.sent.push({ message, transfer });
 		if (message.type === "probe") {
-			queueMicrotask(() => this.emit({ type: "probed", id: message.id }));
+			if (this.respondToProbe) queueMicrotask(() => this.emit({ type: "probed", id: message.id }));
 			return;
 		}
 		if (message.type === "init") {
@@ -205,7 +237,8 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 			return;
 		}
 		this.#events.push("control:shutdown");
-		queueMicrotask(() => this.emit({ type: "shutdown-complete", id: message.id }));
+		if (this.exitBeforeShutdownAck) queueMicrotask(() => this.die());
+		else queueMicrotask(() => this.emit({ type: "shutdown-complete", id: message.id }));
 	}
 
 	onMessage(handler: (message: ControlWorkerResponse) => void): () => void {
@@ -230,6 +263,19 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 
 	emit(message: ControlWorkerResponse): void {
 		for (const handler of this.#messageHandlers) handler(message);
+	}
+
+	releaseProbe(): void {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ControlWorkerRequest, { type: "probe" }>> =>
+				candidate.message.type === "probe",
+		);
+		if (!request) throw new Error("missing control probe");
+		this.emit({ type: "probed", id: request.message.id });
+	}
+
+	die(): void {
+		for (const handler of this.#exitHandlers) handler();
 	}
 }
 
@@ -291,6 +337,19 @@ describe("embedded worker cores", () => {
 			expect(sent.transfer).toEqual([sent.message.response.buffer]);
 		}
 		void core;
+	});
+
+	test("execution open closes the native runtime when publishing its response fails", async () => {
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		transport.failSend = message => message.type === "opened";
+		const events: string[] = [];
+		new ExecutionWorkerCore(transport, path => new FakeNativeLibrary(path, events));
+
+		transport.emit({ type: "open", id: 1, libraryPath: "/runtime.so", request: new Uint8Array([10]) });
+		await flushWorkerQueue();
+
+		expect(events).toEqual(["open:10", "close:88", "dlclose"]);
+		expect(transport.sent.map(entry => entry.message.type)).toEqual(["error"]);
 	});
 
 	test("control worker validates cancellation responses and remains responsive until shutdown", async () => {
@@ -408,6 +467,64 @@ describe("embedded dual-worker host", () => {
 		await expectInternalRejection(call, "execution worker exited");
 		await expectInternalRejection(host.call(78n, new Uint8Array([8])), "worker host failed");
 		expect(execution.sent.filter(entry => entry.message.type === "call").length).toBe(callCount);
+	});
+
+	test("shutdown drains in-flight probe and open before closing the opened runtime", async () => {
+		const { host, execution, control } = createHostHarness();
+		execution.respondToProbe = false;
+		execution.respondToOpen = false;
+		control.respondToProbe = false;
+		let probeSettled = false;
+		let openSettled = false;
+		let shutdownSettled = false;
+		const probe = host.probe().then(() => {
+			probeSettled = true;
+		});
+		const open = host.open("/runtime.so", new Uint8Array([1])).then(() => {
+			openSettled = true;
+		});
+		const shutdown = host.shutdown().then(() => {
+			shutdownSettled = true;
+		});
+
+		await flushWorkerQueue();
+		expect(probeSettled).toBe(false);
+		expect(openSettled).toBe(false);
+		expect(shutdownSettled).toBe(false);
+		expect(execution.terminateCount).toBe(0);
+		execution.releaseProbe();
+		control.releaseProbe();
+		execution.releaseOpen();
+		await Promise.all([probe, open, shutdown]);
+
+		expect(execution.sent.some(entry => entry.message.type === "close")).toBe(true);
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
+	});
+
+	test("control exit before its shutdown acknowledgement rejects shutdown", async () => {
+		const { host, control, execution } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		control.exitBeforeShutdownAck = true;
+		let settled = false;
+		let shutdownError: unknown;
+		void host.shutdown().then(
+			() => {
+				settled = true;
+			},
+			error => {
+				settled = true;
+				shutdownError = error;
+			},
+		);
+		await flushWorkerQueue();
+
+		expect(settled).toBe(true);
+		expect(shutdownError).toBeInstanceOf(RuntimeRpcError);
+		if (!(shutdownError instanceof RuntimeRpcError)) throw new Error("expected RuntimeRpcError");
+		expect(shutdownError.message).toContain("control worker exited");
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
 	});
 
 	test("shutdown cancels active work, drains it, closes control then runtime, and is idempotent", async () => {

@@ -164,6 +164,24 @@ describe("embedded native ABI ownership", () => {
 		expect(bindings.events).not.toContain("oversized:copy");
 	});
 
+	test("treats status-zero close as terminal even when its response is malformed", () => {
+		const bindings = new FakeBindings();
+		bindings.closeResult = {
+			status: 0,
+			response: bindings.buffer("malformed-close", [], BigInt(MAX_EMBEDDED_RESPONSE_BYTES) + 1n),
+		};
+		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);
+		const { handle } = library.open(new Uint8Array([1]));
+
+		expectInternalError(() => library.closeRuntime(handle), "safety limit");
+		expectInternalError(() => library.closeRuntime(handle), "safety limit");
+		library.closeLibrary();
+
+		expect(bindings.closeRuntimeCount).toBe(1);
+		expect(bindings.events).toContain("malformed-close:free");
+		expect(bindings.closeLibraryCount).toBe(1);
+	});
+
 	test("defers dlclose until an in-flight call and its runtime are closed", () => {
 		const bindings = new FakeBindings();
 		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);

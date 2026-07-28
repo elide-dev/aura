@@ -253,7 +253,7 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 	readonly schemaHash: string;
 	readonly #bindings: EmbeddedNativeBindings;
 	readonly #runtimes = new Set<bigint>();
-	readonly #closedResponses = new Map<bigint, Uint8Array>();
+	readonly #closedOutcomes = new Map<bigint, { response: Uint8Array } | { error: unknown }>();
 	#inFlight = 0;
 	#closeRequested = false;
 	#closed = false;
@@ -301,13 +301,22 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 
 	closeRuntime(handle: bigint): Uint8Array {
 		this.#assertHandle(handle);
-		const previous = this.#closedResponses.get(handle);
-		if (previous) return previous.slice();
+		const previous = this.#closedOutcomes.get(handle);
+		if (previous) {
+			if ("error" in previous) throw previous.error;
+			return previous.response.slice();
+		}
 		return this.#operation(true, () => {
-			const response = consumeResponse("close", this.#bindings.closeRuntime(handle));
-			this.#runtimes.delete(handle);
-			this.#closedResponses.set(handle, response);
-			return response;
+			const result = this.#bindings.closeRuntime(handle);
+			if (result.status === 0) this.#runtimes.delete(handle);
+			try {
+				const response = consumeResponse("close", result);
+				this.#closedOutcomes.set(handle, { response });
+				return response;
+			} catch (error) {
+				if (result.status === 0) this.#closedOutcomes.set(handle, { error });
+				throw error;
+			}
 		});
 	}
 

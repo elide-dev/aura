@@ -87,7 +87,11 @@ export class ExecutionWorkerCore {
 				else if (message.type === "call") this.#call(message);
 				else this.#close(message);
 			} catch (error) {
-				this.#transport.send({ type: "error", id: message.id, error: serializedError(error) });
+				try {
+					this.#transport.send({ type: "error", id: message.id, error: serializedError(error) });
+				} catch (sendError) {
+					logger.error("Failed to publish embedded runtime execution worker error", { error: sendError });
+				}
 			}
 		};
 		this.#tail = this.#tail.then(run, run);
@@ -98,11 +102,11 @@ export class ExecutionWorkerCore {
 			throw new RuntimeRpcError("internal", "Embedded runtime execution worker is already open.");
 		}
 		let library: EmbeddedNativeLibrary | undefined;
+		let openedHandle: bigint | undefined;
 		try {
 			library = this.#openLibrary(message.libraryPath);
 			const opened = library.open(message.request);
-			this.#library = library;
-			this.#handle = opened.handle;
+			openedHandle = opened.handle;
 			const response = transferBytes(opened.response);
 			this.#transport.send(
 				{
@@ -114,7 +118,20 @@ export class ExecutionWorkerCore {
 				},
 				response.transfer,
 			);
+			this.#library = library;
+			this.#handle = opened.handle;
 		} catch (error) {
+			this.#library = undefined;
+			this.#handle = undefined;
+			if (library && openedHandle !== undefined) {
+				try {
+					library.closeRuntime(openedHandle);
+				} catch (closeRuntimeError) {
+					logger.error("Failed to close embedded runtime after worker open response failure", {
+						error: closeRuntimeError,
+					});
+				}
+			}
 			try {
 				library?.closeLibrary();
 			} catch (closeError) {
@@ -303,9 +320,9 @@ export class EmbeddedWorkerHost {
 	readonly #executionPending = new Map<number, PendingResponse<ExecutionWorkerResponse>>();
 	readonly #controlPending = new Map<number, PendingResponse<ControlWorkerResponse>>();
 	readonly #unsubscribers: Array<() => void> = [];
+	readonly #lifecycleOperations = new Set<Promise<void>>();
 	#nextId = 0;
 	#handle: bigint | undefined;
-	#libraryPath: string | undefined;
 	#activeRequestId: bigint | undefined;
 	#callTail: Promise<void> = Promise.resolve();
 	#accepting = true;
@@ -339,14 +356,19 @@ export class EmbeddedWorkerHost {
 
 	async probe(): Promise<void> {
 		this.#assertAccepting();
-		const executionId = this.#requestId();
-		const controlId = this.#requestId();
-		const [execution, control] = await Promise.all([
-			this.#sendExecution({ type: "probe", id: executionId }),
-			this.#sendControl({ type: "probe", id: controlId }),
-		]);
-		if (execution.type !== "probed" || control.type !== "probed") {
-			throw this.#protocolFailure("Embedded runtime workers returned invalid probe responses.");
+		const finish = this.#beginLifecycleOperation();
+		try {
+			const executionId = this.#requestId();
+			const controlId = this.#requestId();
+			const [execution, control] = await Promise.all([
+				this.#sendExecution({ type: "probe", id: executionId }),
+				this.#sendControl({ type: "probe", id: controlId }),
+			]);
+			if (execution.type !== "probed" || control.type !== "probed") {
+				throw this.#protocolFailure("Embedded runtime workers returned invalid probe responses.");
+			}
+		} finally {
+			finish();
 		}
 	}
 
@@ -355,39 +377,50 @@ export class EmbeddedWorkerHost {
 		request: Uint8Array,
 	): Promise<{ libraryPath: string; handle: bigint; response: Uint8Array }> {
 		this.#assertAccepting();
-		if (this.#handle !== undefined) throw new RuntimeRpcError("internal", "Embedded runtime worker host is already open.");
-		const transferred = transferBytes(request);
-		const id = this.#requestId();
-		const response = await this.#sendExecution(
-			{ type: "open", id, libraryPath, request: transferred.bytes },
-			transferred.transfer,
-		);
-		if (response.type !== "opened") throw this.#protocolFailure("Embedded runtime execution worker returned an invalid open response.");
-		this.#handle = response.handle;
-		this.#libraryPath = response.libraryPath;
+		const finish = this.#beginLifecycleOperation();
 		try {
-			const initId = this.#requestId();
-			const initialized = await this.#sendControl({
-				type: "init",
-				id: initId,
-				libraryPath: response.libraryPath,
-				handle: response.handle,
-			});
-			if (initialized.type !== "initialized" || initialized.libraryPath !== response.libraryPath) {
-				throw new RuntimeRpcError("internal", "Embedded runtime workers did not load the same canonical library path.");
+			if (this.#handle !== undefined) {
+				throw new RuntimeRpcError("internal", "Embedded runtime worker host is already open.");
 			}
-		} catch (error) {
+			const transferred = transferBytes(request);
+			const id = this.#requestId();
+			const response = await this.#sendExecution(
+				{ type: "open", id, libraryPath, request: transferred.bytes },
+				transferred.transfer,
+			);
+			if (response.type !== "opened") {
+				throw this.#protocolFailure("Embedded runtime execution worker returned an invalid open response.");
+			}
+			this.#handle = response.handle;
 			try {
-				await this.#closeExecutionRuntime();
-			} catch (closeError) {
-				logger.error("Failed to close embedded runtime after control worker initialization failure", {
-					error: closeError,
+				const initId = this.#requestId();
+				const initialized = await this.#sendControl({
+					type: "init",
+					id: initId,
+					libraryPath: response.libraryPath,
+					handle: response.handle,
 				});
+				if (initialized.type !== "initialized" || initialized.libraryPath !== response.libraryPath) {
+					throw new RuntimeRpcError(
+						"internal",
+						"Embedded runtime workers did not load the same canonical library path.",
+					);
+				}
+			} catch (error) {
+				try {
+					await this.#closeExecutionRuntime();
+				} catch (closeError) {
+					logger.error("Failed to close embedded runtime after control worker initialization failure", {
+						error: closeError,
+					});
+				}
+				this.#workerFailed("worker initialization failed", error);
+				throw error;
 			}
-			this.#workerFailed("worker initialization failed", error);
-			throw error;
+			return { libraryPath: response.libraryPath, handle: response.handle, response: response.response };
+		} finally {
+			finish();
 		}
-		return { libraryPath: response.libraryPath, handle: response.handle, response: response.response };
 	}
 
 	call(requestId: bigint, request: Uint8Array): Promise<Uint8Array> {
@@ -472,10 +505,10 @@ export class EmbeddedWorkerHost {
 				failure = error;
 			}
 		}
+		await Promise.allSettled(this.#lifecycleOperations);
 		await this.#callTail;
 		if (!this.#failure) {
 			try {
-				this.#expectedControlExit = true;
 				const id = this.#requestId();
 				const response = await this.#sendControl({ type: "shutdown", id });
 				if (response.type !== "shutdown-complete") {
@@ -505,7 +538,6 @@ export class EmbeddedWorkerHost {
 			}
 		} finally {
 			this.#handle = undefined;
-			this.#libraryPath = undefined;
 		}
 	}
 
@@ -552,6 +584,7 @@ export class EmbeddedWorkerHost {
 		const pending = this.#controlPending.get(response.id);
 		if (!pending) return;
 		this.#controlPending.delete(response.id);
+		if (response.type === "shutdown-complete") this.#expectedControlExit = true;
 		if (response.type === "error") pending.reject(restoredError(response.error));
 		else pending.resolve(response);
 	}
@@ -563,7 +596,6 @@ export class EmbeddedWorkerHost {
 		});
 		this.#accepting = false;
 		this.#handle = undefined;
-		this.#libraryPath = undefined;
 		const rejection = this.#failure;
 		for (const pending of this.#executionPending.values()) pending.reject(rejection);
 		for (const pending of this.#controlPending.values()) pending.reject(rejection);
@@ -576,6 +608,18 @@ export class EmbeddedWorkerHost {
 		const error = new RuntimeRpcError("internal", message);
 		this.#workerFailed("worker protocol failed", error);
 		return error;
+	}
+
+	#beginLifecycleOperation(): () => void {
+		const completion = Promise.withResolvers<void>();
+		this.#lifecycleOperations.add(completion.promise);
+		let finished = false;
+		return () => {
+			if (finished) return;
+			finished = true;
+			this.#lifecycleOperations.delete(completion.promise);
+			completion.resolve();
+		};
 	}
 
 	#assertAccepting(): void {
@@ -600,6 +644,12 @@ export class EmbeddedWorkerHost {
 	#terminateWorkers(): Promise<void> {
 		if (this.#terminationPromise) return this.#terminationPromise;
 		this.#terminating = true;
+		const rejection =
+			this.#failure ?? new RuntimeRpcError("internal", "Embedded runtime worker host terminated during shutdown.");
+		for (const pending of this.#executionPending.values()) pending.reject(rejection);
+		for (const pending of this.#controlPending.values()) pending.reject(rejection);
+		this.#executionPending.clear();
+		this.#controlPending.clear();
 		for (const unsubscribe of this.#unsubscribers.splice(0)) unsubscribe();
 		const terminated = Promise.withResolvers<void>();
 		this.#terminationPromise = terminated.promise;
