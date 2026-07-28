@@ -106,8 +106,11 @@ re-appending this one.
   materializes them into `<agentDir>/builtin-skills/<name>/SKILL.md` before scanning:
   unlike a `Rule` (whose body lives in memory and is served by `rule://`), a `Skill` is a
   path, and `buildSkillPromptMessage` plus the `skill://` handler both re-read
-  `Skill.filePath` off disk. Priority 3 — below managed auto-learn (5) and every authored
-  provider — so any same-named skill overrides a bundled one
+  `Skill.filePath` off disk. What it wrote is recorded in a `.bundled.json` manifest,
+  and that manifest is the only deletion authority — the same directory is a place a
+  user may park a skill of their own, and a bare user-authored `SKILL.md` is
+  shape-identical to one we wrote. Priority 3 — below managed auto-learn (5) and every
+  authored provider — so any same-named skill overrides a bundled one
 - `packages/coding-agent/test/discovery/builtin-skills.test.ts` — fork-owned
 - `docs/aura/`, `docs/superpowers/`
 

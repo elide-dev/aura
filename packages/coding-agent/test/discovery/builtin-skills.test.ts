@@ -17,7 +17,12 @@ import { BUILTIN_SKILLS_PROVIDER_ID, type Skill, skillCapability } from "@oh-my-
 import type { LoadContext, LoadResult } from "@oh-my-pi/pi-coding-agent/capability/types";
 // Importing discovery registers all providers as a side effect.
 import "@oh-my-pi/pi-coding-agent/discovery";
-import { BUILTIN_SKILL_SOURCES, getBuiltinSkillsDir } from "@oh-my-pi/pi-coding-agent/discovery/builtin-skills";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	BUILTIN_SKILL_SOURCES,
+	getBuiltinSkillsDir,
+	materializeBuiltinSkills,
+} from "@oh-my-pi/pi-coding-agent/discovery/builtin-skills";
 import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
@@ -96,26 +101,71 @@ describe("builtin-skills provider", () => {
 		);
 	});
 
-	it("prunes a stale bundled skill directory but never one holding extra files", async () => {
+	it("prunes only skills the manifest claims — a retired one goes, a user-authored one stays", async () => {
 		await loadBuiltinSkills();
 		const dir = getBuiltinSkillsDir(agentDir);
+		const manifestPath = path.join(dir, ".bundled.json");
 
-		// Shaped exactly like something a previous version materialized: reclaimable.
-		const stale = path.join(dir, "retired-skill");
-		fs.mkdirSync(stale, { recursive: true });
-		fs.writeFileSync(path.join(stale, "SKILL.md"), "---\nname: retired-skill\ndescription: old\n---\n\nold\n");
+		// Stand in for a previous release that also shipped "retired-skill": the
+		// manifest claims it, so it is ours to reclaim.
+		const retired = path.join(dir, "retired-skill");
+		fs.mkdirSync(retired, { recursive: true });
+		fs.writeFileSync(path.join(retired, "SKILL.md"), "---\nname: retired-skill\ndescription: old\n---\n\nold\n");
+		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { names: string[] };
+		expect(manifest.names.sort()).toEqual(EXPECTED_SKILL_NAMES);
+		fs.writeFileSync(manifestPath, JSON.stringify({ names: [...manifest.names, "retired-skill"] }));
 
-		// Carries content we did not write: must be left alone.
+		// Shape-identical to a bundled skill, but the manifest never claimed it:
+		// this is a user-authored skill parked in the same root and MUST survive.
 		const userOwned = path.join(dir, "hand-written");
 		fs.mkdirSync(userOwned, { recursive: true });
 		fs.writeFileSync(path.join(userOwned, "SKILL.md"), "---\nname: hand-written\ndescription: mine\n---\n\nmine\n");
-		fs.writeFileSync(path.join(userOwned, "notes.md"), "keep me");
 
-		const { items } = await loadBuiltinSkills();
-		expect(fs.existsSync(stale)).toBe(false);
-		expect(fs.existsSync(path.join(userOwned, "notes.md"))).toBe(true);
+		const { items, warnings } = await loadBuiltinSkills();
+		expect(fs.existsSync(retired)).toBe(false);
+		expect(fs.existsSync(path.join(userOwned, "SKILL.md"))).toBe(true);
 		expect(items.map(s => s.name)).toContain("hand-written");
 		expect(items.map(s => s.name)).not.toContain("retired-skill");
+		// Deletions are reported, never silent.
+		expect((warnings ?? []).join("\n")).toInclude('Pruned retired bundled skill "retired-skill"');
+		// The manifest no longer claims the retired name.
+		expect((JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { names: string[] }).names).not.toContain(
+			"retired-skill",
+		);
+	});
+
+	it("keeps a retired skill the user has since added files to, and says so", async () => {
+		await loadBuiltinSkills();
+		const dir = getBuiltinSkillsDir(agentDir);
+		const manifestPath = path.join(dir, ".bundled.json");
+
+		const retired = path.join(dir, "retired-skill");
+		fs.mkdirSync(retired, { recursive: true });
+		fs.writeFileSync(path.join(retired, "SKILL.md"), "---\nname: retired-skill\ndescription: old\n---\n\nold\n");
+		fs.writeFileSync(path.join(retired, "notes.md"), "keep me");
+		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { names: string[] };
+		fs.writeFileSync(manifestPath, JSON.stringify({ names: [...manifest.names, "retired-skill"] }));
+
+		const { warnings } = await loadBuiltinSkills();
+		expect(fs.existsSync(path.join(retired, "notes.md"))).toBe(true);
+		expect((warnings ?? []).join("\n")).toInclude('Kept retired bundled skill "retired-skill"');
+	});
+
+	it("survives two materializations racing: no truncated SKILL.md is ever left behind", async () => {
+		const dir = getBuiltinSkillsDir(agentDir);
+		// Both passes rewrite every file (nothing on disk yet), so they contend on
+		// the same targets. A shared staging name would let one rename a partial
+		// write into place under the other.
+		const [first, second] = await Promise.all([materializeBuiltinSkills(dir), materializeBuiltinSkills(dir)]);
+		// A shared staging name shows up here first: one pass deletes the other's
+		// staging file, and the losing rename fails with ENOENT.
+		expect([...first, ...second]).toEqual([]);
+
+		for (const source of BUILTIN_SKILL_SOURCES) {
+			expect(fs.readFileSync(path.join(dir, source.name, "SKILL.md"), "utf8"), source.name).toBe(source.content);
+			// No staging files survive a successful pass.
+			expect(fs.readdirSync(path.join(dir, source.name)), source.name).toEqual(["SKILL.md"]);
+		}
 	});
 
 	it("is the lowest-priority skill provider so any authored skill of the same name wins", () => {
@@ -123,6 +173,59 @@ describe("builtin-skills provider", () => {
 		const others = cap.providers.filter(p => p.id !== BUILTIN_SKILLS_PROVIDER_ID);
 		expect(others.length).toBeGreaterThan(0);
 		expect(others.every(p => p.priority > provider.priority)).toBe(true);
+	});
+});
+
+describe("settings suppression", () => {
+	afterEach(() => {
+		resetSettingsForTest();
+	});
+
+	it("offers nothing and reclaims the tree when runtime.enabled is off", async () => {
+		// Materialize first with settings uninitialized (the enabled default), then
+		// turn the runtime off and reload: the whole thing must go.
+		await loadBuiltinSkills();
+		const dir = getBuiltinSkillsDir(agentDir);
+		expect(fs.existsSync(path.join(dir, "runtime", "SKILL.md"))).toBe(true);
+
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "runtime.enabled": false } });
+
+		const { items } = await loadBuiltinSkills();
+		expect(items).toEqual([]);
+		expect(fs.existsSync(dir)).toBe(false);
+	});
+
+	it("offers nothing when skills.enableBundled is off", async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "skills.enableBundled": false } });
+
+		const { items } = await loadBuiltinSkills();
+		expect(items).toEqual([]);
+		expect(fs.existsSync(getBuiltinSkillsDir(agentDir))).toBe(false);
+	});
+
+	it("leaves a user-authored skill (and the directory) alone when suppressed", async () => {
+		await loadBuiltinSkills();
+		const dir = getBuiltinSkillsDir(agentDir);
+		const userOwned = path.join(dir, "hand-written");
+		fs.mkdirSync(userOwned, { recursive: true });
+		fs.writeFileSync(path.join(userOwned, "SKILL.md"), "---\nname: hand-written\ndescription: mine\n---\n\nmine\n");
+
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "runtime.enabled": false } });
+		await loadBuiltinSkills();
+
+		expect(fs.existsSync(path.join(userOwned, "SKILL.md"))).toBe(true);
+		expect(fs.existsSync(path.join(dir, "runtime"))).toBe(false);
+	});
+
+	it("still materializes when the runtime is on and the toggle is left at its default", async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+
+		const { items } = await loadBuiltinSkills();
+		expect(items.map(s => s.name).sort()).toEqual(EXPECTED_SKILL_NAMES);
 	});
 });
 

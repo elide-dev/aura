@@ -8,8 +8,12 @@ description: Innate execution on the managed polyglot runtime — running JavaSc
 Code execution is innate. A managed polyglot runtime is resolved (or downloaded)
 for you and driven through named tools, so path controls, output budgets,
 process ownership and approval policy all apply. Reaching for the runtime's
-command-line binary through `bash` bypasses every one of those; the shell
-interceptor will route you back to the innate tool.
+command-line binary through `bash` bypasses every one of those, and by default
+the shell interceptor blocks the attempt and names the tool to use instead.
+Do not read a command that *does* go through as permission: the interceptor
+stands down when its target tool is not registered, and the user can switch the
+whole group off — the reason to use the innate tool is the policy, not the
+block.
 
 ## `run` — one program, one process
 

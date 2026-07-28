@@ -104,6 +104,69 @@ cwd-relative eval-worker import in `tools/computer.test.ts`).
 - Materializing into `<agentDir>` is a write during discovery. It is idempotent,
   content-compared, and rename-atomic, but it does mean a session start can touch
   the agent directory. `runtime.enabled = false` or `skills.enableBundled = false`
-  suppresses it entirely.
-- The prune heuristic ("a lone `SKILL.md`") is conservative by design; a retired
-  bundled skill that the user added a file to will linger rather than be deleted.
+  suppresses it entirely (and now reclaims the tree).
+
+---
+
+# Review round 2 — write-path hardening
+
+Commit: `fix: race-safe bundled-skill staging and manifest-guarded prune`.
+
+## IMPORTANT 1 — staging name collision (fixed)
+
+`${target}.${process.pid}.tmp` is shared by any two discovery passes racing
+inside one process, so one pass could delete or rename the other's staging file
+mid-write. `stagingPath()` now appends `Date.now()` and `crypto.randomUUID()`,
+matching `runtime/provision.ts:184` and `utils/markit-cache.ts:148`. A `finally`
+also removes the staging file, so a failed rename leaves nothing behind.
+
+Test: *"survives two materializations racing"* runs two `materializeBuiltinSkills`
+concurrently against an empty dir (so both rewrite every file), and asserts no
+warnings, byte-exact content, and that each skill directory contains exactly
+`SKILL.md`. Verified as a real guard by reverting `stagingPath` to the pid-only
+form — the test fails 3/3 runs, and passes again once restored.
+
+## IMPORTANT 2 — prune could delete user-authored skills (fixed)
+
+The old heuristic reclaimed *any* unexpected directory whose sole child was
+`SKILL.md`, which is exactly the shape of a user-authored skill parked in the
+same root — contradicting the provider's own behaviour of surfacing such a skill.
+
+The provider now writes `<dir>/.bundled.json` (`{ "names": [...] }`) recording
+precisely what it materialized, and that manifest is the only deletion authority:
+`retired = previous manifest − current source set`. A name the manifest never
+claimed is never a candidate. Two further safeguards: a retired directory that
+has since gained extra files is **kept** with a warning, and every prune emits a
+warning rather than deleting silently. The manifest is dot-prefixed, so
+`scanSkillsFromDir` (which skips dotted entries) never sees it. A corrupt
+manifest is read as "we own nothing", so a parse failure prunes nothing.
+
+Tests: *"prunes only skills the manifest claims"* (manifest-listed retired skill
+goes, shape-identical user skill survives and is still surfaced, the prune is
+reported, the manifest drops the retired name) and *"keeps a retired skill the
+user has since added files to, and says so"*.
+
+## Minors (all three taken)
+
+1. **`runtime.enabled:false` had no coverage.** A `settings suppression` describe
+   now drives the real gate with `Settings.init({ inMemory: true, overrides })`:
+   `runtime.enabled:false` and `skills.enableBundled:false` each yield no items,
+   and the default-on case still materializes all five.
+2. **Suppression left litter.** `unmaterializeBuiltinSkills` now reclaims the tree
+   when either toggle is off — manifest-gated exactly like the retirement prune,
+   with the deletions logged (the provider returns no warnings on that branch).
+   The directory itself is removed only if it ends up empty, so a user skill
+   parked in there keeps it alive; a test pins that.
+3. **`runtime.md` overstated the interceptor.** The claim is now qualified: the
+   interceptor blocks by default, but it stands down when its target tool is not
+   registered and the user can switch the group off — so a command that goes
+   through is not permission, and the reason to use the innate tool is the policy.
+
+## Verification
+
+`test/discovery/builtin-skills.test.ts` 17 pass; `test/discovery` +
+`test/skills.test.ts` + `test/sdk-skills.test.ts` 250 pass / 0 fail;
+`test/tools` + `test/internal-urls` + `test/task` 2256 pass / 2 fail, both
+pre-existing at baseline (the `~/.aliases` PTY daemon test and the cwd-relative
+eval-worker import in `tools/computer.test.ts`). `check:ts` 0, biome clean, and
+the no-vendor-name content guard still passes.

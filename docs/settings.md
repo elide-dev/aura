@@ -514,9 +514,14 @@ Five skills ship with the agent and are discovered in every session:
 They are materialized into `<config dir>/agent/builtin-skills/<name>/SKILL.md`
 (the skill machinery reads a skill's body back from its path) and rewritten from
 the embedded copy whenever a file drifts, so edit them there and the change is
-reverted on the next launch. To override one, author a skill of the same name in
-any normal skills directory: the bundled provider sits at the lowest skill
-priority, so yours wins. To drop one, list its name in `skills.ignoredSkills`.
+reverted on the next launch. Turning either toggle off removes that tree again.
+
+Only what the agent itself wrote is ever deleted: the directory carries a
+`.bundled.json` manifest naming the skills it materialized, and a skill you place
+in there yourself is left alone (it is discovered like any other). To override a
+bundled skill, author one of the same name in any normal skills directory — the
+bundled provider sits at the lowest skill priority, so yours wins. To drop one,
+list its name in `skills.ignoredSkills`.
 
 #### Runtime shell policy
 

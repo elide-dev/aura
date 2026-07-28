@@ -15,6 +15,11 @@
  * embedded text stays the authority: a file that drifts is rewritten on the
  * next load.
  *
+ * Because that directory is also somewhere a user can drop a skill of their
+ * own, the provider records what it wrote in a `.bundled.json` manifest and
+ * deletes only names that manifest claims. Nothing else in there is ever a
+ * deletion candidate.
+ *
  * Registered at the lowest skill priority so an authored skill of the same name
  * from any other provider wins the capability dedup. Users disable the set with
  * `skills.enableBundled` (or the whole runtime surface with `runtime.enabled`),
@@ -23,7 +28,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { BUILTIN_SKILLS_PROVIDER_ID, type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult } from "../capability/types";
@@ -57,6 +62,20 @@ function bundledSkillsEnabled(): boolean {
 	return settings.get("runtime.enabled") !== false && settings.get("skills.enableBundled") !== false;
 }
 
+/**
+ * Record of exactly which skill directories THIS provider materialized. It is
+ * the sole authority for what may be deleted: a directory the manifest never
+ * named was authored by someone else and is never touched. Dot-prefixed so
+ * `scanSkillsFromDir` (which only descends into non-dotted directories) cannot
+ * mistake it for a skill.
+ */
+const MANIFEST_FILE = ".bundled.json";
+
+interface BundledManifest {
+	/** Skill directory names this provider wrote, as of the last successful pass. */
+	names: string[];
+}
+
 async function readIfPresent(filePath: string): Promise<string | undefined> {
 	try {
 		return await fs.readFile(filePath, "utf8");
@@ -66,10 +85,35 @@ async function readIfPresent(filePath: string): Promise<string | undefined> {
 	}
 }
 
+/** Names this provider previously materialized; empty when there is no readable manifest. */
+async function readManifest(dir: string): Promise<string[]> {
+	const raw = await readIfPresent(path.join(dir, MANIFEST_FILE));
+	if (raw === undefined) return [];
+	try {
+		const parsed = JSON.parse(raw) as BundledManifest;
+		return Array.isArray(parsed.names) ? parsed.names.filter(name => typeof name === "string") : [];
+	} catch {
+		// A corrupt manifest means "we no longer know what we own" — the safe
+		// reading is that we own nothing, so nothing gets pruned this pass.
+		return [];
+	}
+}
+
+/**
+ * Unique staging name. `pid` alone collides between two discovery passes racing
+ * inside ONE process (parallel providers, concurrent subagent sessions), which
+ * would let one pass rename a half-written file into place under the other.
+ * Matches the entropy the fork already uses in `runtime/provision.ts` and
+ * `utils/markit-cache.ts`.
+ */
+function stagingPath(target: string): string {
+	return `${target}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+}
+
 /**
  * Write one bundled skill if the on-disk copy is missing or has drifted.
- * Written to a temp sibling and renamed so a concurrent session never scans a
- * half-written `SKILL.md`.
+ * Written to a unique temp sibling and renamed, so a concurrent reader never
+ * scans a half-written `SKILL.md` and two concurrent writers cannot interleave.
  */
 async function writeSkillSource(dir: string, source: BuiltinSkillSource, warnings: string[]): Promise<void> {
 	const skillDir = path.join(dir, source.name);
@@ -77,35 +121,73 @@ async function writeSkillSource(dir: string, source: BuiltinSkillSource, warning
 	try {
 		if ((await readIfPresent(target)) === source.content) return;
 		await fs.mkdir(skillDir, { recursive: true });
-		const staging = `${target}.${process.pid}.tmp`;
-		await fs.writeFile(staging, source.content, "utf8");
-		await fs.rename(staging, target);
+		const staging = stagingPath(target);
+		try {
+			await fs.writeFile(staging, source.content, "utf8");
+			await fs.rename(staging, target);
+		} finally {
+			// A failed rename would otherwise leave the staging file behind. It is
+			// invisible to the scanner (only `<name>/SKILL.md` is read), but it would
+			// accumulate and it would defeat the lone-`SKILL.md` shape check below.
+			await fs.rm(staging, { force: true }).catch(() => {});
+		}
 	} catch (error) {
 		warnings.push(`Failed to materialize bundled skill "${source.name}" at ${target} (${String(error)})`);
 	}
 }
 
 /**
- * Drop directories left behind by a bundled skill an earlier version shipped —
- * otherwise a retired skill keeps surfacing forever. Confined to entries that
- * look exactly like something this provider wrote (a lone `SKILL.md`), so a
- * directory the user added anything to is never reclaimed.
+ * Reclaim directories for bundled skills an EARLIER version shipped and this one
+ * no longer does — otherwise a retired skill surfaces forever.
+ *
+ * Deletion is gated on the manifest, not on shape: `retired` is exactly
+ * `previous manifest − current source set`. This directory is also a place a
+ * user can legitimately drop a skill of their own (the provider scans whatever
+ * it finds), and a bare user-authored `SKILL.md` is shape-identical to one we
+ * wrote — so a name the manifest never claimed must never be a deletion
+ * candidate. Every prune is reported as a warning rather than done silently,
+ * and a retired directory the user has since added files to is kept.
  */
-async function pruneRetiredSkills(dir: string, expected: ReadonlySet<string>, warnings: string[]): Promise<void> {
-	const entries = await fs.readdir(dir, { withFileTypes: true });
+async function pruneRetiredSkills(dir: string, retired: readonly string[], warnings: string[]): Promise<void> {
 	await Promise.all(
-		entries.map(async entry => {
-			if (!entry.isDirectory() || expected.has(entry.name)) return;
-			const retired = path.join(dir, entry.name);
+		retired.map(async name => {
+			const target = path.join(dir, name);
 			try {
-				const children = await fs.readdir(retired);
-				if (children.length !== 1 || children[0] !== "SKILL.md") return;
-				await fs.rm(retired, { recursive: true, force: true });
+				const children = await fs.readdir(target).catch(error => {
+					if (isEnoent(error)) return undefined;
+					throw error;
+				});
+				if (children === undefined) return;
+				if (children.length !== 1 || children[0] !== "SKILL.md") {
+					warnings.push(
+						`Kept retired bundled skill "${name}" at ${target}: it holds files this provider did not write`,
+					);
+					return;
+				}
+				await fs.rm(target, { recursive: true, force: true });
+				warnings.push(`Pruned retired bundled skill "${name}" from ${target}`);
 			} catch (error) {
-				warnings.push(`Failed to prune retired bundled skill at ${retired} (${String(error)})`);
+				warnings.push(`Failed to prune retired bundled skill at ${target} (${String(error)})`);
 			}
 		}),
 	);
+}
+
+async function writeManifest(dir: string, names: readonly string[], warnings: string[]): Promise<void> {
+	const target = path.join(dir, MANIFEST_FILE);
+	const body = `${JSON.stringify({ names: [...names] }, null, 2)}\n`;
+	try {
+		if ((await readIfPresent(target)) === body) return;
+		const staging = stagingPath(target);
+		try {
+			await fs.writeFile(staging, body, "utf8");
+			await fs.rename(staging, target);
+		} finally {
+			await fs.rm(staging, { force: true }).catch(() => {});
+		}
+	} catch (error) {
+		warnings.push(`Failed to record the bundled skills manifest at ${target} (${String(error)})`);
+	}
 }
 
 /**
@@ -115,19 +197,49 @@ async function pruneRetiredSkills(dir: string, expected: ReadonlySet<string>, wa
  */
 export async function materializeBuiltinSkills(dir: string): Promise<string[]> {
 	const warnings: string[] = [];
+	const names = BUILTIN_SKILL_SOURCES.map(source => source.name);
 	try {
 		await fs.mkdir(dir, { recursive: true });
+		const previous = await readManifest(dir);
+		const current = new Set(names);
 		await Promise.all(BUILTIN_SKILL_SOURCES.map(source => writeSkillSource(dir, source, warnings)));
-		await pruneRetiredSkills(dir, new Set(BUILTIN_SKILL_SOURCES.map(source => source.name)), warnings);
+		await pruneRetiredSkills(
+			dir,
+			previous.filter(name => !current.has(name)),
+			warnings,
+		);
+		await writeManifest(dir, names, warnings);
 	} catch (error) {
 		warnings.push(`Failed to prepare the bundled skills directory ${dir} (${String(error)})`);
 	}
 	return warnings;
 }
 
+/**
+ * Remove what this provider materialized once it is switched off, so a disabled
+ * bundled set leaves no tree behind. Manifest-gated like the retirement prune:
+ * only names we recorded are removed, and only when they still look like ours.
+ * The directory itself goes only if it ends up empty — a user skill parked in
+ * there keeps it (and its manifest) alive.
+ */
+async function unmaterializeBuiltinSkills(dir: string): Promise<void> {
+	const previous = await readManifest(dir).catch(() => []);
+	if (previous.length === 0) return;
+	// The provider returns no items in this branch, so its warnings would go
+	// nowhere — log them instead, keeping every deletion accounted for.
+	const warnings: string[] = [];
+	await pruneRetiredSkills(dir, previous, warnings);
+	for (const warning of warnings) logger.debug(`builtin-skills: ${warning}`);
+	await fs.rm(path.join(dir, MANIFEST_FILE), { force: true }).catch(() => {});
+	await fs.rmdir(dir).catch(() => {});
+}
+
 async function loadBuiltinSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	if (!bundledSkillsEnabled()) return { items: [] };
 	const dir = getBuiltinSkillsDir();
+	if (!bundledSkillsEnabled()) {
+		await unmaterializeBuiltinSkills(dir);
+		return { items: [] };
+	}
 	const warnings = await materializeBuiltinSkills(dir);
 	const scan = await scanSkillsFromDir(ctx, {
 		dir,
