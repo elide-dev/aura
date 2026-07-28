@@ -169,7 +169,7 @@ Schema fingerprint algorithm (shared with Aura): start at `protocol/elide/v1/emb
 - Modify: `build.mts` codegen registration near `runCodegens`
 - Generated: `packages/generated/main/dev/elide/proto/v1/EmbedProtocol.java` (actual capnpc class name is authoritative)
 - Generated: `packages/generated/main/dev/elide/proto/v1/EmbeddedSchema.kt`
-- Test: `tools/codegen/embed-schema-hash.test.mts`
+- Test: `tools/test/embed-schema-hash.test.mts`
 
 - [ ] **Step 1: Write the fingerprint test first**
 
@@ -178,7 +178,7 @@ Test a temporary import graph containing `embed.capnp`, direct imports, a nested
 
 ```bash
 cd /home/sam/workspace/labs/WHIPLASH
-bun test tools/codegen/embed-schema-hash.test.mts
+bun test tools/test/embed-schema-hash.test.mts
 ```
 
 Expected: FAIL because the generator does not exist.
@@ -205,7 +205,7 @@ Add `embed.capnp` to the existing Java capnpc invocation in `Makefile`. Register
 
 ```bash
 make generate
-bun test tools/codegen/embed-schema-hash.test.mts
+bun test tools/test/embed-schema-hash.test.mts
 ```
 
 Expected: generated binding exists; fingerprint test passes.
@@ -213,7 +213,7 @@ Expected: generated binding exists; fingerprint test passes.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add protocol/elide/v1/base.capnp protocol/elide/v1/embed.capnp Makefile build.mts tools/codegen/embed-schema-hash.mts tools/codegen/embed-schema-hash.test.mts packages/generated/main/dev/elide/proto/v1 packages/entry/headers/elide_embed_schema_hash.h
+git add protocol/elide/v1/base.capnp protocol/elide/v1/embed.capnp Makefile build.mts tools/codegen/embed-schema-hash.mts tools/test/embed-schema-hash.test.mts packages/generated/main/dev/elide/proto/v1 packages/entry/headers/elide_embed_schema_hash.h
 git commit -m "feat(runtime): define embedded run protocol"
 ```
 
@@ -496,7 +496,7 @@ PYTHON=yes bun test --timeout 120000 tools/test/smoke/embed-library.test.mts
 
 ```bash
 make test-jvm TEST=Embedded
-bun test tools/codegen/embed-schema-hash.test.mts tools/test/embed-build.test.mts
+bun test tools/test/embed-schema-hash.test.mts tools/test/embed-build.test.mts
 ```
 
 - [ ] **Step 4: Commit**
@@ -572,7 +572,7 @@ Before starting the Aura adapter:
 ```bash
 cd /home/sam/workspace/labs/WHIPLASH
 make test-jvm TEST=Embedded
-bun test tools/codegen/embed-schema-hash.test.mts tools/test/embed-build.test.mts
+bun test tools/test/embed-schema-hash.test.mts tools/test/embed-build.test.mts
 PYTHON=yes bun test --timeout 120000 tools/test/smoke/embed-library.test.mts
 make EMBEDDED=yes DIST=yes build
 ```
