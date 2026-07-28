@@ -11,7 +11,7 @@ and after every upstream merge.
 | File | Why |
 |---|---|
 | `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura, LEGACY_CONFIG_DIR_NAME=.omp (read-only compat for pre-rebrand project dirs); profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE; `readInheritedProfileFromEnvSafe` (was `readPiProfileFromEnvSafe`) scans all three profile vars in that precedence for the pre-profile `PI_CODING_AGENT_DIR` snapshot, since `setProfile` writes all three |
-| `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE; handles the top-level `--check` flag (one-line clean-env health probe, no model/network/provisioning) before delegating |
+| `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE; handles the top-level `--check` flag (one-line clean-env health probe, no model/network/provisioning) before delegating; dispatches the embedded runtime execution/control Worker selectors through the canonical worker-host re-entry path and exercises both full module graphs in `--smoke-test` without loading a library |
 | `packages/coding-agent/src/task/discovery.ts` | `TASK_AGENT_CONFIG_SOURCES` derives from CONFIG_DIR_NAME + LEGACY_CONFIG_DIR_NAME (was a single hardcoded `".omp"`; stale value filtered out all project/user agent dirs after rebrand). Project agent dirs are consumed in priority order so `.aura/agents` beats legacy `.omp/agents` on a name collision, and `projectAgentsDir` only ever reports a writable base |
 | `packages/coding-agent/package.json` | bin: aura alias alongside omp; runtime dependency `capnp-es@0.0.14` for checked-in embedded-protocol readers/writers, plus package-local `typescript@5.9.3` dev peer so that capnp-es codegen does not resolve the workspace's incompatible native-preview TypeScript 7 package |
 | `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` theme in `BUILTIN_THEMES` (import + entry), mirroring `dark`/`light` |
@@ -83,8 +83,9 @@ read fallback, writes never legacy); keep those alongside upstream's.
   `RuntimeSettingsValues` adapter/library settings and process-option mapping,
   `resolve.ts` owns regular-file validation shared by binary and library resolution,
   and `src/runtime/embedded/` contains the exact-precedence shared-library resolver,
-  handwritten embedded wire adapter, schema identity constants, and checked-in
-  TypeScript generated from WHIPLASH's canonical Cap'n Proto closure
+  handwritten embedded wire adapter, schema identity constants, the sole `bun:ffi`
+  ABI owner, the typed serialized-execution/independent-control dual-Worker host and
+  entries, plus checked-in TypeScript generated from WHIPLASH's canonical Cap'n Proto closure
 - `scripts/sync-embedded-runtime-protocol.ts` — canonical WHIPLASH schema-closure
   generation, fingerprinting, and checked-in drift verification
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts` — runtime
@@ -102,9 +103,9 @@ read fallback, writes never legacy); keep those alongside upstream's.
   `test/doctor-command-registration.test.ts`, `test/doctor-tool-gate-drift.test.ts`,
   `test/aura-bin.test.ts`, `test/aura-theme.test.ts`,
   `packages/utils/test/branding.test.ts` — fork-owned tests, including embedded
-  library precedence/file-type contracts, runtime status/doctor selection
-  diagnostics, and LF/tab path row-forging regressions; safe to keep verbatim
-  through any upstream merge
+  library precedence/file-type contracts, ABI copy/free/state ownership, dual-Worker
+  protocol/death/ordered-shutdown behavior, runtime status/doctor selection diagnostics,
+  and LF/tab path row-forging regressions; safe to keep verbatim through any upstream merge
 - `packages/coding-agent/test/discovery/legacy-omp-project-base.test.ts`,
   `test/legacy-omp-compat-paths.test.ts`, `test/cli-help-profile-env.test.ts` —
   legacy `.omp` compat contract: file surfaces load, `.aura` wins conflicts, a
