@@ -259,6 +259,14 @@ describe("default runtime shell rules", () => {
 		expect(result.suggestedTool).toBe(expected);
 	});
 
+	it("routes a sibling `project` subcommand to the generic tool, not project_advice", () => {
+		// `project advice` is the only subcommand a tool owns; `project info`
+		// must not claim to be advice — it falls through to the generic rule.
+		const result = checkBashInterception("elide project info", tools, DEFAULT_BASH_INTERCEPTOR_RULES);
+		expect(result.block).toBe(true);
+		expect(result.suggestedTool).not.toBe("project_advice");
+	});
+
 	it.each([
 		"for f in *.ts; do elide run $f; done",
 		"if [ -f app.ts ]; then elide run app.ts; fi",
