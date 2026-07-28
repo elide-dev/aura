@@ -19,19 +19,9 @@ import type {
 	AgentRunSummary,
 	AgentTelemetryConfig,
 	AgentTelemetryWarning,
-	ChatUsageEvent,
-	ToolStatus,
 } from "@oh-my-pi/pi-agent-core";
 import { logger, postmortem } from "@oh-my-pi/pi-utils";
-import {
-	type Attributes,
-	type AttributeValue,
-	type Counter,
-	context,
-	type Histogram,
-	type Meter,
-	metrics,
-} from "@opentelemetry/api";
+import { type AttributeValue, context, metrics } from "@opentelemetry/api";
 import { type LogAttributes, logs, type Logger as OtelLogger, SeverityNumber } from "@opentelemetry/api-logs";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
@@ -42,7 +32,10 @@ import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { emitTelemetryEvent } from "./events";
 import { buildResourceAttributes } from "./identity";
+import { AuraMetricRecorder } from "./metrics";
+import { registerOtlpSink } from "./sink-otlp";
 
 /**
  * Periodic flush interval. A long-lived `omp` process (the ACP server is
@@ -80,14 +73,13 @@ const LOG_LEVEL_WEIGHT: Record<logger.LogLevel, number> = {
 	debug: 3,
 };
 
-const TOOL_STATUSES = ["ok", "error", "skipped", "blocked", "timeout", "aborted"] satisfies readonly ToolStatus[];
-
 let traceProvider: NodeTracerProvider | undefined;
 let logProvider: LoggerProvider | undefined;
 let meterProvider: MeterProvider | undefined;
-let metricRecorder: AgentMetricRecorder | undefined;
+let metricRecorder: AuraMetricRecorder | undefined;
 let otelLogger: OtelLogger | undefined;
 let unregisterLogSink: (() => void) | undefined;
+let unregisterTelemetrySink: (() => void) | undefined;
 let initPromise: Promise<void> | undefined;
 
 /**
@@ -118,12 +110,16 @@ export function createTelemetryExportConfig(
 		...config,
 		onChatUsage: async event => {
 			await config?.onChatUsage?.(event);
-			metricRecorder?.recordChatUsage(event);
+			emitTelemetryEvent({ type: "chat.usage", event });
 		},
 		onRunEnd: (summary, coverage) => {
 			config?.onRunEnd?.(summary, coverage);
-			metricRecorder?.recordRun(summary, coverage);
+			emitTelemetryEvent({ type: "turn.completed", summary, coverage });
 			emitRunSummaryLog(summary, coverage);
+		},
+		onCostDelta: delta => {
+			config?.onCostDelta?.(delta);
+			emitTelemetryEvent({ type: "cost.delta", delta });
 		},
 		onTelemetryWarning: warning => {
 			config?.onTelemetryWarning?.(warning);
@@ -169,7 +165,7 @@ async function registerProviders(signalConfig: SignalConfig, _options: InitTelem
 			readers: [new PeriodicExportingMetricReader({ exporter })],
 		});
 		metrics.setGlobalMeterProvider(meterProvider);
-		metricRecorder = new AgentMetricRecorder(metrics.getMeter("@oh-my-pi/pi-coding-agent"));
+		metricRecorder = new AuraMetricRecorder(metrics.getMeter("aura"));
 	}
 
 	if (signalConfig.log) {
@@ -179,11 +175,19 @@ async function registerProviders(signalConfig: SignalConfig, _options: InitTelem
 			processors: [new BatchLogRecordProcessor({ exporter })],
 		});
 		logs.setGlobalLoggerProvider(logProvider);
-		otelLogger = logProvider.getLogger("@oh-my-pi/pi-coding-agent");
+		otelLogger = logProvider.getLogger("aura");
 		unregisterLogSink = logger.registerLogSink(event => {
 			emitOtelLog(event.level, event.message, logAttributesFromContext(event.context), "aura.log", event.timestamp);
 		});
 	}
+
+	// Sole bus subscriber. Registered whenever any provider is live: the sink
+	// fans out to metrics and structured logs independently, so a logs-only or
+	// metrics-only configuration still gets its half.
+	unregisterTelemetrySink = registerOtlpSink({
+		recorder: metricRecorder,
+		emitLog: (level, body, attributes, eventName) => emitOtelLog(level, body, attributes, eventName),
+	});
 
 	const flushTimer = setInterval(() => {
 		flushTelemetryExport().catch(() => {});
@@ -194,6 +198,8 @@ async function registerProviders(signalConfig: SignalConfig, _options: InitTelem
 		clearInterval(flushTimer);
 		unregisterLogSink?.();
 		unregisterLogSink = undefined;
+		unregisterTelemetrySink?.();
+		unregisterTelemetrySink = undefined;
 		const shutdowns: Promise<void>[] = [];
 		if (traceProvider) shutdowns.push(traceProvider.shutdown());
 		if (logProvider) shutdowns.push(logProvider.shutdown());
@@ -247,132 +253,6 @@ function signalEnabled(
 		return false;
 	}
 	return true;
-}
-
-class AgentMetricRecorder {
-	readonly #tokenUsage: Histogram<Attributes>;
-	readonly #chatCostUsd: Counter<Attributes>;
-	readonly #runs: Counter<Attributes>;
-	readonly #steps: Counter<Attributes>;
-	readonly #chatCalls: Counter<Attributes>;
-	readonly #chatDurationMs: Histogram<Attributes>;
-	readonly #toolCalls: Counter<Attributes>;
-	readonly #toolDurationMs: Histogram<Attributes>;
-	readonly #errors: Counter<Attributes>;
-
-	constructor(meter: Meter) {
-		this.#tokenUsage = meter.createHistogram("gen_ai.client.token.usage", {
-			description: "Token usage reported by GenAI chat calls.",
-			unit: "{token}",
-		});
-		this.#chatCostUsd = meter.createCounter("aura.agent.chat.cost.estimated_usd", {
-			description: "Estimated USD cost for completed chat calls.",
-			unit: "USD",
-		});
-		this.#runs = meter.createCounter("aura.agent.runs", {
-			description: "Completed agent runs.",
-			unit: "{run}",
-		});
-		this.#steps = meter.createCounter("aura.agent.steps", {
-			description: "Agent loop steps completed inside a run.",
-			unit: "{step}",
-		});
-		this.#chatCalls = meter.createCounter("aura.agent.chat.calls", {
-			description: "Chat calls completed inside agent runs.",
-			unit: "{call}",
-		});
-		this.#chatDurationMs = meter.createHistogram("aura.agent.chat.duration", {
-			description: "Total chat latency observed in an agent run.",
-			unit: "ms",
-		});
-		this.#toolCalls = meter.createCounter("aura.agent.tool.calls", {
-			description: "Tool calls completed inside agent runs.",
-			unit: "{call}",
-		});
-		this.#toolDurationMs = meter.createHistogram("aura.agent.tool.duration", {
-			description: "Total tool latency observed in an agent run.",
-			unit: "ms",
-		});
-		this.#errors = meter.createCounter("aura.agent.errors", {
-			description: "Errors observed in chat and tool execution.",
-			unit: "{error}",
-		});
-	}
-
-	recordChatUsage(event: ChatUsageEvent): void {
-		const baseAttrs = metricAttributes({
-			"gen_ai.operation.name": "chat",
-			"gen_ai.provider.name": event.provider,
-			"gen_ai.request.model": event.model,
-			"gen_ai.response.service_tier": event.serviceTier,
-			"aura.agent.id": event.agent?.id,
-			"aura.agent.name": event.agent?.name,
-		});
-
-		this.#recordToken(event.usage.inputTokens, baseAttrs, "input");
-		this.#recordToken(event.usage.outputTokens, baseAttrs, "output");
-		this.#recordToken(event.usage.totalTokens, baseAttrs, "total");
-		this.#recordToken(event.usage.cachedInputTokens, baseAttrs, "cache_read_input");
-		this.#recordToken(event.usage.cacheWriteTokens, baseAttrs, "cache_write_input");
-		this.#recordToken(event.usage.reasoningOutputTokens, baseAttrs, "reasoning_output");
-
-		if (event.cost && "usd" in event.cost && event.cost.usd > 0) {
-			this.#chatCostUsd.add(event.cost.usd, baseAttrs);
-		}
-	}
-
-	recordRun(summary: AgentRunSummary, coverage: AgentRunCoverage): void {
-		const runAttrs = metricAttributes({
-			"aura.agent.models_used.count": coverage.modelsUsed.length,
-			"aura.agent.providers_used.count": coverage.providersUsed.length,
-			"aura.agent.tools_available.count": coverage.toolsAvailable.length,
-			"aura.agent.tools_invoked.count": coverage.toolsInvoked.length,
-			"aura.agent.tools_unused.count": coverage.toolsUnused.length,
-		});
-
-		this.#runs.add(1, runAttrs);
-		if (summary.stepCount > 0) this.#steps.add(summary.stepCount, runAttrs);
-		if (summary.chats.totalLatencyMs > 0) this.#chatDurationMs.record(summary.chats.totalLatencyMs, runAttrs);
-
-		for (const reason in summary.chats.byStopReason) {
-			const count = summary.chats.byStopReason[reason];
-			if (count > 0)
-				this.#chatCalls.add(count, metricAttributes({ ...runAttrs, "gen_ai.response.finish_reason": reason }));
-		}
-		for (const toolName in summary.tools.byName) {
-			const counters = summary.tools.byName[toolName];
-			const toolAttrs = metricAttributes({ ...runAttrs, "gen_ai.tool.name": toolName });
-			if (counters.totalLatencyMs > 0) this.#toolDurationMs.record(counters.totalLatencyMs, toolAttrs);
-			for (const status of TOOL_STATUSES) {
-				const count = counters[status];
-				if (count > 0) this.#toolCalls.add(count, metricAttributes({ ...toolAttrs, "aura.tool.status": status }));
-			}
-		}
-		for (const errorType in summary.errors.byType) {
-			const count = summary.errors.byType[errorType];
-			if (count > 0) this.#errors.add(count, metricAttributes({ ...runAttrs, "error.type": errorType }));
-		}
-	}
-
-	#recordToken(value: number | undefined, baseAttrs: Attributes, tokenType: string): void {
-		if (!value || value <= 0) return;
-		this.#tokenUsage.record(value, metricAttributes({ ...baseAttrs, "gen_ai.token.type": tokenType }));
-	}
-}
-
-function metricAttributes(fields: Readonly<Record<string, unknown>>): Attributes {
-	const out: Attributes = {};
-	for (const key in fields) {
-		const value = fields[key];
-		if (value === undefined || value === null) continue;
-		if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-			out[key] = value;
-			continue;
-		}
-		const text = String(value);
-		if (text.length > 0) out[key] = text;
-	}
-	return out;
 }
 
 function emitRunSummaryLog(summary: AgentRunSummary, coverage: AgentRunCoverage): void {

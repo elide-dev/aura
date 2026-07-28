@@ -2,3 +2,5 @@
 export * from "./events";
 export * from "./identity";
 export * from "./init";
+export * from "./metrics";
+export * from "./sink-otlp";
