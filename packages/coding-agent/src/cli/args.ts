@@ -39,6 +39,8 @@ export interface Args {
 	apiKey?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
+	/** `--prepend-system-prompt <text-or-file>`: text placed ahead of the harness prompt. */
+	prependSystemPrompt?: string;
 	/** `--runtime <path>`: explicit runtime binary for this run; overrides the `runtime.path` setting. */
 	runtime?: string;
 	thinking?: ConfiguredThinkingLevel;

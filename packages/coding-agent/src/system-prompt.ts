@@ -456,6 +456,14 @@ export interface BuildSystemPromptOptions {
 	appendSystemPrompt?: string;
 	/** Already-loaded append prompt text; bypasses path resolution. */
 	resolvedAppendSystemPrompt?: string;
+	/**
+	 * Text to prepend to the system prompt. The mirror of `appendSystemPrompt`,
+	 * and the mode that matters when posture has to sit *above* the harness
+	 * prompt rather than trail it.
+	 */
+	prependSystemPrompt?: string;
+	/** Already-loaded prepend prompt text; bypasses path resolution. */
+	resolvedPrependSystemPrompt?: string;
 	/** Inline full tool descriptors in the system prompt. Default: false */
 	inlineToolDescriptors?: boolean;
 	/**
@@ -535,6 +543,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		appendSystemPrompt,
 		inlineToolDescriptors: providedInlineToolDescriptors,
 		resolvedAppendSystemPrompt: providedResolvedAppendPrompt,
+		prependSystemPrompt,
+		resolvedPrependSystemPrompt: providedResolvedPrependPrompt,
 		nativeTools = true,
 		skillsSettings,
 		toolNames: providedToolNames,
@@ -569,6 +579,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const prepDefaults = {
 		resolvedCustomPrompt: undefined as string | undefined,
 		resolvedAppendPrompt: undefined as string | undefined,
+		resolvedPrependPrompt: undefined as string | undefined,
 		systemPromptCustomization: null as string | null,
 		contextFiles: dedupeExactContextFiles(providedContextFiles ?? []),
 		skills: providedSkills ?? ([] as Skill[]),
@@ -676,6 +687,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const [
 		resolvedCustomPrompt,
 		resolvedAppendPrompt,
+		resolvedPrependPrompt,
 		systemPromptCustomization,
 		contextFiles,
 		skills,
@@ -697,6 +709,13 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				? Promise.resolve(providedResolvedAppendPrompt)
 				: resolvePromptInput(appendSystemPrompt, "append system prompt"),
 			prepDefaults.resolvedAppendPrompt,
+		),
+		withDeadline(
+			"prependSystemPrompt",
+			providedResolvedPrependPrompt !== undefined
+				? Promise.resolve(providedResolvedPrependPrompt)
+				: resolvePromptInput(prependSystemPrompt, "prepend system prompt"),
+			prepDefaults.resolvedPrependPrompt,
 		),
 		withDeadline("loadSystemPromptFiles", systemPromptCustomizationPromise, prepDefaults.systemPromptCustomization),
 		withDeadline("loadProjectContextFiles", contextFilesPromise, prepDefaults.contextFiles).then(
@@ -787,12 +806,14 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const effectiveSystemPromptCustomization = dedupePromptSource(systemPromptCustomization, [
 		resolvedCustomPrompt,
 		resolvedAppendPrompt,
+		resolvedPrependPrompt,
 	]);
 	const contextPromptSources = contextFiles.map(file => file.content);
 	const promptSources = [
 		effectiveSystemPromptCustomization,
 		resolvedCustomPrompt,
 		resolvedAppendPrompt,
+		resolvedPrependPrompt,
 		...contextPromptSources,
 	];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
@@ -853,6 +874,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	}
 	if (activeRepoContextPrompt) {
 		systemPrompt.push(activeRepoContextPrompt);
+	}
+	// Prepend is its own block ahead of block 0 rather than a template slot: the
+	// point of the mode is to sit ABOVE the harness prompt, and only a separate
+	// leading block does that whether or not a custom prompt replaced block 0.
+	if (resolvedPrependPrompt) {
+		systemPrompt.unshift(resolvedPrependPrompt);
 	}
 
 	return { systemPrompt };

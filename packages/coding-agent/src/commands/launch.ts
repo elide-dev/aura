@@ -63,6 +63,9 @@ export default class Index extends Command {
 		"append-system-prompt": Flags.string({
 			description: "Append text or file contents to the system prompt",
 		}),
+		"prepend-system-prompt": Flags.string({
+			description: "Prepend text or file contents ahead of the system prompt",
+		}),
 		// `--runtime`: declared here for oclif's `--help`; parsed in `cli/args.ts parseArgs`
 		// and applied via `Settings.override("runtime.path", …)` in `main.ts`.
 		runtime: Flags.string({

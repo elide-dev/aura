@@ -1,11 +1,11 @@
 # System Prompt Customization
 
-How the coding-agent assembles the system prompt sent to the model, and what users can control via `SYSTEM.md`, `APPEND_SYSTEM.md`, and the matching CLI flags.
+How the coding-agent assembles the system prompt sent to the model, and what users can control via `SYSTEM.md`, `APPEND_SYSTEM.md`, `PREPEND_SYSTEM.md`, and the matching CLI flags.
 
 Primary implementation:
 
 - `packages/coding-agent/src/system-prompt.ts` (`buildSystemPrompt`, `loadSystemPromptFiles`)
-- `packages/coding-agent/src/main.ts` (`discoverSystemPromptFile`, `discoverAppendSystemPromptFile`)
+- `packages/coding-agent/src/main.ts` (`discoverSystemPromptFile`, `discoverAppendSystemPromptFile`, `discoverPrependSystemPromptFile`)
 - `packages/coding-agent/src/prompts/system/system-prompt.md` (default stable instruction template)
 - `packages/coding-agent/src/prompts/system/custom-system-prompt.md` (internal custom-prompt template; not the normal CLI `SYSTEM.md` path)
 - `packages/coding-agent/src/prompts/system/project-prompt.md` (project/environment footer)
@@ -14,7 +14,7 @@ Primary implementation:
 
 ## 1) Inputs
 
-Four user-controllable inputs feed prompt assembly. All four resolve a value as either a literal string or, if the argument looks like a file path, the contents of that file (`resolvePromptInput`).
+Six user-controllable inputs feed prompt assembly. All four resolve a value as either a literal string or, if the argument looks like a file path, the contents of that file (`resolvePromptInput`).
 
 | Input | Source | Effect |
 |---|---|---|
@@ -22,8 +22,10 @@ Four user-controllable inputs feed prompt assembly. All four resolve a value as 
 | `SYSTEM.md` | `<cwd>/.omp/SYSTEM.md`, then `~/.omp/agent/SYSTEM.md` (and equivalent paths under `.claude`, `.codex`, `.gemini`) | Same effect as `--system-prompt`; used when the flag is absent. |
 | `--append-system-prompt <text-or-file>` | CLI flag | Adds a prompt block. Without a custom system prompt it goes after all default blocks; with one it goes after the custom block and before the preserved project/environment footer. |
 | `APPEND_SYSTEM.md` | Same discovery as `SYSTEM.md` | Same effect as `--append-system-prompt`; used when the flag is absent. |
+| `--prepend-system-prompt <text-or-file>` | CLI flag | Adds a prompt block **ahead of every default block**, including a custom system prompt. Use it for posture that must be read before the harness instructions rather than after them. |
+| `PREPEND_SYSTEM.md` | Same discovery as `SYSTEM.md` | Same effect as `--prepend-system-prompt`; used when the flag is absent. |
 
-Discovery for `SYSTEM.md` / `APPEND_SYSTEM.md` uses `findConfigFile` (`packages/coding-agent/src/config.ts`): the first existing file across the ordered bases (`.omp`, `.claude`, `.codex`, `.gemini` — project-level at `<cwd>` first, then user-level at `~`) wins. **No ancestor walk-up.** Running `omp` from `<repo>/subdir` does not pick up `<repo>/.omp/SYSTEM.md`; the file must live directly under the cwd's config base or in the user-level location. See [`docs/config-usage.md`](./config-usage.md) for the full discovery contract.
+Discovery for `SYSTEM.md` / `APPEND_SYSTEM.md` / `PREPEND_SYSTEM.md` uses `findConfigFile` (`packages/coding-agent/src/config.ts`): the first existing file across the ordered bases (`.omp`, `.claude`, `.codex`, `.gemini` — project-level at `<cwd>` first, then user-level at `~`) wins. **No ancestor walk-up.** Running `omp` from `<repo>/subdir` does not pick up `<repo>/.omp/SYSTEM.md`; the file must live directly under the cwd's config base or in the user-level location. See [`docs/config-usage.md`](./config-usage.md) for the full discovery contract.
 
 Precedence (highest first):
 
@@ -31,11 +33,11 @@ Precedence (highest first):
 2. project `SYSTEM.md`
 3. user `SYSTEM.md`
 
-For append, the same precedence applies between `--append-system-prompt`, project `APPEND_SYSTEM.md`, and user `APPEND_SYSTEM.md`.
+For append, the same precedence applies between `--append-system-prompt`, project `APPEND_SYSTEM.md`, and user `APPEND_SYSTEM.md`; likewise for prepend and `PREPEND_SYSTEM.md`.
 
 ---
 
-## 2) Replace vs. append
+## 2) Replace vs. append vs. prepend
 
 Normal CLI startup builds the default provider-facing prompt blocks first, then applies CLI / discovered file overrides in `packages/coding-agent/src/main.ts`:
 
@@ -60,13 +62,15 @@ Consequences for normal CLI use:
 - Providing `--append-system-prompt` or `APPEND_SYSTEM.md` without a custom system prompt appends a new block after all default blocks.
 - Providing both a custom system prompt and an append prompt produces: custom system prompt block, append prompt block, then the preserved dynamic project/environment footer.
 
+Prepend is the mirror of append and composes independently of both: `--prepend-system-prompt` / `PREPEND_SYSTEM.md` becomes a new block at index 0, so it is read before block 0 whether or not a custom system prompt replaced it. With all three set the order is: prepend block, custom (or default) block, append block, project/environment footer.
+
 If you want to keep both default blocks and add to them, use `--append-system-prompt` / `APPEND_SYSTEM.md` without `--system-prompt` / `SYSTEM.md`. If you want to replace the stable default instructions while keeping the dynamic footer, use `--system-prompt` / `SYSTEM.md`.
 
 ---
 
 ## 3) Templating contract
 
-**Contents of `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, and `--append-system-prompt` are treated as plain text.** They are resolved before prompt-block replacement and are not rendered as Handlebars templates.
+**Contents of `SYSTEM.md`, `APPEND_SYSTEM.md`, `PREPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt`, and `--prepend-system-prompt` are treated as plain text.** They are resolved before prompt-block replacement and are not rendered as Handlebars templates.
 
 The built-in prompt templates are Handlebars (`packages/utils/src/prompt.ts`), but user-provided strings are not compiled with that renderer. The secondary capability path can insert `systemPromptCustomization` into a Handlebars parent template, but a `{{value}}` reference in Handlebars still does not recursively render its substituted contents — the value is emitted as a string. Concretely:
 ```handlebars
