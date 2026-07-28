@@ -646,6 +646,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Explicit runtime binary; overrides discovery and disables auto-download.",
 		},
 	},
+	"runtime.version": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Runtime version",
+			description:
+				"Managed runtime version to use instead of the pinned one. Only the pinned version has a published checksum, so an off-pin version is never downloaded — install it yourself or set the runtime binary path.",
+		},
+	},
 	"runtime.allowShell": {
 		type: "boolean",
 		default: false,
@@ -795,7 +806,7 @@ export const SETTINGS_SCHEMA = {
 
 	"theme.light": {
 		type: "string",
-		default: "light",
+		default: "aura-light",
 		ui: {
 			tab: "appearance",
 			group: "Theme",
@@ -4844,6 +4855,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"skills.enableBundled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Bundled runtime skills",
+			description: "Ship the built-in runtime skills (run/check/build, insights, profiling, JVM, debug & serve)",
+		},
+	},
+
 	"skills.enableCodexUser": { type: "boolean", default: true },
 
 	"skills.enableClaudeUser": { type: "boolean", default: true },
@@ -5740,6 +5762,7 @@ export interface BranchSummarySettings {
 export interface SkillsSettings {
 	enabled?: boolean;
 	enableSkillCommands?: boolean;
+	enableBundled?: boolean;
 	enableCodexUser?: boolean;
 	enableClaudeUser?: boolean;
 	enableClaudeProject?: boolean;

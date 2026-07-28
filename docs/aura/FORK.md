@@ -11,11 +11,18 @@ and after every upstream merge.
 | File | Why |
 |---|---|
 | `packages/utils/src/dirs.ts` | brand constants: APP_NAME=aura, CONFIG_DIR_NAME=.aura, LEGACY_CONFIG_DIR_NAME=.omp (read-only compat for pre-rebrand project dirs); profile env resolution/precedence AURA_PROFILE → OMP_PROFILE → PI_PROFILE; `readInheritedProfileFromEnvSafe` (was `readPiProfileFromEnvSafe`) scans all three profile vars in that precedence for the pre-profile `PI_CODING_AGENT_DIR` snapshot, since `setProfile` writes all three |
-| `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE; handles the top-level `--check` flag (one-line clean-env health probe, no model/network/provisioning) before delegating |
+| `packages/coding-agent/src/cli.ts` | env-profile bootstrap reads AURA_PROFILE (canonical) alongside legacy OMP_PROFILE/PI_PROFILE; handles the top-level `--check` flag (one-line clean-env health probe, no model/network/provisioning) and the top-level `--version`/`-v` (identity block: the runner's `<bin>/<version>` line unchanged, plus a `runtime protocol v<N>` line) before delegating |
 | `packages/coding-agent/src/task/discovery.ts` | `TASK_AGENT_CONFIG_SOURCES` derives from CONFIG_DIR_NAME + LEGACY_CONFIG_DIR_NAME (was a single hardcoded `".omp"`; stale value filtered out all project/user agent dirs after rebrand). Project agent dirs are consumed in priority order so `.aura/agents` beats legacy `.omp/agents` on a name collision, and `projectAgentsDir` only ever reports a writable base |
 | `packages/coding-agent/package.json` | bin: aura alias alongside omp |
-| `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` theme in `BUILTIN_THEMES` (import + entry), mirroring `dark`/`light` |
-| `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`); `theme.light` unchanged; `runtime.*` settings (`runtime.enabled`, `runtime.autoDownload`, `runtime.path`, `runtime.allowShell`) added to the `tools` tab. Runtime shell policy: `RUNTIME_SHELL_INTERCEPTOR_RULES` (routing direct runtime-binary shell commands to `run`/`build`/`serve`/`jvm_*`/`project_advice`) spread onto the tail of `DEFAULT_BASH_INTERCEPTOR_RULES`, plus `RUNTIME_SHELL_RULE_KIND`, `isRuntimeShellAllowed`, `applyRuntimeShellOptOut`, `activeBashInterceptorRules` (the always-on split — see the `tools/bash.ts` row), and an optional `kind?: string` group tag on `BashInterceptorRule`. The rules need no `runtime.enabled` check of their own — `checkBashInterception` already skips a rule whose `tool` is absent from `availableTools`, so the group is inert when the runtime tools are unregistered (`tools/bash-interceptor.ts` is therefore unforked) |
+| `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` and `aura-light` themes in `BUILTIN_THEMES` (imports + entries), mirroring `dark`/`light` |
+| `packages/coding-agent/src/modes/setup-wizard/scenes/theme.ts` | the wizard is a SECOND source of theme defaults and the path most users actually take, so it is aligned to the brand: the "Match terminal" curated option commits `theme.dark: aura` / `theme.light: aura-light` (was `titanium`/`light`) via the `BRAND_DARK_THEME`/`BRAND_LIGHT_THEME` constants, which must stay equal to the `settings-schema.ts` defaults — a schema default the wizard overwrites is not a default. Its description names the pair; `Titanium`/`Light` remain as named non-default choices (redescribed "Neutral dark/light theme" since they no longer are the defaults) |
+| `packages/coding-agent/src/modes/components/welcome.ts` | brand chrome, expressed on upstream's own animated-logo mechanism rather than a ported banner asset. Adds `AURA_LOGO` — a five-row half-block "a u r a" wordmark framed by a thin upper/lower rule, same height as `PI_LOGO` so no consumer's layout moves — and `AURA_LOGO_WIDTH`, which now supplies the welcome box's `minLeftCol` (was a hardcoded `12`, the π mark's width). `GRADIENT_STOPS` became the exported `BRAND_GRADIENT_STOPS` and holds aura's hues: the theme's own `purple`/`violet`/`magenta` vars from `modes/theme/aura.json` plus two tints so the sweep ends bright; `GRADIENT_RAMP_256` is the same walk in xterm indices for the non-truecolor fallback. `introLogoFrame`/`REST_FRAME` feed `AURA_LOGO`. `gradientLogo`/`gradientEscape` and the whole phase+shine animation are upstream's, untouched — only the letters and the hues are the fork's. `PI_LOGO` is retained verbatim (unused) so an upstream edit to it merges cleanly |
+| `packages/coding-agent/src/modes/setup-wizard/scenes/splash.ts` | the splash hero renders the aura wordmark: `LARGE_LOGO` doubles `AURA_LOGO` (was `PI_LOGO`), the compact fallback picks `AURA_LOGO`, and the wordmark caption is `SPACED_APP_NAME` (`[...APP_NAME].join(" ")`, i.e. `a u r a`) instead of the literal `"O h   M y   P i"` |
+| `packages/coding-agent/src/modes/setup-wizard/scenes/outro.ts` | one symbol: the outro's fading logo sweep renders `AURA_LOGO` |
+| `packages/coding-agent/src/modes/setup-wizard/wizard-overlay.ts` | one symbol: the wizard scene header renders `AURA_LOGO` |
+| `packages/coding-agent/src/tools/renderers.ts` | one import + one `...runtimeToolRenderers` spread at the head of `toolRenderers`, registering the fourteen runtime tool renderers. The spread is first so a future upstream entry with the same key would win rather than be silently shadowed; all renderer logic lives in the fork-owned `tools/runtime-renderer.ts`, so this row stays a two-line change through any merge |
+| `packages/coding-agent/src/cli/gallery-fixtures/index.ts` | one import + one `...runtimeFixtures` spread, adding the runtime tool family's `omp gallery` sample data (the fixtures themselves are the fork-owned sibling module `gallery-fixtures/runtime.ts`). Without it the coverage test still passes — unfixtured tools fall back to a generic sample — but the runtime rows render as placeholder args |
+| `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`) and `theme.light` default = `aura-light` (was `light`), so the fork's terminal-background auto light/dark switching stays on-brand in both directions; `runtime.*` settings (`runtime.enabled`, `runtime.autoDownload`, `runtime.path`, `runtime.version`, `runtime.allowShell`) added to the `tools` tab, plus `skills.enableBundled` (default `true`, `tools`/`Runtime` tab-group) and its `enableBundled?: boolean` field on `SkillsSettings` — `settings.getGroup("skills")` derives the object from the `skills.*` keys, so the new toggle threads to `loadSkills` with no call-site change. Runtime shell policy: `RUNTIME_SHELL_INTERCEPTOR_RULES` (routing direct runtime-binary shell commands to `run`/`build`/`serve`/`jvm_*`/`project_advice`) spread onto the tail of `DEFAULT_BASH_INTERCEPTOR_RULES`, plus `RUNTIME_SHELL_RULE_KIND`, `isRuntimeShellAllowed`, `applyRuntimeShellOptOut`, `activeBashInterceptorRules` (the always-on split — see the `tools/bash.ts` row), and an optional `kind?: string` group tag on `BashInterceptorRule`. The rules need no `runtime.enabled` check of their own — `checkBashInterception` already skips a rule whose `tool` is absent from `availableTools`, so the group is inert when the runtime tools are unregistered (`tools/bash-interceptor.ts` is therefore unforked) |
 | `packages/coding-agent/src/tools/bash.ts` | the interception block no longer sits behind `if (settings.get("bashInterceptor.enabled"))`; it selects its rules through `activeBashInterceptorRules(getBashInterceptorRules(), settings.get("bashInterceptor.enabled"))` and runs whenever that is non-empty. The runtime-routing group is therefore always evaluated (it is policy, and would be inert on every default install since `bashInterceptor.enabled` defaults to `false`), while upstream's deliberately-softened cat/grep/sed nudges stay behind the toggle exactly as before. The runtime group keeps its own two gates: tool availability and the `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` opt-out. Resolve an upstream conflict here by keeping upstream's loop body and re-applying the rule-selection call |
 | `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`; imports the five `Runtime*Tool` classes and registers `run`/`check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates; also imports the six `Jvm*Tool` classes and registers `jvm_run`/`jvm_disassemble`/`jvm_format`/`jvm_jar`/`jvm_deps`/`jvm_javadoc` the same way (same `runtime.enabled` gate, all `discoverable`); plus `RuntimeDebugTool`/`RuntimeServeTool` registered as `runtime_debug`/`serve` on the same gate, and `RuntimeAdviceTool` registered as `project_advice` on the same gate (the one runtime tool with `approval: "read"` — fixed argv, no caller-supplied code or output path) |
 | `packages/coding-agent/src/tools/builtin-names.ts` | appended `run`, `check`, `build`, `insights`, `profile` and the six JVM names `jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc` to `BUILTIN_TOOL_NAMES` (no collision with the `search`→`grep` / `find`→`glob` legacy alias map; the `jvm_` prefix is the user-facing name, never a product name), then `runtime_debug` and `serve` — `runtime_debug` is deliberately NOT `debug`, which upstream already owns for the interactive stepping debugger (`tools/debug.ts`) — then `project_advice` |
@@ -28,9 +35,16 @@ and after every upstream merge.
 | `packages/coding-agent/src/secrets/index.ts` | project secrets read `<cwd>/${CONFIG_DIR_NAME}/secrets.yml` (was a hardcoded `.omp`) with a `.omp` read fallback via `loadProjectSecretsFile` |
 | `packages/coding-agent/src/cli/agents-cli.ts` | `agents unpack --project` targets `<projectDir>/${CONFIG_DIR_NAME}/agents` (was a hardcoded `.omp`); discovery reads both dirs, so the write side is branded-only |
 | `packages/coding-agent/src/advisor/watchdog.ts` | `collectConfigCandidates` probes `NATIVE_CONFIG_DIR_NAMES` (branded + legacy `.omp`) per ancestor instead of only `.omp`, and the owner-dir/level classification keys off that list |
-| `packages/coding-agent/src/cli/args.ts` | `getExtraHelpText` documents `AURA_PROFILE` first with `OMP_PROFILE` marked legacy; `agents unpack` examples use `${APP_NAME}` and `${CONFIG_DIR_NAME}` |
+| `packages/coding-agent/src/cli/args.ts` | `Args.prependSystemPrompt`; `Args.runtime` (the `--runtime <path>` flag); `getExtraHelpText` documents `AURA_PROFILE` first with `OMP_PROFILE` marked legacy; `agents unpack` examples use `${APP_NAME}` and `${CONFIG_DIR_NAME}` |
+| `packages/coding-agent/src/system-prompt.ts` | `prependSystemPrompt` / `resolvedPrependSystemPrompt` on `BuildSystemPromptOptions`, resolved through the same `withDeadline` prep as the append pair and `unshift`ed as its own leading block (a template slot could not sit above a custom prompt that replaced block 0); the resolved text also joins the customization/always-apply-rule dedupe sources |
+| `packages/coding-agent/src/cli/flag-tables.ts` | `--prepend-system-prompt <text-or-file>` and `--runtime <path>` added to `STRING_SETTERS` (the single source of truth for string-valued launch flags, so the profile bootstrap and subcommand resolver pick it up automatically) |
+| `packages/coding-agent/src/main.ts` | `discoverPrependSystemPromptFile` (`PREPEND_SYSTEM.md`, project then global, mirroring `discoverAppendSystemPromptFile`), resolved in `buildSessionOptions` and applied through a fourth `applyResolvedSystemPromptInputs` parameter; `--prepend-system-prompt` also joins the fork-cache-shape check; the `--version` launch-flag path prints `RUNTIME_PROTOCOL_LINE` under `VERSION`, matching the top-level interception in `cli.ts`; `--runtime <path>` applied as an ephemeral `Settings.override("runtime.path", …)` alongside the other CLI-flag overrides, so every `settings.get("runtime.path")` site (innate-tool endpoint resolution included) observes it |
+| `packages/coding-agent/src/commands/launch.ts` | `prepend-system-prompt: Flags.string(...)` and `runtime: Flags.string(...)` declared for oclif's generated `--help`; the real parse lives in `cli/args.ts` (same pattern as `--auto-approve` / `--approval-mode`) |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
-| `packages/coding-agent/src/sdk.ts` | wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
+| `packages/coding-agent/src/sdk.ts` | `CreateAgentSessionOptions.prependSystemPrompt`, forwarded to `buildSystemPrompt` as `resolvedPrependSystemPrompt` and included in the fork-cache-shape check; wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
+| `packages/coding-agent/src/discovery/index.ts` | one line: `import "./builtin-skills";` in the provider side-effect import block, registering the bundled runtime-skills provider |
+| `packages/coding-agent/src/capability/skill.ts` | added `BUILTIN_SKILLS_PROVIDER_ID = "builtin-skills"`, mirroring `BUILTIN_DEFAULTS_PROVIDER_ID` on the rule capability, so consumers can identify a bundled skill without importing (and registering) the provider |
+| `packages/coding-agent/src/extensibility/skills.ts` | `loadSkills` destructures `enableBundled = true` and `isSourceEnabled` gains an explicit `BUILTIN_SKILLS_PROVIDER_ID` branch above the third-party toggles. Load-bearing: the fallback at the end of `isSourceEnabled` returns `anyThirdPartySkillToggleEnabled`, which would let the Codex/Claude/Pi toggles silently retire an agent-native bundled skill (the same class of bug as issue #2401 for managed skills) |
 | `packages/metaharness/agent/omp_local.py` | Harbor's local-agent adapter stages generated gateway routing and benchmark config under the branded `~/.aura/agent` directory so Aura finds `models.yml` and does not fail before its first model request |
 | `packages/metaharness/src/runner.ts` | accepts `--path` for deterministic local Harbor capability tasks in addition to registry datasets, allowing Aura's runtime benchmark to execute checked-in/materialized task fixtures |
 | `packages/metaharness/src/runner.test.ts` | covers Aura's local Harbor `--path` launch contract alongside registry dataset launches |
@@ -43,7 +57,7 @@ and after every upstream merge.
 | `packages/metaharness/package.json` | exposes the `bench:runtime` package script for the Aura runtime capability and microbenchmark suite |
 | `packages/metaharness/README.md` | documents the one-command runtime benchmark, its comparison contract, outputs, and focused run modes |
 | `package.json` | exposes root `bench:runtime` as the one-command entrypoint for Aura's matched-arm runtime evaluation |
-| `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` / `runtime.allowShell` and linking the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out |
+| `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` / `runtime.allowShell` and linking the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out, and a `#### Bundled runtime skills` subsection covering `skills.enableBundled` and the materialization directory |
 | `AGENTS.md` | appended the `## Aura fork conventions` section (points contributors at this file, states the runtime naming rule, locates specs/plans) |
 | `bun.lock` | one line: the `aura` bin entry mirroring the `packages/coding-agent/package.json` change. Regenerate with `bun install` rather than resolving a merge conflict by hand |
 
@@ -76,20 +90,45 @@ read fallback, writes never legacy); keep those alongside upstream's.
 
 `packages/utils/test/`: `dirs-cache`, `dirs-python-gateway`, `profiles`.
 
+`packages/coding-agent/test/skills.test.ts` additionally carries one fork line:
+`enableBundled: false` in its `DISABLE_ALL_BUILTIN_SKILLS` helper. That helper
+means "every built-in skill source off", and the bundled runtime provider is a
+new source; without it the tests asserting an exact custom-directory skill list
+(and the "empty when all sources disabled" case) would see the five bundled
+skills. Resolve an upstream conflict by keeping upstream's toggles and
+re-appending this one.
+
 ## Fork-added files and directories (additive, no merge risk)
 
 - `packages/coding-agent/src/runtime/` — runtime capability core
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts`
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts`
+- `packages/coding-agent/src/cli/version-identity.ts` — `--version` identity line
+  (`<app>/<version>` + runtime protocol version)
+- `packages/coding-agent/src/discovery/builtin-skills.ts`,
+  `src/discovery/builtin-skill-sources/*.md` — bundled runtime skills, materialized
+  into the agent dir under a `.bundled.json` manifest that is the sole prune authority
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
   keeping a process registry of its own), `src/prompts/tools/runtime-*.md`
-- `packages/coding-agent/src/modes/theme/aura.json` — the `aura` built-in theme
-  registered by the `theme.ts` row above
+- `packages/coding-agent/src/tools/runtime-renderer.ts` — TUI renderers for the whole
+  runtime tool family. One factory over declarative per-tool `describeCall` /
+  `describeResult` specs, in the `glob`/`hub` house style (status line + short output
+  preview, `inline`, `mergeCallAndResult`). It adds no truncation of its own: the
+  central spill in `tools/output-meta.ts` stays the sole authority, and the renderer
+  only strips the notices (`(exit code N)`, the spill's own footer) that the header
+  restates. `src/cli/gallery-fixtures/runtime.ts` is its `omp gallery` sample data
+- `packages/coding-agent/src/modes/theme/aura.json`, `src/modes/theme/aura-light.json` —
+  the `aura` / `aura-light` built-in themes registered by the `theme.ts` row above.
+  `aura-light` is the brand light counterpart: same `vars` brand palette (magenta /
+  violet / purple), deepened `*Deep` variants where the brand hue is used as text on a
+  near-white surface, and a `colors` sub-key set held equal to `light.json`'s by
+  `test/aura-light-theme.test.ts`
 - `packages/coding-agent/test/runtime-*.test.ts`, `test/doctor-cli.test.ts`,
   `test/doctor-command-registration.test.ts`, `test/doctor-tool-gate-drift.test.ts`,
   `test/aura-bin.test.ts`,
-  `test/aura-theme.test.ts`, `packages/utils/test/branding.test.ts` — fork-owned
+  `test/aura-theme.test.ts`, `test/aura-light-theme.test.ts`,
+  `test/runtime-tool-renderers.test.ts`, `packages/utils/test/branding.test.ts` — fork-owned
   tests; safe to keep verbatim through any upstream merge
 - `packages/coding-agent/test/discovery/legacy-omp-project-base.test.ts`,
   `test/legacy-omp-compat-paths.test.ts`, `test/cli-help-profile-env.test.ts` —
@@ -100,6 +139,19 @@ read fallback, writes never legacy); keep those alongside upstream's.
 - `docs/tools/{run,check,build,insights,profile,runtime_debug,serve}.md` — root docs pages required by the
   `omp://` docs-coverage guard (`test/internal-urls/docs-tool-coverage.test.ts` asserts one
   `docs/tools/<name>.md` per entry in `BUILTIN_TOOL_NAMES`)
+- `packages/coding-agent/src/discovery/builtin-skills.ts` + `src/discovery/builtin-skill-sources/`
+  (`runtime.md`, `insights.md`, `profiling.md`, `jvm.md`, `stateful-debugger.md`, `index.ts`) —
+  the bundled runtime skills, embedded via `with { type: "text" }` so they survive
+  `bun build --compile`, exactly as `discovery/builtin-rules/` does for rules. The provider
+  materializes them into `<agentDir>/builtin-skills/<name>/SKILL.md` before scanning:
+  unlike a `Rule` (whose body lives in memory and is served by `rule://`), a `Skill` is a
+  path, and `buildSkillPromptMessage` plus the `skill://` handler both re-read
+  `Skill.filePath` off disk. What it wrote is recorded in a `.bundled.json` manifest,
+  and that manifest is the only deletion authority — the same directory is a place a
+  user may park a skill of their own, and a bare user-authored `SKILL.md` is
+  shape-identical to one we wrote. Priority 3 — below managed auto-learn (5) and every
+  authored provider — so any same-named skill overrides a bundled one
+- `packages/coding-agent/test/discovery/builtin-skills.test.ts` — fork-owned
 - `docs/aura/`, `docs/superpowers/`
 
 ## Naming rule

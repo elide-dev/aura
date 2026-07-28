@@ -369,6 +369,12 @@ export interface CreateAgentSessionOptions {
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
 	/**
+	 * Already-loaded text placed in its own block AHEAD of the harness prompt.
+	 * The mirror of {@link appendSystemPrompt}, for posture that has to be read
+	 * before the harness instructions rather than after them.
+	 */
+	prependSystemPrompt?: string;
+	/**
 	 * Already-loaded title-generation system prompt override (typically
 	 * {@link discoverTitleSystemPromptFile} → {@link resolvePromptInput}). When
 	 * set, every automatic session-title generation path on this session — the
@@ -1289,6 +1295,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options.systemPrompt !== undefined ||
 		options.customSystemPrompt !== undefined ||
 		options.appendSystemPrompt !== undefined ||
+		options.prependSystemPrompt !== undefined ||
 		options.toolNames !== undefined ||
 		options.customTools !== undefined;
 	const inheritedPromptCacheKey = forkCacheShapeChanged
@@ -1665,6 +1672,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					enabled: settings.get("runtime.enabled"),
 					autoDownload: settings.get("runtime.autoDownload"),
 					path: settings.get("runtime.path") ?? "",
+					version: settings.get("runtime.version") ?? "",
 				});
 				return opts ? getOrCreateRuntimeService(opts) : undefined;
 			},
@@ -2707,6 +2715,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				rules: rulebookRules,
 				alwaysApplyRules,
 				resolvedAppendSystemPrompt: appendPrompt,
+				resolvedPrependSystemPrompt: options.prependSystemPrompt,
 				skillsSettings: settings.getGroup("skills"),
 				inlineToolDescriptors,
 				nativeTools,

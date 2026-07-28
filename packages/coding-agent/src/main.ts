@@ -29,6 +29,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
+import { RUNTIME_PROTOCOL_LINE } from "./cli/version-identity";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import {
@@ -810,17 +811,37 @@ function discoverAppendSystemPromptFile(): string | undefined {
 	return undefined;
 }
 
+/**
+ * Discover `PREPEND_SYSTEM.md` if no CLI prepend system prompt was provided.
+ * Same discovery contract as its append counterpart: project first, then global.
+ */
+export function discoverPrependSystemPromptFile(): string | undefined {
+	const projectPath = findConfigFile("PREPEND_SYSTEM.md", { user: false });
+	if (projectPath) {
+		return projectPath;
+	}
+	const globalPath = findConfigFile("PREPEND_SYSTEM.md", { user: true });
+	if (globalPath) {
+		return globalPath;
+	}
+	return undefined;
+}
+
 /** Apply resolved CLI/discovered prompt files without bypassing system prompt templates. */
 export function applyResolvedSystemPromptInputs(
 	options: CreateAgentSessionOptions,
 	resolvedSystemPrompt: string | undefined,
 	resolvedAppendPrompt: string | undefined,
+	resolvedPrependPrompt?: string | undefined,
 ): void {
 	if (resolvedSystemPrompt) {
 		options.customSystemPrompt = resolvedSystemPrompt;
 	}
 	if (resolvedAppendPrompt) {
 		options.appendSystemPrompt = resolvedAppendPrompt;
+	}
+	if (resolvedPrependPrompt) {
+		options.prependSystemPrompt = resolvedPrependPrompt;
 	}
 }
 
@@ -848,10 +869,12 @@ export async function buildSessionOptions(
 	// Auto-discover SYSTEM.md if no CLI system prompt provided
 	const systemPromptSource = parsed.systemPrompt ?? discoverSystemPromptFile();
 	const appendPromptSource = parsed.appendSystemPrompt ?? discoverAppendSystemPromptFile();
+	const prependPromptSource = parsed.prependSystemPrompt ?? discoverPrependSystemPromptFile();
 	const titleSystemPromptSource = discoverTitleSystemPromptFile();
-	const [resolvedSystemPrompt, resolvedAppendPrompt, titleSystemPrompt] = await Promise.all([
+	const [resolvedSystemPrompt, resolvedAppendPrompt, resolvedPrependPrompt, titleSystemPrompt] = await Promise.all([
 		resolvePromptInput(systemPromptSource, "system prompt"),
 		resolvePromptInput(appendPromptSource, "append system prompt"),
+		resolvePromptInput(prependPromptSource, "prepend system prompt"),
 		resolvePromptInput(titleSystemPromptSource, "title system prompt"),
 	]);
 
@@ -873,6 +896,7 @@ export async function buildSessionOptions(
 			parsed.thinking !== undefined ||
 			parsed.systemPrompt !== undefined ||
 			parsed.appendSystemPrompt !== undefined ||
+			parsed.prependSystemPrompt !== undefined ||
 			parsed.tools !== undefined ||
 			parsed.noTools === true;
 		if (!forkCacheShapeChanged && header?.providerPromptCacheKey) {
@@ -1030,7 +1054,7 @@ export async function buildSessionOptions(
 	// (handled by caller before createAgentSession)
 
 	// System prompt
-	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt);
+	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt, resolvedPrependPrompt);
 	// Replan-driven title refresh resolves the override from this same field on
 	// `AgentSession`, so threading it through `CreateAgentSessionOptions` keeps
 	// both first-input titling (`input-controller.ts`) and replan refresh
@@ -1109,7 +1133,9 @@ export async function runRootCommand(
 	const modelRegistry = logger.time("modelRegistry:init", () => new ModelRegistry(authStorage));
 
 	if (parsedArgs.version) {
-		writeStartupNotice(parsedArgs, `${VERSION}\n`);
+		// Same identity the top-level `aura --version` interception prints (cli.ts):
+		// version first, then the runtime protocol version, matching `aura runtime status`.
+		writeStartupNotice(parsedArgs, `${VERSION}\n${RUNTIME_PROTOCOL_LINE}\n`);
 		process.exit(0);
 	}
 
@@ -1220,6 +1246,13 @@ export async function runRootCommand(
 	// Apply --advisor CLI flag (ephemeral, not persisted)
 	if (parsedArgs.advisor) {
 		settingsInstance.override("advisor.enabled", true);
+	}
+	// `--runtime <path>` (ephemeral): the flag form of `runtime.path`, so every
+	// `settings.get("runtime.path")` site — the innate tools' endpoint resolution
+	// included — sees it. An explicit path suppresses auto-download downstream and
+	// resolves with `source: "flag"`.
+	if (parsedArgs.runtime) {
+		settingsInstance.override("runtime.path", parsedArgs.runtime);
 	}
 
 	await logger.time(

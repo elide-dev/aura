@@ -240,7 +240,7 @@ export class WelcomeComponent implements Component {
 		}
 		const dualContentWidth = boxWidth - 3; // 3 = │ + │ + │
 		const preferredLeftCol = 26;
-		const minLeftCol = 12; // logo width
+		const minLeftCol = AURA_LOGO_WIDTH; // logo width
 		const minRightCol = 20;
 		const leftMinContentWidth = Math.max(
 			minLeftCol,
@@ -450,19 +450,45 @@ export class WelcomeComponent implements Component {
 	}
 }
 
+/** Upstream's π mark. Retained verbatim for merge parity; the fork renders
+ *  {@link AURA_LOGO} at every site. */
 export const PI_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
 
-/** Multi-stop palette for the diagonal gradient. */
-const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
-	[255, 92, 200], // hot pink
-	[200, 110, 255], // violet
-	[120, 130, 255], // periwinkle
-	[60, 200, 255], // bright cyan
-	[120, 255, 220], // mint
+/**
+ * The aura wordmark: a lowercase "a u r a" in half-block letterforms, framed
+ * above and below by a thin rule so the diagonal sweep and shine read as a
+ * band of light crossing the mark — the "aura". Same five-row height as
+ * {@link PI_LOGO} so the welcome box and the splash scenes keep their layout.
+ */
+export const AURA_LOGO = [
+	" ▀▀▀▀▀▀▀▀▀▀▀▀▀ ",
+	"▄▄▄ ▄ ▄ ▄▄▄ ▄▄▄",
+	"▄▄█ █ █ █   ▄▄█",
+	"█▄█ █▄█ █   █▄█",
+	" ▄▄▄▄▄▄▄▄▄▄▄▄▄ ",
 ];
 
-/** 256-color ramp fallback when truecolor isn't available. */
-const GRADIENT_RAMP_256 = [199, 171, 135, 99, 75, 51, 87];
+/** Column count of {@link AURA_LOGO}; the welcome box's minimum left column. */
+const AURA_LOGO_WIDTH = Math.max(...AURA_LOGO.map(line => line.length));
+
+/**
+ * Multi-stop palette for the diagonal gradient, in aura's brand hues so the
+ * animated mark matches the default `aura` theme. The three interior stops are
+ * the theme's own `purple`/`violet`/`magenta` vars (see `modes/theme/aura.json`);
+ * the last two are tints of magenta and violet that carry the sweep into a
+ * bright highlight instead of dead-ending on the darkest hue.
+ */
+export const BRAND_GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
+	[102, 45, 145], // aura purple  #662d91
+	[151, 71, 255], // aura violet  #9747ff
+	[231, 0, 140], // aura magenta #e7008c
+	[255, 92, 200], // magenta tint #ff5cc8
+	[201, 166, 255], // violet tint  #c9a6ff
+];
+
+/** 256-color ramp fallback when truecolor isn't available: the same
+ *  purple → violet → magenta → pink → lilac walk, in xterm indices. */
+const GRADIENT_RAMP_256 = [54, 91, 127, 165, 199, 213, 183];
 
 /** Half-width of the shine highlight band, expressed in gradient-t units. */
 const SHINE_HALF_WIDTH = 0.18;
@@ -486,7 +512,7 @@ export function gradientEscape(t: number, shine?: ShineConfig): string {
 	if (TERMINAL.trueColor) {
 		// 5-stop palette widens the visible color range and avoids the
 		// deep-blue valley a naive HSL lerp falls into.
-		const stops = GRADIENT_STOPS;
+		const stops = BRAND_GRADIENT_STOPS;
 		const seg = t * (stops.length - 1);
 		const i = Math.min(stops.length - 2, Math.floor(seg));
 		const f = seg - i;
@@ -528,7 +554,8 @@ export function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineC
 	const rows = lines.length;
 	const cols = Math.max(...lines.map(l => l.length));
 	// span+1 so `base` stays strictly < 1: avoids the wrap-around at the
-	// far corner mapping back to t=0 (hot pink) on the resting frame.
+	// far corner mapping back to t=0 (aura purple, the first brand stop) on
+	// the resting frame.
 	const span = Math.max(1, cols + rows - 1);
 	return lines.map((line, y) => {
 		let result = "";
@@ -571,8 +598,8 @@ function introLogoFrame(progress: number): string[] {
 	const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
 	const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
 	const shineStrength = (1 - eased) ** 1.5;
-	return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
+	return gradientLogo(AURA_LOGO, phase, { strength: shineStrength, pos: shinePos });
 }
 
 /** Resting gradient frame, cached for re-renders outside of the intro. */
-const REST_FRAME = gradientLogo(PI_LOGO, 0);
+const REST_FRAME = gradientLogo(AURA_LOGO, 0);

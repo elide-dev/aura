@@ -13,6 +13,16 @@ export interface ResolvedRuntime {
 export interface ResolveOptions {
 	/** From `--runtime` or the `runtime.path` setting. */
 	explicitPath?: string;
+	/**
+	 * Managed-install version to look for, from the `runtime.version` setting.
+	 * Defaults to the pinned {@link ELIDE_VERSION}. Selection only: resolution
+	 * never falls back to a different installed version, because "I asked for
+	 * 1.4.1 and silently got 1.6" is the failure mode the setting exists to
+	 * prevent.
+	 */
+	version?: string;
+	/** Install root override (tests). Defaults to {@link managedRuntimeRoot}. */
+	managedRoot?: string;
 	env?: NodeJS.ProcessEnv;
 	/** Hermetic tests: skip the PATH fallback. */
 	disablePathLookup?: boolean;
@@ -22,8 +32,8 @@ export function managedRuntimeRoot(): string {
 	return path.join(os.homedir(), CONFIG_DIR_NAME, "runtime");
 }
 
-export function managedVersionDir(version = ELIDE_VERSION): string {
-	return path.join(managedRuntimeRoot(), version);
+export function managedVersionDir(version = ELIDE_VERSION, root = managedRuntimeRoot()): string {
+	return path.join(root, version);
 }
 
 const BINARY_NAMES = process.platform === "win32" ? ["elide.exe", "elide.cmd", "elide"] : ["elide"];
@@ -79,7 +89,7 @@ export async function resolveRuntimeBinary(opts: ResolveOptions = {}): Promise<R
 		if (await isFile(p)) return { binaryPath: p, source: "env" };
 		return null;
 	}
-	const managed = await findBinaryInTree(managedVersionDir());
+	const managed = await findBinaryInTree(managedVersionDir(opts.version, opts.managedRoot));
 	if (managed) return { binaryPath: managed, source: "managed" };
 	if (!opts.disablePathLookup) {
 		const onPath = Bun.which("elide");

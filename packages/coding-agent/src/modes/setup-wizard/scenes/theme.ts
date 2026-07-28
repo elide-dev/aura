@@ -23,10 +23,23 @@ import type { SetupScene, SetupSceneController, SetupSceneHost } from "./types";
 
 type ThemeMode = "curated" | "all";
 
+/**
+ * The theme pair "Match terminal" commits. It must stay equal to the
+ * `theme.dark` / `theme.light` defaults in `config/settings-schema.ts`: the
+ * wizard is the second source of theme defaults and the one most users go
+ * through, so a schema default the wizard overwrites is not a default at all.
+ */
+const BRAND_DARK_THEME = "aura";
+const BRAND_LIGHT_THEME = "aura-light";
+
 const CURATED_ITEMS: readonly SelectItem[] = [
-	{ value: "auto", label: "Match terminal", description: "Titanium in dark terminals, Light in light terminals" },
-	{ value: "theme:titanium", label: "Titanium", description: "Default dark theme" },
-	{ value: "theme:light", label: "Light", description: "Default light theme" },
+	{
+		value: "auto",
+		label: "Match terminal",
+		description: "Aura in dark terminals, Aura Light in light terminals",
+	},
+	{ value: "theme:titanium", label: "Titanium", description: "Neutral dark theme" },
+	{ value: "theme:light", label: "Light", description: "Neutral light theme" },
 	{ value: "colorblind", label: "Colorblind colors", description: "Adjust red/green contrast" },
 	{ value: "ansi", label: "ANSI-safe", description: "ASCII glyphs with the dark terminal theme" },
 	{ value: "browse", label: "Browse all…", description: "Show every built-in and custom theme" },
@@ -240,8 +253,8 @@ class ThemeSceneController implements SetupSceneController {
 
 	async #commit(value: string): Promise<void> {
 		if (value === "auto") {
-			this.host.ctx.settings.set("theme.dark", "titanium");
-			this.host.ctx.settings.set("theme.light", "light");
+			this.host.ctx.settings.set("theme.dark", BRAND_DARK_THEME);
+			this.host.ctx.settings.set("theme.light", BRAND_LIGHT_THEME);
 			await this.#applyPreviewPresentation(this.#originalSymbolPreset, this.#originalColorBlindMode);
 			enableAutoTheme();
 			return;

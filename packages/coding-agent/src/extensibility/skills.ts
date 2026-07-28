@@ -6,7 +6,7 @@ import {
 	MANAGED_SKILLS_PROVIDER_ID,
 	sanitizeManagedDescription,
 } from "../autolearn/managed-skills";
-import { skillCapability } from "../capability/skill";
+import { BUILTIN_SKILLS_PROVIDER_ID, skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
@@ -131,6 +131,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		enablePiProject = true,
 		enableAgentsUser = true,
 		enableAgentsProject = true,
+		enableBundled = true,
 		customDirectories = [],
 		ignoredSkills = [],
 		includeSkills = [],
@@ -158,6 +159,10 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		// — third-party CLI toggles must never silently hide them (cf. #2401). The
 		// master `enabled` flag above still gates them.
 		if (provider === MANAGED_SKILLS_PROVIDER_ID) return true;
+		// Bundled runtime skills are agent-native: they ship with the binary and
+		// have their own toggle, so the third-party CLI fallback below must never
+		// decide their fate.
+		if (provider === BUILTIN_SKILLS_PROVIDER_ID) return enableBundled;
 		if (provider === "codex" && level === "user") return enableCodexUser;
 		if (provider === "claude" && level === "user") return enableClaudeUser;
 		if (provider === "claude" && level === "project") return enableClaudeProject;

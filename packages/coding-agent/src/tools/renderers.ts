@@ -27,6 +27,7 @@ import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
 import { readToolRenderer } from "./read";
 import { resolveRenderer } from "./resolve";
+import { runtimeToolRenderers } from "./runtime-renderer";
 import { todoToolRenderer } from "./todo";
 import { createVibeToolRenderer } from "./vibe";
 import { writeToolRenderer } from "./write";
@@ -78,6 +79,9 @@ export type ToolRenderer = {
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {
+	// Runtime tool family (`run`/`check`/`build`/`insights`/`profile`/`jvm_*`/
+	// `runtime_debug`/`serve`/`project_advice`) — one factory, per-tool specs.
+	...runtimeToolRenderers,
 	ask: askToolRenderer as ToolRenderer,
 	ast_grep: astGrepToolRenderer as ToolRenderer,
 	ast_edit: astEditToolRenderer as ToolRenderer,

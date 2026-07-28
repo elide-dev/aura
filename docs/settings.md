@@ -487,6 +487,7 @@ runtime:
   enabled: true
   autoDownload: true
   path: ""
+  version: ""
   allowShell: false
 ```
 
@@ -494,8 +495,35 @@ runtime:
 |---|---|---|---|
 | `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile`, `runtime_debug`/`serve`, and `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
-| `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
+| `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. Also settable per-run with `--runtime <path>`, which reports `source: flag` in `aura runtime status`. |
+| `runtime.version` | string | `""` | Managed runtime version to select instead of the pinned one, i.e. `~/.aura/runtime/<version>/`. Empty uses the pinned version. **Only the pinned version has a published sha256**, so an off-pin version is never downloaded: if that install is absent, the runtime reports missing with guidance rather than performing an unverified fetch. Install it yourself under that directory, or use `runtime.path`. |
 | `runtime.allowShell` | boolean | `false` | Stop routing direct runtime-binary shell commands to the innate tools. See below. |
+
+#### Bundled runtime skills
+
+Five skills ship with the agent and are discovered in every session:
+`skill://runtime` (the `run`/`check`/`build` surface and when to prefer it over
+`bash` or `eval`), `skill://insights`, `skill://profiling`, `skill://jvm`, and
+`skill://stateful-debugger` (the `runtime_debug`/`serve` flows and their
+`hub`-owned lifecycle). They carry the strategy the per-tool descriptions cannot
+— when `cputracing` beats `cpusampling`, why a one-shot instrumented run emits no
+`close` event, how the JVM main class is derived.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `skills.enableBundled` | boolean | `true` | Discover the bundled runtime skills. Also retired automatically when `runtime.enabled` is off, since they document tools that are then unregistered. |
+
+They are materialized into `<config dir>/agent/builtin-skills/<name>/SKILL.md`
+(the skill machinery reads a skill's body back from its path) and rewritten from
+the embedded copy whenever a file drifts, so edit them there and the change is
+reverted on the next launch. Turning either toggle off removes that tree again.
+
+Only what the agent itself wrote is ever deleted: the directory carries a
+`.bundled.json` manifest naming the skills it materialized, and a skill you place
+in there yourself is left alone (it is discovered like any other). To override a
+bundled skill, author one of the same name in any normal skills directory — the
+bundled provider sits at the lowest skill priority, so yours wins. To drop one,
+list its name in `skills.ignoredSkills`.
 
 #### Runtime shell policy
 

@@ -16,6 +16,7 @@ import chalk from "chalk";
 import { LRUCache } from "lru-cache/raw";
 // Embed theme JSON files at build time
 import auraThemeJson from "./aura.json" with { type: "json" };
+import auraLightThemeJson from "./aura-light.json" with { type: "json" };
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
 import lightThemeJson from "./light.json" with { type: "json" };
@@ -1962,6 +1963,7 @@ const BUILTIN_THEMES: Record<string, ThemeJson> = {
 	dark: darkThemeJson as ThemeJson,
 	light: lightThemeJson as ThemeJson,
 	aura: auraThemeJson as ThemeJson,
+	"aura-light": auraLightThemeJson as ThemeJson,
 	...(defaultThemes as Record<string, ThemeJson>),
 };
 
