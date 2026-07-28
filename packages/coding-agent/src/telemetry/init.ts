@@ -5,8 +5,9 @@
  * spans through the global `@opentelemetry/api` tracer, and exposes run-level
  * callbacks for metrics/log pipelines. This module registers the OTLP/proto
  * trace, log, and metric SDK providers when the standard `OTEL_*` endpoint env
- * vars are set so `omp` can be observed by any OTLP collector without vendor
- * coupling.
+ * vars are set — or the `telemetry.*` settings supply the same values, with env
+ * winning per key — so `omp` can be observed by any OTLP collector without
+ * vendor coupling.
  *
  * Only the `http/protobuf` transport is supported — an
  * `OTEL_EXPORTER_OTLP*_PROTOCOL` of `grpc` or `http/json` declines rather than
@@ -32,6 +33,7 @@ import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import type { Settings } from "../config/settings";
 import { emitTelemetryEvent } from "./events";
 import { buildResourceAttributes } from "./identity";
 import { AuraMetricRecorder } from "./metrics";
@@ -44,10 +46,19 @@ import { registerOtlpSink } from "./sink-otlp";
  */
 const FLUSH_INTERVAL_MS = 30_000;
 
+/** Env keys {@link resolveTelemetryEnv} may synthesize from `telemetry.*` settings. */
+const SETTINGS_PUBLISHED_ENV_KEYS = [
+	"OTEL_EXPORTER_OTLP_ENDPOINT",
+	"OTEL_EXPORTER_OTLP_HEADERS",
+	"OTEL_TRACES_EXPORTER",
+	"OTEL_LOGS_EXPORTER",
+	"OTEL_METRICS_EXPORTER",
+] as const;
+
 /** Options for {@link initTelemetryExport}. */
 export interface InitTelemetryOptions {
 	/** Settings instance for telemetry.* config (env always wins). */
-	settings?: import("../config/settings").Settings;
+	settings?: Settings;
 }
 
 type TelemetrySignal = "trace" | "log" | "metric";
@@ -130,8 +141,10 @@ export function createTelemetryExportConfig(
 
 /**
  * Register global trace/log/meter providers when OTLP endpoints are configured
- * through env. Idempotent, and a no-op when no signal has an endpoint (or when
- * the OTEL kill-switches are engaged), so startup can call it unconditionally.
+ * through env or `options.settings`. Idempotent, and a no-op when no signal has
+ * an endpoint (or when the OTEL kill-switches are engaged), so startup can call
+ * it unconditionally. `OTEL_SDK_DISABLED` is checked against the raw env only:
+ * it is an operator kill switch that no setting may re-enable.
  */
 export async function initTelemetryExport(options: InitTelemetryOptions = {}): Promise<void> {
 	if (isTelemetryExportEnabled()) return;
@@ -139,15 +152,60 @@ export async function initTelemetryExport(options: InitTelemetryOptions = {}): P
 
 	if (process.env.OTEL_SDK_DISABLED?.trim().toLowerCase() === "true") return;
 
-	const signalConfig = resolveSignalConfig();
+	const env = resolveTelemetryEnv(options.settings);
+	const signalConfig = resolveSignalConfig(env);
 	if (!signalConfig.trace && !signalConfig.log && !signalConfig.metric) return;
+
+	// The OTLP exporters read OTEL_EXPORTER_OTLP_* straight from process.env at
+	// construction — they take no endpoint/headers arguments in this SDK line.
+	// So when the settings path (not env) supplied a value, publish it back onto
+	// process.env before constructing them. Only previously-unset keys are
+	// written, which is exactly the precedence resolveTelemetryEnv already
+	// applied: env always wins, so nothing here can clobber an operator's value.
+	for (const key of SETTINGS_PUBLISHED_ENV_KEYS) {
+		const value = env[key];
+		if (value !== undefined && process.env[key] === undefined) process.env[key] = value;
+	}
 
 	initPromise = registerProviders(signalConfig, options);
 	return initPromise;
 }
 
-async function registerProviders(signalConfig: SignalConfig, _options: InitTelemetryOptions): Promise<void> {
-	const resource = resourceFromAttributes(buildResourceAttributes());
+/**
+ * Computed OTEL env view: process env merged over `telemetry.*` settings.
+ * Env always wins per key, and `telemetry.enabled=false` contributes nothing
+ * (env-only activation still works). Exported for tests.
+ */
+export function resolveTelemetryEnv(
+	settings: Pick<Settings, "get"> | undefined,
+	processEnv: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+	const out: Record<string, string | undefined> = { ...processEnv };
+	if (!settings?.get("telemetry.enabled")) return out;
+
+	const endpoint = settings.get("telemetry.endpoint");
+	if (endpoint && !out.OTEL_EXPORTER_OTLP_ENDPOINT) out.OTEL_EXPORTER_OTLP_ENDPOINT = endpoint;
+
+	const headers = settings.get("telemetry.headers");
+	if (headers && Object.keys(headers).length > 0 && !out.OTEL_EXPORTER_OTLP_HEADERS) {
+		out.OTEL_EXPORTER_OTLP_HEADERS = Object.entries(headers)
+			.map(([k, v]) => `${k}=${v}`)
+			.join(",");
+	}
+
+	// A signal absent from the list is switched off explicitly, since the shared
+	// endpoint above would otherwise enable all three.
+	const signals = settings.get("telemetry.signals");
+	if (Array.isArray(signals)) {
+		if (!signals.includes("traces") && !out.OTEL_TRACES_EXPORTER) out.OTEL_TRACES_EXPORTER = "none";
+		if (!signals.includes("logs") && !out.OTEL_LOGS_EXPORTER) out.OTEL_LOGS_EXPORTER = "none";
+		if (!signals.includes("metrics") && !out.OTEL_METRICS_EXPORTER) out.OTEL_METRICS_EXPORTER = "none";
+	}
+	return out;
+}
+
+async function registerProviders(signalConfig: SignalConfig, options: InitTelemetryOptions): Promise<void> {
+	const resource = resourceFromAttributes(buildResourceAttributes(options));
 
 	if (signalConfig.trace) {
 		const exporter = new OTLPTraceExporter();
@@ -208,25 +266,25 @@ async function registerProviders(signalConfig: SignalConfig, _options: InitTelem
 	});
 }
 
-function resolveSignalConfig(): SignalConfig {
+function resolveSignalConfig(env: Record<string, string | undefined>): SignalConfig {
 	const signalConfig: SignalConfig = {
 		trace: signalEnabled(
 			"trace",
-			process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-			process.env.OTEL_TRACES_EXPORTER,
-			process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL,
+			env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_ENDPOINT,
+			env.OTEL_TRACES_EXPORTER,
+			env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL ?? env.OTEL_EXPORTER_OTLP_PROTOCOL,
 		),
 		log: signalEnabled(
 			"log",
-			process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-			process.env.OTEL_LOGS_EXPORTER,
-			process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL,
+			env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_ENDPOINT,
+			env.OTEL_LOGS_EXPORTER,
+			env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL ?? env.OTEL_EXPORTER_OTLP_PROTOCOL,
 		),
 		metric: signalEnabled(
 			"metric",
-			process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-			process.env.OTEL_METRICS_EXPORTER,
-			process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL,
+			env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_ENDPOINT,
+			env.OTEL_METRICS_EXPORTER,
+			env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL ?? env.OTEL_EXPORTER_OTLP_PROTOCOL,
 		),
 	};
 	return signalConfig;

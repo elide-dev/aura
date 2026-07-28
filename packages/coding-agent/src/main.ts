@@ -1417,10 +1417,11 @@ export async function runRootCommand(
 	sessionOptions.settings = settingsInstance;
 
 	// OTEL: register global OTLP exporters when an endpoint is configured via
-	// env, then switch on the agent loop's telemetry hooks so traces, run-level
-	// metrics, and structured logs have source events to export. Content capture
-	// remains governed by OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
-	await logger.time("initTelemetryExport", initTelemetryExport);
+	// env or the telemetry.* settings (env wins per key), then switch on the
+	// agent loop's telemetry hooks so traces, run-level metrics, and structured
+	// logs have source events to export. Content capture remains governed by
+	// OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
+	await logger.time("initTelemetryExport", () => initTelemetryExport({ settings: settingsInstance }));
 	if (isTelemetryExportEnabled()) {
 		sessionOptions.telemetry = createTelemetryExportConfig(sessionOptions.telemetry);
 	}

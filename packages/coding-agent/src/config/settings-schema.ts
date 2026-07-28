@@ -148,6 +148,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Runtime",
 		"Discovery & MCP",
 		"Developer",
+		"Telemetry",
 	],
 	tasks: ["Modes", "Subagents", "Isolation", "Commands & Skills"],
 	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Timeouts", "Privacy"],
@@ -304,6 +305,7 @@ const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
+const DEFAULT_TELEMETRY_SIGNALS: string[] = ["traces", "logs", "metrics"];
 
 // ── Runtime shell policy ───────────────────────────────────────────────────
 // Routing enforcement, not a sandbox: the point is that the model reaches the
@@ -5575,6 +5577,76 @@ export const SETTINGS_SCHEMA = {
 		type: "enum",
 		values: ["unset", "granted", "denied"] as const,
 		default: "unset" as const,
+	},
+
+	// Telemetry: OpenTelemetry export (off by default; OTEL_* env always wins)
+	"telemetry.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Telemetry",
+			label: "Telemetry Export",
+			description:
+				"Export session, usage, cost, error, and compaction telemetry to your own OpenTelemetry collector (OTLP http/protobuf).",
+		},
+	},
+
+	"telemetry.endpoint": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "tools",
+			group: "Telemetry",
+			label: "OTLP Endpoint",
+			description:
+				"Base OTLP endpoint, e.g. http://localhost:4318. Equivalent to OTEL_EXPORTER_OTLP_ENDPOINT (env wins).",
+		},
+	},
+
+	// Config-file only (no UI): free-form key/value shapes the settings panel
+	// has no editor for, same as `gc.*` and `task.agentPrewalk`.
+	"telemetry.headers": {
+		type: "record",
+		default: EMPTY_STRING_RECORD,
+	},
+
+	"telemetry.signals": {
+		type: "array",
+		default: DEFAULT_TELEMETRY_SIGNALS,
+	},
+
+	"telemetry.identity.hostname": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Telemetry",
+			label: "Include Hostname",
+			description: "Attach host.name to exported telemetry.",
+		},
+	},
+
+	"telemetry.identity.account": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Telemetry",
+			label: "Include Account Identity",
+			description: "Attach account email to usage-limit telemetry (otherwise a hashed account key is used).",
+		},
+	},
+
+	"telemetry.identity.workspace": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Telemetry",
+			label: "Include Workspace Path",
+			description: "Attach the workspace directory path to exported telemetry.",
+		},
 	},
 
 	"gc.blobs": { type: "boolean", default: true },

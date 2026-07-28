@@ -53,4 +53,23 @@ describe("telemetry identity", () => {
 		expect(attrs["host.name"]).toBeUndefined();
 		expect(attrs["aura.workspace.path"]).toBeUndefined();
 	});
+
+	it("adds hostname and workspace only when the telemetry.identity.* opt-ins are on", async () => {
+		const { refreshDirsFromEnv } = await import("@oh-my-pi/pi-utils/dirs");
+		refreshDirsFromEnv();
+		const { buildResourceAttributes } = await import("../src/telemetry/identity");
+		const settings = (values: Record<string, unknown>) => ({ get: (p: string) => values[p] }) as never;
+
+		const off = buildResourceAttributes({
+			settings: settings({ "telemetry.identity.hostname": false, "telemetry.identity.workspace": false }),
+		});
+		expect(off["host.name"]).toBeUndefined();
+		expect(off["aura.workspace.path"]).toBeUndefined();
+
+		const on = buildResourceAttributes({
+			settings: settings({ "telemetry.identity.hostname": true, "telemetry.identity.workspace": true }),
+		});
+		expect(on["host.name"]).toBe(os.hostname());
+		expect(on["aura.workspace.path"]).toBe(process.cwd());
+	});
 });

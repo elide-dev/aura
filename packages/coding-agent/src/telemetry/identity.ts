@@ -8,8 +8,10 @@
  * usage-limit event level, not as a resource attribute).
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
+import type { Settings } from "../config/settings";
 
 const SERVICE_NAME = "aura";
 
@@ -51,10 +53,14 @@ export function getOrCreateInstallId(): string {
 }
 
 /** Resource attributes for all providers. `OTEL_SERVICE_NAME` env overrides the name. */
-export function buildResourceAttributes(): Record<string, string> {
-	return {
+export function buildResourceAttributes(options?: { settings?: Pick<Settings, "get"> }): Record<string, string> {
+	const attrs: Record<string, string> = {
 		"service.name": process.env.OTEL_SERVICE_NAME ?? SERVICE_NAME,
 		"service.version": VERSION,
 		"aura.install.id": getOrCreateInstallId(),
 	};
+	const settings = options?.settings;
+	if (settings?.get("telemetry.identity.hostname")) attrs["host.name"] = os.hostname();
+	if (settings?.get("telemetry.identity.workspace")) attrs["aura.workspace.path"] = process.cwd();
+	return attrs;
 }
