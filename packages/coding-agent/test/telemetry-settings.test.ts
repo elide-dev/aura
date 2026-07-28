@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { resolveTelemetryEnv } from "../src/telemetry/init";
+import { resolveExporterConfig, resolveTelemetryEnv } from "../src/telemetry/init";
 
 function fakeSettings(values: Record<string, unknown>) {
 	return { get: (path: string) => values[path] } as never;
@@ -18,7 +18,6 @@ describe("settings-driven telemetry activation", () => {
 			{}, // current process.env view
 		);
 		expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe("http://localhost:4318");
-		expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBe("x-api-key=k");
 		expect(env.OTEL_TRACES_EXPORTER).toBe("none"); // traces not in signals list
 		expect(env.OTEL_LOGS_EXPORTER).toBeUndefined();
 		expect(env.OTEL_METRICS_EXPORTER).toBeUndefined();
@@ -44,13 +43,6 @@ describe("settings-driven telemetry activation", () => {
 		expect(env.OTEL_TRACES_EXPORTER).toBeUndefined();
 	});
 
-	it("leaves headers alone when the settings record is empty and env has its own", () => {
-		const env = resolveTelemetryEnv(fakeSettings({ "telemetry.enabled": true, "telemetry.headers": {} }), {
-			OTEL_EXPORTER_OTLP_HEADERS: "a=b",
-		});
-		expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBe("a=b");
-	});
-
 	it("keeps a per-signal env exporter selection over the settings signals list", () => {
 		const env = resolveTelemetryEnv(fakeSettings({ "telemetry.enabled": true, "telemetry.signals": [] }), {
 			OTEL_TRACES_EXPORTER: "otlp",
@@ -58,6 +50,68 @@ describe("settings-driven telemetry activation", () => {
 		expect(env.OTEL_TRACES_EXPORTER).toBe("otlp");
 		expect(env.OTEL_LOGS_EXPORTER).toBe("none");
 		expect(env.OTEL_METRICS_EXPORTER).toBe("none");
+	});
+});
+
+describe("settings-driven OTLP exporter config", () => {
+	const configured = fakeSettings({
+		"telemetry.enabled": true,
+		"telemetry.endpoint": "http://localhost:4318",
+		"telemetry.headers": { "x-api-key": "k" },
+	});
+
+	it("appends the per-signal OTLP path to the settings base endpoint", () => {
+		expect(resolveExporterConfig("trace", configured, {}).url).toBe("http://localhost:4318/v1/traces");
+		expect(resolveExporterConfig("log", configured, {}).url).toBe("http://localhost:4318/v1/logs");
+		expect(resolveExporterConfig("metric", configured, {}).url).toBe("http://localhost:4318/v1/metrics");
+	});
+
+	it("trims trailing slashes on the base endpoint instead of doubling the join", () => {
+		const settings = fakeSettings({ "telemetry.enabled": true, "telemetry.endpoint": "http://localhost:4318///" });
+		expect(resolveExporterConfig("trace", settings, {}).url).toBe("http://localhost:4318/v1/traces");
+	});
+
+	it("passes settings headers as a record, unserialized", () => {
+		expect(resolveExporterConfig("trace", configured, {}).headers).toEqual({ "x-api-key": "k" });
+	});
+
+	it("defers to the exporters' own env handling when env owns the key", () => {
+		// Generic env endpoint: no url passed, so the exporter reads env itself.
+		const genericEndpoint = resolveExporterConfig("trace", configured, {
+			OTEL_EXPORTER_OTLP_ENDPOINT: "http://env:4318",
+		});
+		expect(genericEndpoint.url).toBeUndefined();
+		expect(genericEndpoint.headers).toEqual({ "x-api-key": "k" }); // headers key still settings-owned
+
+		// Signal-specific env endpoint governs that signal only.
+		expect(
+			resolveExporterConfig("trace", configured, { OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://env:4318/v1/traces" })
+				.url,
+		).toBeUndefined();
+		expect(
+			resolveExporterConfig("log", configured, { OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://env:4318/v1/traces" })
+				.url,
+		).toBe("http://localhost:4318/v1/logs");
+
+		// Headers, generic and signal-specific.
+		expect(resolveExporterConfig("trace", configured, { OTEL_EXPORTER_OTLP_HEADERS: "a=b" }).headers).toBeUndefined();
+		expect(
+			resolveExporterConfig("trace", configured, { OTEL_EXPORTER_OTLP_TRACES_HEADERS: "a=b" }).headers,
+		).toBeUndefined();
+	});
+
+	it("contributes nothing when telemetry is disabled or unconfigured", () => {
+		expect(resolveExporterConfig("trace", undefined, {})).toEqual({});
+		expect(
+			resolveExporterConfig(
+				"trace",
+				fakeSettings({ "telemetry.enabled": false, "telemetry.endpoint": "http://s:4318" }),
+				{},
+			),
+		).toEqual({});
+		expect(
+			resolveExporterConfig("trace", fakeSettings({ "telemetry.enabled": true, "telemetry.headers": {} }), {}),
+		).toEqual({});
 	});
 });
 

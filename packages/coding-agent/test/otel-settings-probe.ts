@@ -3,10 +3,12 @@
  * subprocess by telemetry-settings.test.ts. Out-of-process for the same reason
  * as otel-export-probe.ts: initTelemetryExport() registers global providers.
  *
- * No `OTEL_EXPORTER_OTLP_*` endpoint env var is set — the endpoint, headers,
- * and identity opt-ins arrive purely through a fake Settings instance. Exits 0
- * only when a protobuf POST carrying the settings-supplied header lands at
- * /v1/traces.
+ * Every OTEL_* env var is cleared first — the endpoint, headers, and identity
+ * opt-ins arrive purely through a fake Settings instance, reaching the exporter
+ * via its constructor config. Exits 0 only when a protobuf POST carrying the
+ * settings-supplied header lands at /v1/traces (proving the base endpoint was
+ * joined to the per-signal path) and no OTEL_* key was written back to
+ * process.env.
  */
 
 import * as os from "node:os";
@@ -66,6 +68,16 @@ if (!isTelemetryExportEnabled()) {
 	console.error("PROBE: provider did not register from settings");
 	await server.stop(true);
 	process.exit(2);
+}
+
+// The settings path configures the exporters through their constructors, never
+// by writing back into the environment. Every OTEL_* key was cleared above, so
+// any endpoint/header key present here would be a process.env mutation.
+const leaked = Object.keys(process.env).filter(k => k.startsWith("OTEL_") && k !== "OTEL_SERVICE_NAME");
+if (leaked.length > 0) {
+	console.error(`PROBE: settings leaked into process.env: ${leaked.join(", ")}`);
+	await server.stop(true);
+	process.exit(3);
 }
 
 const span = trace.getTracer("@oh-my-pi/pi-agent-core").startSpan("agent.llm_call");

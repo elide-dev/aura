@@ -46,28 +46,35 @@ import { registerOtlpSink } from "./sink-otlp";
  */
 const FLUSH_INTERVAL_MS = 30_000;
 
-/** Env keys {@link resolveTelemetryEnv} may synthesize from `telemetry.*` settings. */
-const SETTINGS_PUBLISHED_ENV_KEYS = [
-	"OTEL_EXPORTER_OTLP_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_HEADERS",
-	"OTEL_TRACES_EXPORTER",
-	"OTEL_LOGS_EXPORTER",
-	"OTEL_METRICS_EXPORTER",
-] as const;
-
 /** Options for {@link initTelemetryExport}. */
 export interface InitTelemetryOptions {
 	/** Settings instance for telemetry.* config (env always wins). */
 	settings?: Settings;
 }
 
-type TelemetrySignal = "trace" | "log" | "metric";
+export type TelemetrySignal = "trace" | "log" | "metric";
 type OtelLogLevel = "none" | logger.LogLevel;
 
 interface SignalConfig {
 	readonly trace: boolean;
 	readonly log: boolean;
 	readonly metric: boolean;
+}
+
+/**
+ * Per-signal OTLP metadata: the path a base endpoint gets joined with, and the
+ * infix in the signal-specific `OTEL_EXPORTER_OTLP_<INFIX>_*` env overrides.
+ */
+const SIGNAL_OTLP: Record<TelemetrySignal, { path: string; envInfix: string }> = {
+	trace: { path: "/v1/traces", envInfix: "TRACES" },
+	log: { path: "/v1/logs", envInfix: "LOGS" },
+	metric: { path: "/v1/metrics", envInfix: "METRICS" },
+};
+
+/** Explicit OTLP exporter constructor config derived from `telemetry.*` settings. */
+export interface ExporterConfig {
+	url?: string;
+	headers?: Record<string, string>;
 }
 
 const LOG_SEVERITY: Record<logger.LogLevel, SeverityNumber> = {
@@ -156,23 +163,19 @@ export async function initTelemetryExport(options: InitTelemetryOptions = {}): P
 	const signalConfig = resolveSignalConfig(env);
 	if (!signalConfig.trace && !signalConfig.log && !signalConfig.metric) return;
 
-	// The OTLP exporters read OTEL_EXPORTER_OTLP_* straight from process.env at
-	// construction — they take no endpoint/headers arguments in this SDK line.
-	// So when the settings path (not env) supplied a value, publish it back onto
-	// process.env before constructing them. Only previously-unset keys are
-	// written, which is exactly the precedence resolveTelemetryEnv already
-	// applied: env always wins, so nothing here can clobber an operator's value.
-	for (const key of SETTINGS_PUBLISHED_ENV_KEYS) {
-		const value = env[key];
-		if (value !== undefined && process.env[key] === undefined) process.env[key] = value;
-	}
-
 	initPromise = registerProviders(signalConfig, options);
 	return initPromise;
 }
 
 /**
  * Computed OTEL env view: process env merged over `telemetry.*` settings.
+ *
+ * This drives *gating* only — which signals have an endpoint and which are
+ * switched off — so a settings-supplied endpoint activates the same signals an
+ * env-supplied one would. The endpoint/header values the exporters actually use
+ * come from {@link resolveExporterConfig}; nothing here is ever written back to
+ * `process.env`.
+ *
  * Env always wins per key, and `telemetry.enabled=false` contributes nothing
  * (env-only activation still works). Exported for tests.
  */
@@ -186,13 +189,6 @@ export function resolveTelemetryEnv(
 	const endpoint = settings.get("telemetry.endpoint");
 	if (endpoint && !out.OTEL_EXPORTER_OTLP_ENDPOINT) out.OTEL_EXPORTER_OTLP_ENDPOINT = endpoint;
 
-	const headers = settings.get("telemetry.headers");
-	if (headers && Object.keys(headers).length > 0 && !out.OTEL_EXPORTER_OTLP_HEADERS) {
-		out.OTEL_EXPORTER_OTLP_HEADERS = Object.entries(headers)
-			.map(([k, v]) => `${k}=${v}`)
-			.join(",");
-	}
-
 	// A signal absent from the list is switched off explicitly, since the shared
 	// endpoint above would otherwise enable all three.
 	const signals = settings.get("telemetry.signals");
@@ -204,11 +200,49 @@ export function resolveTelemetryEnv(
 	return out;
 }
 
+/**
+ * OTLP exporter constructor config for one signal, derived from `telemetry.*`.
+ *
+ * Empty whenever env owns the value: the exporters read `OTEL_EXPORTER_OTLP_*`
+ * themselves, so passing nothing leaves their standard env handling in charge —
+ * which is what "env wins per key" means here. A settings value is passed
+ * explicitly only when neither the signal-specific nor the generic env key is
+ * set.
+ *
+ * `telemetry.endpoint` is a BASE endpoint per the OTLP spec, so the per-signal
+ * path is appended (`http://host:4318` → `http://host:4318/v1/traces`), matching
+ * what the exporters do with `OTEL_EXPORTER_OTLP_ENDPOINT`. Any trailing slashes
+ * on the base are trimmed first so the join never doubles up. Headers are passed
+ * as a plain record — no `k=v,…` serialization, hence no escaping question.
+ *
+ * Exported for tests.
+ */
+export function resolveExporterConfig(
+	signal: TelemetrySignal,
+	settings: Pick<Settings, "get"> | undefined,
+	processEnv: Record<string, string | undefined> = process.env,
+): ExporterConfig {
+	const config: ExporterConfig = {};
+	if (!settings?.get("telemetry.enabled")) return config;
+	const { path, envInfix } = SIGNAL_OTLP[signal];
+
+	const envEndpoint = processEnv[`OTEL_EXPORTER_OTLP_${envInfix}_ENDPOINT`] ?? processEnv.OTEL_EXPORTER_OTLP_ENDPOINT;
+	const endpoint = settings.get("telemetry.endpoint");
+	if (!envEndpoint && endpoint) config.url = `${endpoint.replace(/\/+$/, "")}${path}`;
+
+	const envHeaders = processEnv[`OTEL_EXPORTER_OTLP_${envInfix}_HEADERS`] ?? processEnv.OTEL_EXPORTER_OTLP_HEADERS;
+	const headers = settings.get("telemetry.headers");
+	if (!envHeaders && headers && Object.keys(headers).length > 0) config.headers = { ...headers };
+
+	return config;
+}
+
 async function registerProviders(signalConfig: SignalConfig, options: InitTelemetryOptions): Promise<void> {
 	const resource = resourceFromAttributes(buildResourceAttributes(options));
+	const settings = options.settings;
 
 	if (signalConfig.trace) {
-		const exporter = new OTLPTraceExporter();
+		const exporter = new OTLPTraceExporter(resolveExporterConfig("trace", settings));
 		traceProvider = new NodeTracerProvider({
 			resource,
 			spanProcessors: [new BatchSpanProcessor(exporter)],
@@ -217,7 +251,7 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 	}
 
 	if (signalConfig.metric) {
-		const exporter = new OTLPMetricExporter();
+		const exporter = new OTLPMetricExporter(resolveExporterConfig("metric", settings));
 		meterProvider = new MeterProvider({
 			resource,
 			readers: [new PeriodicExportingMetricReader({ exporter })],
@@ -227,7 +261,7 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 	}
 
 	if (signalConfig.log) {
-		const exporter = new OTLPLogExporter();
+		const exporter = new OTLPLogExporter(resolveExporterConfig("log", settings));
 		logProvider = new LoggerProvider({
 			resource,
 			processors: [new BatchLogRecordProcessor({ exporter })],
