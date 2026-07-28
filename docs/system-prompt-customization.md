@@ -14,7 +14,7 @@ Primary implementation:
 
 ## 1) Inputs
 
-Six user-controllable inputs feed prompt assembly. All four resolve a value as either a literal string or, if the argument looks like a file path, the contents of that file (`resolvePromptInput`).
+Six user-controllable inputs feed prompt assembly (three flag/file pairs). Each resolves a value as either a literal string or, if the argument looks like a file path, the contents of that file (`resolvePromptInput`).
 
 | Input | Source | Effect |
 |---|---|---|

@@ -84,6 +84,11 @@ re-appending this one.
 - `packages/coding-agent/src/runtime/` — runtime capability core
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts`
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts`
+- `packages/coding-agent/src/cli/version-identity.ts` — `--version` identity line
+  (`<app>/<version>` + runtime protocol version)
+- `packages/coding-agent/src/discovery/builtin-skills.ts`,
+  `src/discovery/builtin-skill-sources/*.md` — bundled runtime skills, materialized
+  into the agent dir under a `.bundled.json` manifest that is the sole prune authority
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
   keeping a process registry of its own), `src/prompts/tools/runtime-*.md`

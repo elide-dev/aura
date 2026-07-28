@@ -91,7 +91,19 @@ async function readManifest(dir: string): Promise<string[]> {
 	if (raw === undefined) return [];
 	try {
 		const parsed = JSON.parse(raw) as BundledManifest;
-		return Array.isArray(parsed.names) ? parsed.names.filter(name => typeof name === "string") : [];
+		if (!Array.isArray(parsed.names)) return [];
+		// A hand-edited or partially-corrupted manifest must never aim the prune
+		// outside this directory: only accept bare directory names (no separators,
+		// no `..`, no leading dot), so `path.join(dir, name)` cannot escape.
+		return parsed.names.filter(
+			(name): name is string =>
+				typeof name === "string" &&
+				name.length > 0 &&
+				!name.startsWith(".") &&
+				!name.includes("/") &&
+				!name.includes("\\") &&
+				!name.includes(".."),
+		);
 	} catch {
 		// A corrupt manifest means "we no longer know what we own" — the safe
 		// reading is that we own nothing, so nothing gets pruned this pass.
@@ -148,7 +160,14 @@ async function writeSkillSource(dir: string, source: BuiltinSkillSource, warning
  * candidate. Every prune is reported as a warning rather than done silently,
  * and a retired directory the user has since added files to is kept.
  */
-async function pruneRetiredSkills(dir: string, retired: readonly string[], warnings: string[]): Promise<void> {
+/**
+ * Returns the names that were NOT reclaimed because the removal errored — the
+ * caller must keep those in the manifest so ownership isn't dropped on a name
+ * we still have a live directory for. A name intentionally kept (user files
+ * present) or already gone is fully retired and is not returned.
+ */
+async function pruneRetiredSkills(dir: string, retired: readonly string[], warnings: string[]): Promise<string[]> {
+	const retainedOnError: string[] = [];
 	await Promise.all(
 		retired.map(async name => {
 			const target = path.join(dir, name);
@@ -167,10 +186,14 @@ async function pruneRetiredSkills(dir: string, retired: readonly string[], warni
 				await fs.rm(target, { recursive: true, force: true });
 				warnings.push(`Pruned retired bundled skill "${name}" from ${target}`);
 			} catch (error) {
+				// The directory is still on disk. Keep owning the name so a later
+				// pass retries the prune, rather than orphaning it forever.
+				retainedOnError.push(name);
 				warnings.push(`Failed to prune retired bundled skill at ${target} (${String(error)})`);
 			}
 		}),
 	);
+	return retainedOnError;
 }
 
 async function writeManifest(dir: string, names: readonly string[], warnings: string[]): Promise<void> {
@@ -203,12 +226,15 @@ export async function materializeBuiltinSkills(dir: string): Promise<string[]> {
 		const previous = await readManifest(dir);
 		const current = new Set(names);
 		await Promise.all(BUILTIN_SKILL_SOURCES.map(source => writeSkillSource(dir, source, warnings)));
-		await pruneRetiredSkills(
+		const retainedOnError = await pruneRetiredSkills(
 			dir,
 			previous.filter(name => !current.has(name)),
 			warnings,
 		);
-		await writeManifest(dir, names, warnings);
+		// Keep owning any retired name whose removal failed, so the next pass
+		// retries it instead of leaving an orphaned directory that surfaces as a
+		// skill forever.
+		await writeManifest(dir, [...names, ...retainedOnError], warnings);
 	} catch (error) {
 		warnings.push(`Failed to prepare the bundled skills directory ${dir} (${String(error)})`);
 	}
@@ -228,8 +254,14 @@ async function unmaterializeBuiltinSkills(dir: string): Promise<void> {
 	// The provider returns no items in this branch, so its warnings would go
 	// nowhere — log them instead, keeping every deletion accounted for.
 	const warnings: string[] = [];
-	await pruneRetiredSkills(dir, previous, warnings);
+	const retainedOnError = await pruneRetiredSkills(dir, previous, warnings);
 	for (const warning of warnings) logger.debug(`builtin-skills: ${warning}`);
+	if (retainedOnError.length > 0) {
+		// A removal failed; keep the manifest so a later suppressed pass retries
+		// rather than orphaning the directory.
+		await writeManifest(dir, retainedOnError, warnings);
+		return;
+	}
 	await fs.rm(path.join(dir, MANIFEST_FILE), { force: true }).catch(() => {});
 	await fs.rmdir(dir).catch(() => {});
 }
