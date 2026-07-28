@@ -543,6 +543,14 @@
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
     },
+    "./telemetry": {
+      "types": "./src/telemetry/index.ts",
+      "import": "./src/telemetry/index.ts"
+    },
+    "./telemetry/*": {
+      "types": "./src/telemetry/*.ts",
+      "import": "./src/telemetry/*.ts"
+    },
     "./tools": {
       "types": "./src/tools/index.ts",
       "import": "./src/tools/index.ts"
