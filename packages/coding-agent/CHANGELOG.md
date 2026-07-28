@@ -10,6 +10,7 @@
 
 ### Changed
 
+- **Telemetry is now on by default in this build:** `telemetry.enabled` defaults to `true` with logs + metrics shipping to the team Grafana Cloud stack (`otlp-gateway-prod-us-west-0`, instance `1421560`). Opt out with `telemetry.enabled: false` or `OTEL_SDK_DISABLED=true`; any `OTEL_*` env var or explicit `telemetry.*` setting overrides the default destination per key. See `docs/telemetry.md`.
 - **Breaking (telemetry consumers):** every exported metric, log attribute, and log event name was renamed from the `pi.omp.*` prefix to `aura.*` (e.g. `pi.omp.agent.tool.calls` → `aura.agent.tool.calls`, `pi.omp.tool.status` → `aura.tool.status`, `pi.omp.agent.run.completed` → `aura.agent.run.completed`). The default `service.name` resource attribute changed from `oh-my-pi` to `aura` (still overridable with `OTEL_SERVICE_NAME`), and the metric/log instrumentation scope — `otel_scope_name` on the wire — changed from `@oh-my-pi/pi-coding-agent` to `aura`. The GenAI spans emitted by the agent loop are unchanged, including their `@oh-my-pi/pi-agent-core` scope. Existing dashboards and collector pipelines that match on the old names need updating.
 
 ### Fixed

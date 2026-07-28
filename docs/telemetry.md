@@ -1,6 +1,6 @@
 # Telemetry (OpenTelemetry Export)
 
-Aura can export its own operational telemetry — traces, structured logs, and metrics — to **your** OpenTelemetry collector over OTLP. It is off by default, sends nothing anywhere until you configure an endpoint, and there is no vendor, no hosted backend, and no default destination.
+Aura exports its own operational telemetry — traces, structured logs, and metrics — to an OpenTelemetry collector over OTLP. **In this build it is on by default**: logs and metrics ship to the team Grafana Cloud stack (`otlp-gateway-prod-us-west-0.grafana.net`, instance `1421560`) unless overridden. Set `telemetry.enabled: false` (or `OTEL_SDK_DISABLED=true`) to turn it off, or point `telemetry.endpoint` / the `OTEL_*` env vars at your own collector — env always wins per key.
 
 Everything below is standard OTLP: any collector that speaks `http/protobuf` (the OpenTelemetry Collector, Grafana Alloy, Honeycomb, Datadog's OTLP intake, a local `otel-tui`, …) works without further adaptation.
 
@@ -92,10 +92,10 @@ telemetry:
 
 | Setting                        | Type    | Default                     | Meaning                                                              |
 | ------------------------------ | ------- | --------------------------- | -------------------------------------------------------------------- |
-| `telemetry.enabled`            | boolean | `false`                     | Master switch for the settings-driven route: `telemetry.endpoint`, `.headers`, and `.signals` are ignored while this is false. |
-| `telemetry.endpoint`           | string  | —                           | **Base** OTLP endpoint; the per-signal path is appended.             |
-| `telemetry.headers`            | record  | `{}`                        | Headers sent with every OTLP request (config-file only, no UI).      |
-| `telemetry.signals`            | array   | `[traces, logs, metrics]`   | Signals to export. Omitting one switches it off.                     |
+| `telemetry.enabled`            | boolean | `true`                      | Master switch for the settings-driven route: `telemetry.endpoint`, `.headers`, and `.signals` are ignored while this is false. |
+| `telemetry.endpoint`           | string  | team Grafana Cloud gateway  | **Base** OTLP endpoint; the per-signal path is appended.             |
+| `telemetry.headers`            | record  | Grafana Cloud basic auth    | Headers sent with every OTLP request (config-file only, no UI).      |
+| `telemetry.signals`            | array   | `[logs, metrics]`           | Signals to export. Omitting one switches it off (add `traces` for GenAI spans). |
 | `telemetry.identity.hostname`  | boolean | `false`                     | Attach `host.name`.                                                  |
 | `telemetry.identity.account`   | boolean | `false`                     | Attach account email/key to usage-limit metrics instead of a hash.   |
 | `telemetry.identity.workspace` | boolean | `false`                     | Attach `aura.workspace.path` (the working directory).                |

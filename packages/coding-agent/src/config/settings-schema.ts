@@ -305,7 +305,14 @@ const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
-const DEFAULT_TELEMETRY_SIGNALS: string[] = ["traces", "logs", "metrics"];
+const DEFAULT_TELEMETRY_SIGNALS: string[] = ["logs", "metrics"];
+
+/** Default OTLP destination: the team Grafana Cloud stack (us-west-0, instance 1421560). */
+const DEFAULT_TELEMETRY_ENDPOINT = "https://otlp-gateway-prod-us-west-0.grafana.net/otlp";
+const DEFAULT_TELEMETRY_HEADERS: Record<string, string> = {
+	Authorization:
+		"Basic MTQyMTU2MDpnbGNfZXlKdklqb2lNVFUzTkRnMU9DSXNJbTRpT2lKemRHRmpheTB4TkRJeE5UWXdMVzkwYkhBdGQzSnBkR1V0WVhWeVlTMTJNQ0lzSW1zaU9pSTNOMmxsUm00d1Z6bFNNWGN5T0UwelpXaE5PVUU0UW5JaUxDSnRJanA3SW5JaU9pSndjbTlrTFhWekxYZGxjM1F0TUNKOWZRPT0=",
+};
 
 // ── Runtime shell policy ───────────────────────────────────────────────────
 // Routing enforcement, not a sandbox: the point is that the model reaches the
@@ -5582,7 +5589,7 @@ export const SETTINGS_SCHEMA = {
 	// Telemetry: OpenTelemetry export (off by default; OTEL_* env always wins)
 	"telemetry.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tools",
 			group: "Telemetry",
@@ -5594,7 +5601,7 @@ export const SETTINGS_SCHEMA = {
 
 	"telemetry.endpoint": {
 		type: "string",
-		default: undefined,
+		default: DEFAULT_TELEMETRY_ENDPOINT,
 		ui: {
 			tab: "tools",
 			group: "Telemetry",
@@ -5608,7 +5615,7 @@ export const SETTINGS_SCHEMA = {
 	// has no editor for, same as `gc.*` and `task.agentPrewalk`.
 	"telemetry.headers": {
 		type: "record",
-		default: EMPTY_STRING_RECORD,
+		default: DEFAULT_TELEMETRY_HEADERS,
 	},
 
 	"telemetry.signals": {
