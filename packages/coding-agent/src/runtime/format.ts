@@ -7,8 +7,13 @@ import type { RuntimeExecResult } from "./protocol";
  * `wrapToolWithMetaNotice` (see `tools/index.ts` → `tools/output-meta.ts`), whose
  * wrapper spills any result past `tools.artifactSpillThreshold` (default 50KB) to a
  * session artifact and replaces the inline content with a head/tail preview plus an
- * `artifact://` reference — the same central mechanism `bash` relies on. That spill is
- * the single truncation authority for runtime tool output.
+ * `artifact://` reference — the same head/tail-plus-artifact convention `bash` presents
+ * (though `bash` reaches it via its own `OutputSink` rather than this central spill).
+ * That spill is the single truncation authority for runtime tool output.
+ *
+ * Caveat: the spill is a no-op when the session supplies no artifact manager, so a very
+ * large result would then reach the model whole. Every real session provides one (the
+ * in-memory `SessionManager` fallback included), so this only bites synthetic callers.
  *
  * An earlier revision capped each stream here (`MAX_OUTPUT_CHARS`, 400k chars) as
  * context-blowout protection. Removing it does not regress that protection: the central

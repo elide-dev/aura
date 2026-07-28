@@ -127,7 +127,9 @@ describe("run tool output spill", () => {
 		// The artifact holds the complete output, byte-for-byte.
 		expect(saved).toBe(stdout.replace(/\n+$/, ""));
 		expect(saved).not.toContain("output truncated");
-		// Exactly one truncation notice — no double-notice from a tool-local cap.
+		// Exactly one truncation notice — no double-notice from a tool-local cap:
+		// only the central artifact reference, and no leftover tool-local cap wording.
 		expect(text.split("artifact://").length - 1).toBe(1);
+		expect(text).not.toContain("output truncated");
 	});
 });
