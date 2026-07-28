@@ -232,6 +232,41 @@ describe("buildDoctorReport", () => {
 		expect(text).not.toContain(os.homedir());
 	});
 
+	test("doctor keeps binary and library paths on one sanitized terminal row", () => {
+		const home = os.homedir();
+		const report = buildDoctorReport(
+			healthyInput({
+				runtime: {
+					enabled: true,
+					protocolVersion: 2,
+					status: {
+						available: true,
+						version: "1.4.1",
+						binaryPath: `${path.join(home, ".aura", "runtime", "bin", "runtime")}\nforged-binary\trow\u001b[31m`,
+						source: "managed",
+						protocolVersion: 2,
+						adapter: "embedded",
+						effectiveAdapter: "embedded",
+						embeddedLibraryPath: `${path.join(home, ".aura", "runtime", "lib", "runtime.so")}\nforged-library\trow\u001b[32m`,
+						embeddedLibrarySource: "setting",
+					},
+				},
+			}),
+		);
+		const entries = section(report, "runtime").entries;
+		const binaryDetail = entries.find(entry => entry.label === "binary")?.detail;
+		const libraryDetail = entries.find(entry => entry.label === "embedded runtime library")?.detail;
+		expect(binaryDetail).toContain("~/.aura/runtime/bin/runtime\\nforged-binary");
+		expect(libraryDetail).toContain("~/.aura/runtime/lib/runtime.so\\nforged-library");
+		expect(binaryDetail?.split("\n")).toHaveLength(1);
+		expect(libraryDetail?.split("\n")).toHaveLength(1);
+		expect(binaryDetail).not.toContain("\t");
+		expect(libraryDetail).not.toContain("\t");
+		const text = formatDoctorReport(report, { color: false });
+		expect(text).not.toContain("\u001b");
+		expect(text).not.toContain(home);
+	});
+
 	test("unavailable runtime diagnostics retain adapter selection context", () => {
 		const report = buildDoctorReport(
 			healthyInput({

@@ -24,7 +24,6 @@
  * `diagnose`/`stats` hooks exist rather than invoking them (the Hindsight
  * backend's would talk to a server).
  */
-import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
@@ -36,7 +35,7 @@ import {
 import type { DoctorCheck } from "../extensibility/plugins/types";
 import { RUNTIME_PROTOCOL_VERSION } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
-import { shortenPath } from "../tools/render-utils";
+import { formatDisplayPath } from "../tools/render-utils";
 
 // ---------------------------------------------------------------------------
 // Report shape
@@ -246,7 +245,7 @@ function runtimeSelectionEntries(status: RuntimeStatusResult): DoctorEntry[] {
 		entries.push({
 			label: "embedded runtime library",
 			status: "ok",
-			detail: shortenPath(sanitizeText(status.embeddedLibraryPath)),
+			detail: formatDisplayPath(status.embeddedLibraryPath),
 		});
 	}
 	if (status.embeddedLibrarySource) {
@@ -305,7 +304,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 		{ label: "state", status: "ok", detail: `available (version ${status.version ?? "unknown"})` },
 	];
 	if (status.binaryPath) {
-		entries.push({ label: "binary", status: "ok", detail: shortenPath(sanitizeText(status.binaryPath)) });
+		entries.push({ label: "binary", status: "ok", detail: formatDisplayPath(status.binaryPath) });
 	}
 	if (status.source) entries.push({ label: "source", status: "ok", detail: status.source });
 	entries.push(...selection, protocol);

@@ -11,7 +11,7 @@ import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Ellipsis } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { getKeybindings, replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { pluralize } from "@oh-my-pi/pi-utils";
+import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatKeyHints, type KeyId } from "../config/keybindings";
 import { isSettingsInitialized, settings } from "../config/settings";
 import { getDefault } from "../config/settings-schema";
@@ -689,6 +689,18 @@ export function shortenPath(filePath: unknown, homeDir?: string): string {
 		}
 	}
 	return filePath;
+}
+
+/**
+ * Render an arbitrary filesystem path safely inside one terminal row.
+ *
+ * Sanitization removes ANSI/control content before home shortening, tabs use
+ * the shared terminal expansion, and LF is escaped visibly so a valid POSIX
+ * filename cannot forge a neighboring diagnostic row.
+ */
+export function formatDisplayPath(filePath: unknown, homeDir?: string): string {
+	const sanitized = typeof filePath === "string" ? sanitizeText(filePath) : "";
+	return replaceTabs(shortenPath(sanitized, homeDir)).replaceAll("\n", "\\n");
 }
 
 export function formatToolWorkingDirectory(workdir: string | undefined, projectDir: string): string | undefined {

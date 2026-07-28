@@ -2,7 +2,6 @@
  * `aura runtime <action>` implementation, kept free of oclif plumbing so tests can
  * drive it with a stub service and capture output line-by-line.
  */
-import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import {
 	type LocalEndpointOptions,
@@ -13,7 +12,7 @@ import {
 	resolveRuntimeEndpointOptions,
 } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
-import { shortenPath } from "../tools/render-utils";
+import { formatDisplayPath } from "../tools/render-utils";
 
 export interface RuntimeCommandArgs {
 	action: "status";
@@ -69,7 +68,7 @@ function formatRuntimeSelection(status: RuntimeStatusResult): string[] {
 	if (status.adapter) lines.push(`  adapter: ${status.adapter}`);
 	if (status.effectiveAdapter) lines.push(`  effective adapter: ${status.effectiveAdapter}`);
 	if (status.embeddedLibraryPath) {
-		lines.push(`  embedded runtime library: ${shortenPath(sanitizeText(status.embeddedLibraryPath))}`);
+		lines.push(`  embedded runtime library: ${formatDisplayPath(status.embeddedLibraryPath)}`);
 	}
 	if (status.embeddedLibrarySource) {
 		lines.push(`  embedded runtime library source: ${status.embeddedLibrarySource}`);
@@ -97,7 +96,7 @@ export function formatRuntimeStatus(status: RuntimeStatusResult): string {
 	return [
 		"runtime: available",
 		`  version:  ${status.version ?? "unknown"}`,
-		status.binaryPath ? `  binary:   ${shortenPath(sanitizeText(status.binaryPath))}` : undefined,
+		status.binaryPath ? `  binary:   ${formatDisplayPath(status.binaryPath)}` : undefined,
 		status.source ? `  source:   ${status.source}` : undefined,
 		...selection,
 		`  protocol: v${status.protocolVersion}`,

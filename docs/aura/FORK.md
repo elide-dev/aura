@@ -18,6 +18,7 @@ and after every upstream merge.
 | `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`); `theme.light` unchanged; `runtime.*` settings (`runtime.enabled`, `runtime.adapter` with process default and explicit-embedded no-fallback, `runtime.autoDownload`, `runtime.path`, `runtime.embeddedPath`, `runtime.allowShell`) added to the `tools` tab. Runtime shell policy: `RUNTIME_SHELL_INTERCEPTOR_RULES` (routing direct runtime-binary shell commands to `run`/`build`/`serve`/`jvm_*`/`project_advice`) spread onto the tail of `DEFAULT_BASH_INTERCEPTOR_RULES`, plus `RUNTIME_SHELL_RULE_KIND`, `isRuntimeShellAllowed`, `applyRuntimeShellOptOut`, `activeBashInterceptorRules` (the always-on split — see the `tools/bash.ts` row), and an optional `kind?: string` group tag on `BashInterceptorRule`. The rules need no `runtime.enabled` check of their own — `checkBashInterception` already skips a rule whose `tool` is absent from `availableTools`, so the group is inert when the runtime tools are unregistered (`tools/bash-interceptor.ts` is therefore unforked) |
 | `packages/coding-agent/src/tools/bash.ts` | the interception block no longer sits behind `if (settings.get("bashInterceptor.enabled"))`; it selects its rules through `activeBashInterceptorRules(getBashInterceptorRules(), settings.get("bashInterceptor.enabled"))` and runs whenever that is non-empty. The runtime-routing group is therefore always evaluated (it is policy, and would be inert on every default install since `bashInterceptor.enabled` defaults to `false`), while upstream's deliberately-softened cat/grep/sed nudges stay behind the toggle exactly as before. The runtime group keeps its own two gates: tool availability and the `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` opt-out. Resolve an upstream conflict here by keeping upstream's loop body and re-applying the rule-selection call |
 | `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`; imports the five `Runtime*Tool` classes and registers `run`/`check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates; also imports the six `Jvm*Tool` classes and registers `jvm_run`/`jvm_disassemble`/`jvm_format`/`jvm_jar`/`jvm_deps`/`jvm_javadoc` the same way (same `runtime.enabled` gate, all `discoverable`); plus `RuntimeDebugTool`/`RuntimeServeTool` registered as `runtime_debug`/`serve` on the same gate, and `RuntimeAdviceTool` registered as `project_advice` on the same gate (the one runtime tool with `approval: "read"` — fixed argv, no caller-supplied code or output path) |
+| `packages/coding-agent/src/tools/render-utils.ts` | added shared `formatDisplayPath`: sanitizes ANSI/control content, shortens the home prefix, expands tabs with the terminal helper, and visibly escapes LF so filesystem paths cannot forge status/doctor rows |
 | `packages/coding-agent/src/tools/builtin-names.ts` | appended `run`, `check`, `build`, `insights`, `profile` and the six JVM names `jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc` to `BUILTIN_TOOL_NAMES` (no collision with the `search`→`grep` / `find`→`glob` legacy alias map; the `jvm_` prefix is the user-facing name, never a product name), then `runtime_debug` and `serve` — `runtime_debug` is deliberately NOT `debug`, which upstream already owns for the interactive stepping debugger (`tools/debug.ts`) — then `project_advice` |
 | `packages/coding-agent/src/tools/essential-tools.ts` | added `run`, `check`, `build` to `ESSENTIAL_BUILTIN_TOOL_NAMES` so they stay top-level and a re-register cannot demote them (issue #5764 guard); `insights`/`profile`, all six `jvm_*` tools, and `project_advice` stay `discoverable` (they are reached through discovery, not the always-on schema) |
 | `packages/coding-agent/src/config/settings.ts` | project config resolves to `<cwd>/${CONFIG_DIR_NAME}/config.yml` (was a hardcoded `.omp`): `#projectConfigPath()` is the sole write target, `#loadProjectConfigYaml()` falls back to `<cwd>/.omp/config.yml` for reads (narrowed to the `modelRoles` slice at the `#loadProjectSettings` call site) and seeds the first branded write so legacy keys carry forward. Still required after the legacy-base work — it is the only path that reads a legacy `config.yml` at all. Also `getBashInterceptorRules()` pipes the configured rules through `applyRuntimeShellOptOut(..., this.get("runtime.allowShell"))` — this accessor is where the rule set is assembled for `bash`, so it is where the runtime shell opt-out (setting or `AURA_ALLOW_ELIDE_SHELL=1`) lands |
@@ -88,10 +89,10 @@ read fallback, writes never legacy); keep those alongside upstream's.
   generation, fingerprinting, and checked-in drift verification
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts` — runtime
   status command, including exact JSON selection/ABI/schema fields and sanitized,
-  home-shortened adapter/library paths in plain output
+  home-shortened, single-line adapter/library paths in plain output
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts` — aggregate
   diagnostics, including requested/effective adapter and embedded runtime library
-  selection with sanitized, home-shortened paths
+  selection with sanitized, home-shortened, single-line paths
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
   keeping a process registry of its own), `src/prompts/tools/runtime-*.md`
@@ -101,8 +102,9 @@ read fallback, writes never legacy); keep those alongside upstream's.
   `test/doctor-command-registration.test.ts`, `test/doctor-tool-gate-drift.test.ts`,
   `test/aura-bin.test.ts`, `test/aura-theme.test.ts`,
   `packages/utils/test/branding.test.ts` — fork-owned tests, including embedded
-  library precedence/file-type contracts and runtime status/doctor selection
-  diagnostics; safe to keep verbatim through any upstream merge
+  library precedence/file-type contracts, runtime status/doctor selection
+  diagnostics, and LF/tab path row-forging regressions; safe to keep verbatim
+  through any upstream merge
 - `packages/coding-agent/test/discovery/legacy-omp-project-base.test.ts`,
   `test/legacy-omp-compat-paths.test.ts`, `test/cli-help-profile-env.test.ts` —
   legacy `.omp` compat contract: file surfaces load, `.aura` wins conflicts, a

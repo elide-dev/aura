@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,7 +52,7 @@ export async function findBinaryInTree(dir: string): Promise<string | null> {
 	}
 	for (const entry of entries) {
 		const child = path.join(dir, entry);
-		let stat: Stats;
+		let stat: nodeFs.Stats;
 		try {
 			stat = await fs.stat(child);
 		} catch {

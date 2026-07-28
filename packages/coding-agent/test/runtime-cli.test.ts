@@ -105,6 +105,33 @@ describe("aura runtime status", () => {
 		expect(text).not.toContain(os.homedir());
 	});
 
+	test("plain status keeps binary and library paths on one sanitized terminal row", () => {
+		const home = os.homedir();
+		const text = formatRuntimeStatus({
+			available: true,
+			version: "1.4.1",
+			binaryPath: `${path.join(home, ".aura", "runtime", "bin", "runtime")}\nforged-binary\trow\u001b[31m`,
+			source: "managed",
+			protocolVersion: 1,
+			adapter: "embedded",
+			effectiveAdapter: "embedded",
+			embeddedLibraryPath: `${path.join(home, ".aura", "runtime", "lib", "runtime.so")}\nforged-library\trow\u001b[32m`,
+			embeddedLibrarySource: "setting",
+		});
+		const rows = text.split("\n");
+		const binaryRows = rows.filter(row => row.includes("binary:"));
+		const libraryRows = rows.filter(row => row.includes("embedded runtime library:"));
+		expect(binaryRows).toHaveLength(1);
+		expect(libraryRows).toHaveLength(1);
+		expect(binaryRows[0]).toContain("~/.aura/runtime/bin/runtime\\nforged-binary");
+		expect(libraryRows[0]).toContain("~/.aura/runtime/lib/runtime.so\\nforged-library");
+		expect(binaryRows[0]).not.toContain("\t");
+		expect(libraryRows[0]).not.toContain("\t");
+		expect(text).not.toContain("\u001b");
+		expect(text).not.toContain(home);
+		expect(rows.some(row => row.startsWith("forged-"))).toBe(false);
+	});
+
 	test("unavailable status still explains the selected adapter and embedded library", () => {
 		const text = formatRuntimeStatus({
 			available: false,
