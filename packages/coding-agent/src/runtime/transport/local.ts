@@ -2,7 +2,7 @@ import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MINIMUM_RUNTIME_VERSION } from "../dist";
+import { ELIDE_VERSION, MINIMUM_RUNTIME_VERSION } from "../dist";
 import { deriveJvmMainClass, JVM_BYTECODE_RELEASE, jvmClasspath, jvmSourceFile } from "../jvm";
 import {
 	errorResponse,
@@ -29,11 +29,20 @@ import {
 	type RuntimeStatusResult,
 } from "../protocol";
 import { provisionRuntime } from "../provision";
-import { type ResolvedRuntime, resolveRuntimeBinary } from "../resolve";
+import { managedVersionDir, type ResolvedRuntime, resolveRuntimeBinary } from "../resolve";
 import type { RuntimeEndpoint } from "../service";
 
 export interface LocalEndpointOptions {
 	explicitPath?: string;
+	/**
+	 * Managed-install version to use, from the `runtime.version` setting. Absent
+	 * means the pinned {@link ELIDE_VERSION}. Only the pinned version carries a
+	 * sha256 in {@link RUNTIME_DIST}, so an off-pin version is *selection only* —
+	 * see {@link LocalRuntimeEndpoint.missingGuidance}.
+	 */
+	version?: string;
+	/** Managed install root override (tests). */
+	managedRoot?: string;
 	autoDownload?: boolean;
 	/** Environment used for binary resolution and for spawned runtime processes. Defaults to `process.env`. */
 	env?: NodeJS.ProcessEnv;
@@ -332,25 +341,57 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 	}
 
 	private async locate(): Promise<ResolvedRuntime | null> {
-		return this.resolveFn()({ explicitPath: this.opts.explicitPath, env: this.opts.env });
+		return this.resolveFn()({
+			explicitPath: this.opts.explicitPath,
+			version: this.opts.version,
+			managedRoot: this.opts.managedRoot,
+			env: this.opts.env,
+		});
+	}
+
+	/** True when `runtime.version` names something other than the version this build pins. */
+	private offPinVersion(): string | undefined {
+		const version = this.opts.version;
+		return version !== undefined && version !== "" && version !== ELIDE_VERSION ? version : undefined;
+	}
+
+	/**
+	 * What to say when no binary was found. An off-pin `runtime.version` gets its
+	 * own answer: only {@link ELIDE_VERSION} has a pinned sha256, so downloading
+	 * some other version would be an unverified fetch — which this never does.
+	 */
+	private missingGuidance(): string {
+		const offPin = this.offPinVersion();
+		if (offPin === undefined) return MISSING_GUIDANCE;
+		return (
+			`runtime.version is set to ${offPin}, but this build pins ${ELIDE_VERSION} — only the pinned version ` +
+			"has a published checksum, so an off-pin version is never downloaded automatically (an unverified " +
+			`download is not something the harness will do silently). Install it yourself under ` +
+			`${managedVersionDir(offPin)}, point runtime.path (or AURA_RUNTIME_BIN) at a binary, or clear ` +
+			"runtime.version to use the pinned one."
+		);
 	}
 
 	/** Resolve the binary; auto-provision when allowed. Throws runtime-missing otherwise. */
 	private async ensureBinary(): Promise<ResolvedRuntime> {
 		const found = await this.locate();
 		if (found) return found;
-		if (this.opts.autoDownload !== false && !this.opts.explicitPath) {
+		if (this.opts.autoDownload !== false && !this.opts.explicitPath && this.offPinVersion() === undefined) {
 			const provision = this.opts.provision ?? provisionRuntime;
-			const binaryPath = await provision({ onProgress: this.opts.onProgress });
+			const binaryPath = await provision({
+				version: this.opts.version,
+				targetRoot: this.opts.managedRoot,
+				onProgress: this.opts.onProgress,
+			});
 			return { binaryPath, source: "managed" };
 		}
-		throw new RuntimeRpcError("runtime-missing", MISSING_GUIDANCE);
+		throw new RuntimeRpcError("runtime-missing", this.missingGuidance());
 	}
 
 	private async status(): Promise<RuntimeStatusResult> {
 		const found = await this.locate();
 		if (!found) {
-			return { available: false, guidance: MISSING_GUIDANCE, protocolVersion: RUNTIME_PROTOCOL_VERSION };
+			return { available: false, guidance: this.missingGuidance(), protocolVersion: RUNTIME_PROTOCOL_VERSION };
 		}
 		const result = await this.spawn([found.binaryPath, "--version"], {});
 		const version = parseVersion(result.stdout);

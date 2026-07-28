@@ -1665,6 +1665,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					enabled: settings.get("runtime.enabled"),
 					autoDownload: settings.get("runtime.autoDownload"),
 					path: settings.get("runtime.path") ?? "",
+					version: settings.get("runtime.version") ?? "",
 				});
 				return opts ? getOrCreateRuntimeService(opts) : undefined;
 			},

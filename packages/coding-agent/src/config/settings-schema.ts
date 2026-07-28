@@ -646,6 +646,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Explicit runtime binary; overrides discovery and disables auto-download.",
 		},
 	},
+	"runtime.version": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "tools",
+			group: "Runtime",
+			label: "Runtime version",
+			description:
+				"Managed runtime version to use instead of the pinned one. Only the pinned version has a published checksum, so an off-pin version is never downloaded — install it yourself or set the runtime binary path.",
+		},
+	},
 	"runtime.allowShell": {
 		type: "boolean",
 		default: false,

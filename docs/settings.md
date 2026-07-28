@@ -487,6 +487,7 @@ runtime:
   enabled: true
   autoDownload: true
   path: ""
+  version: ""
   allowShell: false
 ```
 
@@ -494,7 +495,8 @@ runtime:
 |---|---|---|---|
 | `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile`, `runtime_debug`/`serve`, and `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
-| `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
+| `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. Also settable per-run with `--runtime <path>`, which reports `source: flag` in `aura runtime status`. |
+| `runtime.version` | string | `""` | Managed runtime version to select instead of the pinned one, i.e. `~/.aura/runtime/<version>/`. Empty uses the pinned version. **Only the pinned version has a published sha256**, so an off-pin version is never downloaded: if that install is absent, the runtime reports missing with guidance rather than performing an unverified fetch. Install it yourself under that directory, or use `runtime.path`. |
 | `runtime.allowShell` | boolean | `false` | Stop routing direct runtime-binary shell commands to the innate tools. See below. |
 
 #### Bundled runtime skills

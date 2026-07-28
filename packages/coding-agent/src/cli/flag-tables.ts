@@ -161,6 +161,11 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--append-system-prompt": (result, value) => {
 		result.appendSystemPrompt = value;
 	},
+	// Overrides the `runtime.path` setting for this run. Named `--runtime`, never
+	// `--elide`: the user-facing noun is "the runtime".
+	"--runtime": (result, value) => {
+		result.runtime = value;
+	},
 	"--provider-session-id": (result, value) => {
 		result.providerSessionId = value;
 	},

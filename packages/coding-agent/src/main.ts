@@ -1221,6 +1221,13 @@ export async function runRootCommand(
 	if (parsedArgs.advisor) {
 		settingsInstance.override("advisor.enabled", true);
 	}
+	// `--runtime <path>` (ephemeral): the flag form of `runtime.path`, so every
+	// `settings.get("runtime.path")` site — the innate tools' endpoint resolution
+	// included — sees it. An explicit path suppresses auto-download downstream and
+	// resolves with `source: "flag"`.
+	if (parsedArgs.runtime) {
+		settingsInstance.override("runtime.path", parsedArgs.runtime);
+	}
 
 	await logger.time(
 		"initTheme:final",

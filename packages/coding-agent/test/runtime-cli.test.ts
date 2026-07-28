@@ -72,18 +72,22 @@ describe("aura runtime status", () => {
 	// A read-only diagnostic must never provision: whatever `runtime.autoDownload`
 	// says, the status probe resolves with auto-download off.
 	test("status options force autoDownload off regardless of settings", () => {
-		expect(resolveStatusEndpointOptions({ enabled: true, autoDownload: true, path: "" })).toEqual({
+		expect(resolveStatusEndpointOptions({ enabled: true, autoDownload: true, path: "", version: "" })).toEqual({
 			autoDownload: false,
 		});
-		expect(resolveStatusEndpointOptions({ enabled: true, autoDownload: true, path: " /opt/bin/rt " })).toEqual({
+		expect(
+			resolveStatusEndpointOptions({ enabled: true, autoDownload: true, path: " /opt/bin/rt ", version: "" }),
+		).toEqual({
 			autoDownload: false,
 			explicitPath: "/opt/bin/rt",
 		});
-		expect(resolveStatusEndpointOptions({ enabled: false, autoDownload: true, path: "" })).toBeUndefined();
+		expect(
+			resolveStatusEndpointOptions({ enabled: false, autoDownload: true, path: "", version: "" }),
+		).toBeUndefined();
 	});
 
 	test("createStatusRuntime yields the disabled sentinel when runtime.enabled is false", () => {
-		expect(createStatusRuntime({ enabled: false, autoDownload: true, path: "" })).toBe(RUNTIME_DISABLED);
+		expect(createStatusRuntime({ enabled: false, autoDownload: true, path: "", version: "" })).toBe(RUNTIME_DISABLED);
 	});
 
 	test("disabled runtime prints the disabled line and exits 1", async () => {

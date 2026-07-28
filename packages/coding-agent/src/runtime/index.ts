@@ -15,13 +15,14 @@ let cached: { key: string; service: RuntimeService } | undefined;
 function serviceCacheKey(opts?: LocalEndpointOptions): string {
 	return JSON.stringify({
 		explicitPath: opts?.explicitPath ?? null,
+		version: opts?.version ?? null,
 		autoDownload: opts?.autoDownload ?? null,
 	});
 }
 
 /**
  * Lazily build a service over the local endpoint, memoized on the options that
- * affect binary resolution (`explicitPath`, `autoDownload`). Identical options
+ * affect binary resolution (`explicitPath`, `version`, `autoDownload`). Identical options
  * hand back the cached instance; changed options build a fresh one, so live
  * edits to `runtime.*` settings take effect on the next call. Discarding an
  * instance is free because {@link LocalRuntimeEndpoint} holds no state — it
@@ -37,12 +38,21 @@ export function getOrCreateRuntimeService(opts?: LocalEndpointOptions): RuntimeS
 	return cached.service;
 }
 
-/** Runtime settings as read from `runtime.enabled` / `runtime.autoDownload` / `runtime.path`. */
+/**
+ * Runtime settings as read from `runtime.enabled` / `runtime.autoDownload` /
+ * `runtime.path` / `runtime.version`.
+ */
 export interface RuntimeSettingsValues {
 	enabled: boolean;
 	autoDownload: boolean;
 	/** Explicit binary path; empty/whitespace means "discover". An explicit path disables auto-download. */
 	path: string;
+	/**
+	 * Managed-install version to select; empty/whitespace means the pinned
+	 * default. An off-pin version is never downloaded (no published checksum) —
+	 * it selects an install the user placed themselves.
+	 */
+	version: string;
 }
 
 /**
@@ -52,9 +62,11 @@ export interface RuntimeSettingsValues {
 export function resolveRuntimeEndpointOptions(values: RuntimeSettingsValues): LocalEndpointOptions | undefined {
 	if (!values.enabled) return undefined;
 	const explicit = values.path.trim();
+	const version = values.version.trim();
 	return {
 		autoDownload: values.autoDownload,
 		...(explicit === "" ? {} : { explicitPath: explicit }),
+		...(version === "" ? {} : { version }),
 	};
 }
 

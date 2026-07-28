@@ -27,12 +27,19 @@ function isDisabled(runtime: StatusRuntime): runtime is typeof RUNTIME_DISABLED 
 	return "disabled" in runtime;
 }
 
-/** Read the `runtime.*` settings the innate tools use, from the settings singleton. */
-export function readRuntimeSettings(): RuntimeSettingsValues {
+/**
+ * Read the `runtime.*` settings the innate tools use, from the settings singleton.
+ *
+ * `overrides` is the flag layer: `aura runtime status --runtime <path>` reports on
+ * that binary without touching stored settings, the same way the launch flag
+ * overrides `runtime.path` for a session. An `undefined` field defers to settings.
+ */
+export function readRuntimeSettings(overrides: Partial<RuntimeSettingsValues> = {}): RuntimeSettingsValues {
 	return {
-		enabled: settings.get("runtime.enabled"),
-		autoDownload: settings.get("runtime.autoDownload"),
-		path: settings.get("runtime.path") ?? "",
+		enabled: overrides.enabled ?? settings.get("runtime.enabled"),
+		autoDownload: overrides.autoDownload ?? settings.get("runtime.autoDownload"),
+		path: overrides.path ?? settings.get("runtime.path") ?? "",
+		version: overrides.version ?? settings.get("runtime.version") ?? "",
 	};
 }
 

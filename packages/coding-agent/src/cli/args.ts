@@ -39,6 +39,8 @@ export interface Args {
 	apiKey?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
+	/** `--runtime <path>`: explicit runtime binary for this run; overrides the `runtime.path` setting. */
+	runtime?: string;
 	thinking?: ConfiguredThinkingLevel;
 	hideThinking?: boolean;
 	advisor?: boolean;
