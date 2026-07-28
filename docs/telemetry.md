@@ -77,7 +77,7 @@ Two equivalent routes: settings, or the standard `OTEL_*` environment variables.
 ### Settings
 
 ```yaml
-# ~/.omp/agent/config.yml
+# ~/.aura/agent/config.yml
 telemetry:
   enabled: true
   endpoint: http://localhost:4318
@@ -88,7 +88,7 @@ telemetry:
 
 | Setting                        | Type    | Default                     | Meaning                                                              |
 | ------------------------------ | ------- | --------------------------- | -------------------------------------------------------------------- |
-| `telemetry.enabled`            | boolean | `false`                     | Master switch. Nothing in `telemetry.*` applies while this is false. |
+| `telemetry.enabled`            | boolean | `false`                     | Master switch for the settings-driven route: `telemetry.endpoint`, `.headers`, and `.signals` are ignored while this is false. |
 | `telemetry.endpoint`           | string  | —                           | **Base** OTLP endpoint; the per-signal path is appended.             |
 | `telemetry.headers`            | record  | `{}`                        | Headers sent with every OTLP request (config-file only, no UI).      |
 | `telemetry.signals`            | array   | `[traces, logs, metrics]`   | Signals to export. Omitting one switches it off.                     |
@@ -97,6 +97,8 @@ telemetry:
 | `telemetry.identity.workspace` | boolean | `false`                     | Attach `aura.workspace.path` (the working directory).                |
 
 `telemetry.endpoint` is a base endpoint per the OTLP spec: `http://localhost:4318` becomes `http://localhost:4318/v1/traces`, `/v1/logs`, and `/v1/metrics`.
+
+The three `telemetry.identity.*` opt-ins are **not** gated on `telemetry.enabled`. They are consent flags, not transport config: they govern what identity is attached whenever telemetry is active, however it was activated. So if you enable export purely through the environment (`OTEL_EXPORTER_OTLP_ENDPOINT`) and leave `telemetry.enabled: false`, a `telemetry.identity.hostname: true` in your config still attaches `host.name`. Turn the opt-ins off — don't rely on `telemetry.enabled` to suppress them.
 
 ### Environment variables
 
@@ -119,7 +121,7 @@ telemetry:
 
 1. **`OTEL_SDK_DISABLED=true` wins over everything.** It is read from the raw process environment only; no setting can re-enable export against it.
 2. **Environment wins per key.** A `telemetry.*` value is used only when neither the signal-specific nor the generic `OTEL_*` key for that value is set. Endpoint and headers are resolved independently, so you can point the endpoint at a collector via env while keeping headers in settings.
-3. **`telemetry.enabled: false` contributes nothing** — but env-only activation still works. Setting just `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment enables export without touching settings.
+3. **`telemetry.enabled: false` contributes no endpoint, headers, or signal selection** — but env-only activation still works. Setting just `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment enables export without touching settings. The `telemetry.identity.*` opt-ins are the exception: they apply to env-activated telemetry too (see above).
 4. A signal is exported when it has an endpoint (per-signal or base) **and** its `OTEL_*_EXPORTER` is not `none`. Listing `telemetry.signals` without a signal sets that variable to `none` for you.
 
 ### `http/protobuf` only
@@ -132,7 +134,7 @@ Buffered telemetry is flushed every 30 seconds and again at process exit, so a l
 
 Aura's telemetry is **pseudonymous by default**. Nothing that identifies you or your work leaves the process unless you opt in.
 
-- **`aura.install.id`** is a random UUID minted once per install and stored at `<configRoot>/telemetry-install-id` (`~/.omp/telemetry-install-id` by default, mode `0600`). It is random, not derived from anything about your machine, so it is strictly non-reversible. **Delete the file to rotate it.** It is deliberately separate from the general-purpose install id in [install-id.md](install-id.md), so rotating telemetry identity does not disturb unrelated install-scoped state.
+- **`aura.install.id`** is a random UUID minted once per install and stored at `<configRoot>/telemetry-install-id` — `~/.aura/telemetry-install-id` by default, mode `0600`. (`PI_CONFIG_DIR` renames that directory, and an active profile moves it under `profiles/<name>/`. `aura config path` prints the agent directory, whose parent is the config root.) It is random, not derived from anything about your machine, so it is strictly non-reversible. **Delete the file to rotate it.** It is deliberately separate from the general-purpose install id in [install-id.md](install-id.md), so rotating telemetry identity does not disturb unrelated install-scoped state.
 - **`service.name`** defaults to `aura` and **`service.version`** to the running build's version. Those and the install id are the only resource attributes present by default.
 - **Usage-limit metrics carry `aura.account.hash` by default** — the first 12 hex characters of the SHA-256 digest of the internal account key. That is enough to keep one account's utilization series separate from another's, and not enough to recover the email or credential behind it. Setting `telemetry.identity.account: true` replaces the hash with the real `aura.account.email` and `aura.account.key`; leave it off unless the collector is yours and you need the account named.
 - **`telemetry.identity.hostname: true`** adds `host.name`; **`telemetry.identity.workspace: true`** adds `aura.workspace.path` (an absolute path, which usually names your project). Both are off by default.
@@ -171,13 +173,13 @@ docker run --rm -p 4318:4318 \
 Then either:
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 omp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 aura
 ```
 
 or persist it:
 
 ```yaml
-# ~/.omp/agent/config.yml
+# ~/.aura/agent/config.yml
 telemetry:
   enabled: true
   endpoint: http://localhost:4318
