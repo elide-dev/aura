@@ -161,14 +161,22 @@ export class ExecutionWorkerCore {
 		if (message.handle !== this.#handle) {
 			throw new RuntimeRpcError("internal", "Embedded runtime execution worker received a stale handle.");
 		}
-		let response: Uint8Array;
+		let response: Uint8Array | undefined;
+		let failure: unknown;
 		try {
 			response = library.closeRuntime(message.handle);
-			library.closeLibrary();
-		} finally {
-			this.#library = undefined;
-			this.#handle = undefined;
+		} catch (error) {
+			failure = error;
 		}
+		try {
+			library.closeLibrary();
+		} catch (error) {
+			failure ??= error;
+		}
+		this.#library = undefined;
+		this.#handle = undefined;
+		if (failure !== undefined) throw failure;
+		if (!response) throw new RuntimeRpcError("internal", "Embedded runtime execution worker close returned no response.");
 		const transferable = transferBytes(response);
 		this.#transport.send({ type: "closed", id: message.id, response: transferable.bytes }, transferable.transfer);
 	}

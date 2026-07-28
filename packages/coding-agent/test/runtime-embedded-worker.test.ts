@@ -55,6 +55,7 @@ class FakeNativeLibrary implements EmbeddedNativeLibrary {
 	readonly schemaHash = EMBEDDED_RUNTIME_SCHEMA_SHA256;
 	readonly events: string[];
 	closeLibraryCount = 0;
+	closeRuntimeFailure: Error | undefined;
 
 	constructor(path: string, events: string[]) {
 		this.path = path;
@@ -78,6 +79,7 @@ class FakeNativeLibrary implements EmbeddedNativeLibrary {
 
 	closeRuntime(handle: bigint): Uint8Array {
 		this.events.push(`close:${handle}`);
+		if (this.closeRuntimeFailure) throw this.closeRuntimeFailure;
 		return new Uint8Array([13]);
 	}
 
@@ -350,6 +352,23 @@ describe("embedded worker cores", () => {
 
 		expect(events).toEqual(["open:10", "close:88", "dlclose"]);
 		expect(transport.sent.map(entry => entry.message.type)).toEqual(["error"]);
+	});
+
+	test("execution close requests library cleanup when a terminal close response is malformed", async () => {
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		const events: string[] = [];
+		const library = new FakeNativeLibrary("/runtime.so", events);
+		library.closeRuntimeFailure = new RuntimeRpcError("internal", "malformed terminal close response");
+		new ExecutionWorkerCore(transport, () => library);
+
+		transport.emit({ type: "open", id: 1, libraryPath: "/runtime.so", request: new Uint8Array([10]) });
+		await flushWorkerQueue();
+		events.length = 0;
+		transport.emit({ type: "close", id: 2, handle: 88n });
+		await flushWorkerQueue();
+
+		expect(events).toEqual(["close:88", "dlclose"]);
+		expect(responseForId(transport.sent, 2).message.type).toBe("error");
 	});
 
 	test("control worker validates cancellation responses and remains responsive until shutdown", async () => {
