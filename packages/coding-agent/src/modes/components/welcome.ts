@@ -554,7 +554,8 @@ export function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineC
 	const rows = lines.length;
 	const cols = Math.max(...lines.map(l => l.length));
 	// span+1 so `base` stays strictly < 1: avoids the wrap-around at the
-	// far corner mapping back to t=0 (hot pink) on the resting frame.
+	// far corner mapping back to t=0 (aura purple, the first brand stop) on
+	// the resting frame.
 	const span = Math.max(1, cols + rows - 1);
 	return lines.map((line, y) => {
 		let result = "";
