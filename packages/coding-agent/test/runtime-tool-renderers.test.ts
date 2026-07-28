@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { galleryFixtures } from "@oh-my-pi/pi-coding-agent/cli/gallery-fixtures";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
-import { RUNTIME_RENDERER_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/runtime-renderer";
+import { RUNTIME_RENDERER_TOOL_NAMES, runtimeToolRenderers } from "@oh-my-pi/pi-coding-agent/tools/runtime-renderer";
 
 const WIDTH = 100;
 const OPTIONS: RenderResultOptions = { expanded: false, isPartial: false };
@@ -51,9 +52,14 @@ const exec = (over: Partial<Record<string, unknown>> = {}) => ({
 });
 
 describe("runtime tool renderers: registration", () => {
-	it("registers a renderer for every runtime tool", () => {
+	it("registers this module's renderer — not a shadowing one — for every runtime tool", () => {
+		// Identity, not mere presence: `toolRenderers` spreads
+		// `runtimeToolRenderers` FIRST, so an upstream entry landing on one of
+		// these keys would silently win. That is the exact scenario the ordering
+		// reasons about, and only a reference check catches it.
 		for (const name of RUNTIME_RENDERER_TOOL_NAMES) {
 			expect(toolRenderers[name], `${name} has no renderer`).toBeDefined();
+			expect(toolRenderers[name], `${name} is shadowed by another renderer`).toBe(runtimeToolRenderers[name]);
 		}
 	});
 
@@ -320,6 +326,50 @@ describe("runtime_debug and serve", () => {
 		expect(text).toContain(Bun.stripANSI(uiTheme.symbol("status.warning")));
 	});
 
+	it("keeps the launched target visible once the endpoint replaces the description", () => {
+		// The settled row takes the endpoint as its description and
+		// `mergeCallAndResult` removes the call frame above it, so unless the
+		// target is carried into `meta` the transcript loses the one thing that
+		// says WHAT is being debugged or served.
+		const debug = settled(
+			"runtime_debug",
+			{
+				content: [{ type: "text", text: "listening" }],
+				details: {
+					mode: "debug",
+					jobName: "runtime-debug-cdp-1",
+					endpoint: "ws://127.0.0.1:4242/x",
+					timedOut: false,
+					startupOutput: "",
+					argv: [],
+					cwd: "/repo",
+				},
+			},
+			{ path: "src/app.ts", protocol: "cdp" },
+		);
+		expect(debug).toContain("ws://127.0.0.1:4242/x");
+		expect(debug).toContain("src/app.ts");
+
+		const serve = settled(
+			"serve",
+			{
+				content: [{ type: "text", text: "serving" }],
+				details: {
+					mode: "serve",
+					jobName: "runtime-serve-1",
+					endpoint: "http://127.0.0.1:8080",
+					timedOut: false,
+					startupOutput: "",
+					argv: [],
+					cwd: "/repo",
+				},
+			},
+			{ directory: "public", port: 8080 },
+		);
+		expect(serve).toContain("http://127.0.0.1:8080");
+		expect(serve).toContain("public");
+	});
+
 	it("errors — not warns — when the launch itself failed", () => {
 		// A rejected launch also has no endpoint, so the endpoint-less warning path
 		// must not swallow it.
@@ -413,6 +463,22 @@ describe("naming rule", () => {
 		];
 		for (const frame of frames) {
 			expect(frame.toLowerCase()).not.toContain("elide");
+		}
+	});
+
+	it("never says Elide in a settled result frame built from real fixture data", () => {
+		// Hand-written clean args only prove the renderer's own chrome is clean.
+		// The realistic leak path is the RESULT: `details` the runtime produced
+		// and the demo text on the user-facing `omp gallery` surface. Drive every
+		// runtime tool's success AND error fixture through the settled renderer.
+		for (const name of RUNTIME_RENDERER_TOOL_NAMES) {
+			const fixture = galleryFixtures[name];
+			expect(fixture, `${name} has no gallery fixture`).toBeDefined();
+			for (const outcome of [fixture.result, fixture.errorResult]) {
+				if (!outcome) continue;
+				const frame = settled(name, outcome, fixture.args);
+				expect(frame.toLowerCase(), `${name} result frame names the runtime binary`).not.toContain("elide");
+			}
 		}
 	});
 });

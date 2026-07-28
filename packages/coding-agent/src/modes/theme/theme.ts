@@ -14,8 +14,8 @@ import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLum
 import { type } from "arktype";
 import chalk from "chalk";
 import { LRUCache } from "lru-cache/raw";
-import auraThemeJson from "./aura.json" with { type: "json" };
 // Embed theme JSON files at build time
+import auraThemeJson from "./aura.json" with { type: "json" };
 import auraLightThemeJson from "./aura-light.json" with { type: "json" };
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";

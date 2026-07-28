@@ -74,7 +74,7 @@ export const runtimeFixtures: Record<string, GalleryFixture> = {
 		args: {},
 		result: execResult(
 			[
-				"This project builds with the project manifest at ./elide.pkl.",
+				"This project builds with the project manifest in this directory.",
 				"  build:  build :jvm",
 				"  test:   test --coverage",
 				"  serve:  serve public/",

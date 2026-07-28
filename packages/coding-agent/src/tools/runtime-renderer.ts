@@ -301,13 +301,22 @@ function jvmResultFrame(fallback: (args: Args) => Frame) {
 	};
 }
 
-/** `describeResult` for the two hub-backed job tools. */
+/**
+ * `describeResult` for the two hub-backed job tools.
+ *
+ * The endpoint takes the description slot because it is what the caller needs
+ * next — but `mergeCallAndResult` removes the call frame above this row, so the
+ * launched target has to ride along in `meta` or the transcript stops saying
+ * *what* is being debugged or served. (`serve` is partly self-documenting via
+ * the URL's path; `runtime_debug`'s `ws://…` endpoint says nothing at all.)
+ */
 function jobResultFrame(fallback: (args: Args) => Frame) {
 	return (details: AnyDetails | undefined, args: Args): Frame => {
 		if (!isJobDetails(details)) return fallback(args);
+		const target = fallback(args).description;
 		return {
 			description: details.endpoint ?? "no endpoint",
-			meta: [details.jobName, details.timedOut ? "timed out" : undefined, details.state],
+			meta: [target, details.jobName, details.timedOut ? "timed out" : undefined, details.state],
 		};
 	};
 }
