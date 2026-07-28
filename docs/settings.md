@@ -497,6 +497,27 @@ runtime:
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. |
 | `runtime.allowShell` | boolean | `false` | Stop routing direct runtime-binary shell commands to the innate tools. See below. |
 
+#### Bundled runtime skills
+
+Five skills ship with the agent and are discovered in every session:
+`skill://runtime` (the `run`/`check`/`build` surface and when to prefer it over
+`bash` or `eval`), `skill://insights`, `skill://profiling`, `skill://jvm`, and
+`skill://stateful-debugger` (the `runtime_debug`/`serve` flows and their
+`hub`-owned lifecycle). They carry the strategy the per-tool descriptions cannot
+— when `cputracing` beats `cpusampling`, why a one-shot instrumented run emits no
+`close` event, how the JVM main class is derived.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `skills.enableBundled` | boolean | `true` | Discover the bundled runtime skills. Also retired automatically when `runtime.enabled` is off, since they document tools that are then unregistered. |
+
+They are materialized into `<config dir>/agent/builtin-skills/<name>/SKILL.md`
+(the skill machinery reads a skill's body back from its path) and rewritten from
+the embedded copy whenever a file drifts, so edit them there and the change is
+reverted on the next launch. To override one, author a skill of the same name in
+any normal skills directory: the bundled provider sits at the lowest skill
+priority, so yours wins. To drop one, list its name in `skills.ignoredSkills`.
+
 #### Runtime shell policy
 
 `bash` carries a group of interceptor rules that route direct shell invocation of the

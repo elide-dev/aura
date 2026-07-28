@@ -15,7 +15,7 @@ and after every upstream merge.
 | `packages/coding-agent/src/task/discovery.ts` | `TASK_AGENT_CONFIG_SOURCES` derives from CONFIG_DIR_NAME + LEGACY_CONFIG_DIR_NAME (was a single hardcoded `".omp"`; stale value filtered out all project/user agent dirs after rebrand). Project agent dirs are consumed in priority order so `.aura/agents` beats legacy `.omp/agents` on a name collision, and `projectAgentsDir` only ever reports a writable base |
 | `packages/coding-agent/package.json` | bin: aura alias alongside omp |
 | `packages/coding-agent/src/modes/theme/theme.ts` | register built-in `aura` theme in `BUILTIN_THEMES` (import + entry), mirroring `dark`/`light` |
-| `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`); `theme.light` unchanged; `runtime.*` settings (`runtime.enabled`, `runtime.autoDownload`, `runtime.path`, `runtime.allowShell`) added to the `tools` tab. Runtime shell policy: `RUNTIME_SHELL_INTERCEPTOR_RULES` (routing direct runtime-binary shell commands to `run`/`build`/`serve`/`jvm_*`/`project_advice`) spread onto the tail of `DEFAULT_BASH_INTERCEPTOR_RULES`, plus `RUNTIME_SHELL_RULE_KIND`, `isRuntimeShellAllowed`, `applyRuntimeShellOptOut`, `activeBashInterceptorRules` (the always-on split — see the `tools/bash.ts` row), and an optional `kind?: string` group tag on `BashInterceptorRule`. The rules need no `runtime.enabled` check of their own — `checkBashInterception` already skips a rule whose `tool` is absent from `availableTools`, so the group is inert when the runtime tools are unregistered (`tools/bash-interceptor.ts` is therefore unforked) |
+| `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`); `theme.light` unchanged; `runtime.*` settings (`runtime.enabled`, `runtime.autoDownload`, `runtime.path`, `runtime.allowShell`) added to the `tools` tab, plus `skills.enableBundled` (default `true`, `tools`/`Runtime` tab-group) and its `enableBundled?: boolean` field on `SkillsSettings` — `settings.getGroup("skills")` derives the object from the `skills.*` keys, so the new toggle threads to `loadSkills` with no call-site change. Runtime shell policy: `RUNTIME_SHELL_INTERCEPTOR_RULES` (routing direct runtime-binary shell commands to `run`/`build`/`serve`/`jvm_*`/`project_advice`) spread onto the tail of `DEFAULT_BASH_INTERCEPTOR_RULES`, plus `RUNTIME_SHELL_RULE_KIND`, `isRuntimeShellAllowed`, `applyRuntimeShellOptOut`, `activeBashInterceptorRules` (the always-on split — see the `tools/bash.ts` row), and an optional `kind?: string` group tag on `BashInterceptorRule`. The rules need no `runtime.enabled` check of their own — `checkBashInterception` already skips a rule whose `tool` is absent from `availableTools`, so the group is inert when the runtime tools are unregistered (`tools/bash-interceptor.ts` is therefore unforked) |
 | `packages/coding-agent/src/tools/bash.ts` | the interception block no longer sits behind `if (settings.get("bashInterceptor.enabled"))`; it selects its rules through `activeBashInterceptorRules(getBashInterceptorRules(), settings.get("bashInterceptor.enabled"))` and runs whenever that is non-empty. The runtime-routing group is therefore always evaluated (it is policy, and would be inert on every default install since `bashInterceptor.enabled` defaults to `false`), while upstream's deliberately-softened cat/grep/sed nudges stay behind the toggle exactly as before. The runtime group keeps its own two gates: tool availability and the `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` opt-out. Resolve an upstream conflict here by keeping upstream's loop body and re-applying the rule-selection call |
 | `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`; imports the five `Runtime*Tool` classes and registers `run`/`check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates; also imports the six `Jvm*Tool` classes and registers `jvm_run`/`jvm_disassemble`/`jvm_format`/`jvm_jar`/`jvm_deps`/`jvm_javadoc` the same way (same `runtime.enabled` gate, all `discoverable`); plus `RuntimeDebugTool`/`RuntimeServeTool` registered as `runtime_debug`/`serve` on the same gate, and `RuntimeAdviceTool` registered as `project_advice` on the same gate (the one runtime tool with `approval: "read"` — fixed argv, no caller-supplied code or output path) |
 | `packages/coding-agent/src/tools/builtin-names.ts` | appended `run`, `check`, `build`, `insights`, `profile` and the six JVM names `jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc` to `BUILTIN_TOOL_NAMES` (no collision with the `search`→`grep` / `find`→`glob` legacy alias map; the `jvm_` prefix is the user-facing name, never a product name), then `runtime_debug` and `serve` — `runtime_debug` is deliberately NOT `debug`, which upstream already owns for the interactive stepping debugger (`tools/debug.ts`) — then `project_advice` |
@@ -31,7 +31,10 @@ and after every upstream merge.
 | `packages/coding-agent/src/cli/args.ts` | `getExtraHelpText` documents `AURA_PROFILE` first with `OMP_PROFILE` marked legacy; `agents unpack` examples use `${APP_NAME}` and `${CONFIG_DIR_NAME}` |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
 | `packages/coding-agent/src/sdk.ts` | wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
-| `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` / `runtime.allowShell` and linking the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out |
+| `packages/coding-agent/src/discovery/index.ts` | one line: `import "./builtin-skills";` in the provider side-effect import block, registering the bundled runtime-skills provider |
+| `packages/coding-agent/src/capability/skill.ts` | added `BUILTIN_SKILLS_PROVIDER_ID = "builtin-skills"`, mirroring `BUILTIN_DEFAULTS_PROVIDER_ID` on the rule capability, so consumers can identify a bundled skill without importing (and registering) the provider |
+| `packages/coding-agent/src/extensibility/skills.ts` | `loadSkills` destructures `enableBundled = true` and `isSourceEnabled` gains an explicit `BUILTIN_SKILLS_PROVIDER_ID` branch above the third-party toggles. Load-bearing: the fallback at the end of `isSourceEnabled` returns `anyThirdPartySkillToggleEnabled`, which would let the Codex/Claude/Pi toggles silently retire an agent-native bundled skill (the same class of bug as issue #2401 for managed skills) |
+| `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` / `runtime.allowShell` and linking the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out, and a `#### Bundled runtime skills` subsection covering `skills.enableBundled` and the materialization directory |
 | `AGENTS.md` | appended the `## Aura fork conventions` section (points contributors at this file, states the runtime naming rule, locates specs/plans) |
 | `bun.lock` | one line: the `aura` bin entry mirroring the `packages/coding-agent/package.json` change. Regenerate with `bun install` rather than resolving a merge conflict by hand |
 
@@ -64,6 +67,14 @@ read fallback, writes never legacy); keep those alongside upstream's.
 
 `packages/utils/test/`: `dirs-cache`, `dirs-python-gateway`, `profiles`.
 
+`packages/coding-agent/test/skills.test.ts` additionally carries one fork line:
+`enableBundled: false` in its `DISABLE_ALL_BUILTIN_SKILLS` helper. That helper
+means "every built-in skill source off", and the bundled runtime provider is a
+new source; without it the tests asserting an exact custom-directory skill list
+(and the "empty when all sources disabled" case) would see the five bundled
+skills. Resolve an upstream conflict by keeping upstream's toggles and
+re-appending this one.
+
 ## Fork-added files and directories (additive, no merge risk)
 
 - `packages/coding-agent/src/runtime/` — runtime capability core
@@ -88,6 +99,16 @@ read fallback, writes never legacy); keep those alongside upstream's.
 - `docs/tools/{run,check,build,insights,profile,runtime_debug,serve}.md` — root docs pages required by the
   `omp://` docs-coverage guard (`test/internal-urls/docs-tool-coverage.test.ts` asserts one
   `docs/tools/<name>.md` per entry in `BUILTIN_TOOL_NAMES`)
+- `packages/coding-agent/src/discovery/builtin-skills.ts` + `src/discovery/builtin-skill-sources/`
+  (`runtime.md`, `insights.md`, `profiling.md`, `jvm.md`, `stateful-debugger.md`, `index.ts`) —
+  the bundled runtime skills, embedded via `with { type: "text" }` so they survive
+  `bun build --compile`, exactly as `discovery/builtin-rules/` does for rules. The provider
+  materializes them into `<agentDir>/builtin-skills/<name>/SKILL.md` before scanning:
+  unlike a `Rule` (whose body lives in memory and is served by `rule://`), a `Skill` is a
+  path, and `buildSkillPromptMessage` plus the `skill://` handler both re-read
+  `Skill.filePath` off disk. Priority 3 — below managed auto-learn (5) and every authored
+  provider — so any same-named skill overrides a bundled one
+- `packages/coding-agent/test/discovery/builtin-skills.test.ts` — fork-owned
 - `docs/aura/`, `docs/superpowers/`
 
 ## Naming rule
