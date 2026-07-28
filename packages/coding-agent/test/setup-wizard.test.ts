@@ -451,6 +451,67 @@ describe("setup wizard theme previews", () => {
 	});
 });
 
+describe("setup wizard theme defaults", () => {
+	/** Mount the theme scene against isolated settings and return both. */
+	function mountThemeScene() {
+		const settings = Settings.isolated();
+		const scene = ALL_SCENES.find(s => s.id === "theme");
+		expect(scene).toBeDefined();
+		const host = {
+			ctx: {
+				settings,
+				ui: { invalidate: () => {}, requestRender: () => {} },
+			},
+			requestRender: () => {},
+			finish: () => {},
+			setFocus: () => {},
+			restoreFocus: () => {},
+		} as unknown as SetupSceneHost;
+		return { settings, controller: scene!.mount(host) };
+	}
+
+	it("commits the aura brand pair for the terminal-matching option", async () => {
+		// The wizard is a SECOND source of theme defaults, and it is the path most
+		// users actually take — a schema default the wizard then overwrites is not
+		// a default. "Match terminal" must realize the same pair `settings-schema`
+		// declares (`theme.dark: aura`, `theme.light: aura-light`), or picking the
+		// top item lands the user off-brand.
+		await initTheme(false, "unicode", false, "titanium", "light");
+		const { settings, controller } = mountThemeScene();
+
+		controller.handleInput?.("1"); // row 1 is "Match terminal"
+		await Bun.sleep(20);
+		controller.handleInput?.("\n");
+		await Bun.sleep(20);
+
+		expect(settings.get("theme.dark")).toBe("aura");
+		expect(settings.get("theme.light")).toBe("aura-light");
+	});
+
+	it("describes the terminal-matching option as the brand pair", async () => {
+		await initTheme(false, "unicode", false, "titanium", "light");
+		const { controller } = mountThemeScene();
+		const frame = controller
+			.render(100)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(frame).toContain("Aura in dark terminals");
+		expect(frame).toContain("Aura Light in light terminals");
+	});
+
+	it("still offers the upstream themes as named non-default choices", async () => {
+		await initTheme(false, "unicode", false, "titanium", "light");
+		const { settings, controller } = mountThemeScene();
+
+		controller.handleInput?.("2"); // row 2 is "Titanium"
+		await Bun.sleep(20);
+		controller.handleInput?.("\n");
+		await Bun.sleep(20);
+
+		expect(settings.get("theme.dark")).toBe("titanium");
+	});
+});
+
 describe("setup wizard glyph scene", () => {
 	it("lists Nerd Font first and commits the chosen preset", async () => {
 		await initTheme(false, "unicode", false, "titanium", "light");
