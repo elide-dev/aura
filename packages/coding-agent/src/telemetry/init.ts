@@ -22,7 +22,7 @@ import type {
 	AgentTelemetryWarning,
 } from "@oh-my-pi/pi-agent-core";
 import { logger, postmortem } from "@oh-my-pi/pi-utils";
-import { type AttributeValue, context, metrics } from "@opentelemetry/api";
+import { type AttributeValue, context, metrics, trace } from "@opentelemetry/api";
 import { type LogAttributes, logs, type Logger as OtelLogger, SeverityNumber } from "@opentelemetry/api-logs";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
@@ -77,6 +77,9 @@ export interface ExporterConfig {
 	headers?: Record<string, string>;
 }
 
+/** Accepted `telemetry.signals` members (the settings-side signal names). */
+const KNOWN_TELEMETRY_SIGNALS: ReadonlySet<string> = new Set(["traces", "logs", "metrics"]);
+
 const LOG_SEVERITY: Record<logger.LogLevel, SeverityNumber> = {
 	error: SeverityNumber.ERROR,
 	warn: SeverityNumber.WARN,
@@ -98,6 +101,7 @@ let metricRecorder: AuraMetricRecorder | undefined;
 let otelLogger: OtelLogger | undefined;
 let unregisterLogSink: (() => void) | undefined;
 let unregisterTelemetrySink: (() => void) | undefined;
+let flushTimer: ReturnType<typeof setInterval> | undefined;
 let initPromise: Promise<void> | undefined;
 
 /**
@@ -140,10 +144,10 @@ export function createTelemetryExportConfig(
 			emitTelemetryEvent({ type: "turn.completed", sessionId, summary, coverage });
 			emitRunSummaryLog(sessionId, summary, coverage);
 		},
-		onCostDelta: delta => {
-			config?.onCostDelta?.(delta);
-			emitTelemetryEvent({ type: "cost.delta", delta });
-		},
+		// No onCostDelta override: the per-step delta carries nothing the
+		// chat.usage → aura.agent.chat.cost.estimated_usd counter does not already
+		// record, so the caller's own hook (if any) passes through the spread above
+		// rather than being wrapped for an emission nothing consumes.
 		onTelemetryWarning: warning => {
 			config?.onTelemetryWarning?.(warning);
 			emitTelemetryWarningLog(warning);
@@ -168,8 +172,77 @@ export async function initTelemetryExport(options: InitTelemetryOptions = {}): P
 	const signalConfig = resolveSignalConfig(env);
 	if (!signalConfig.trace && !signalConfig.log && !signalConfig.metric) return;
 
-	initPromise = registerProviders(signalConfig, options);
+	initPromise = registerProvidersGuarded(signalConfig, options);
 	return initPromise;
+}
+
+/**
+ * Registration error boundary.
+ *
+ * Every step of {@link registerProviders} can throw on operator input the SDK
+ * rejects — a malformed `telemetry.endpoint` makes the OTLP exporter constructor
+ * throw outright — and telemetry must never be able to take the CLI down at
+ * startup. A failure is logged once, everything already assigned is torn back
+ * down (so no half-built subsystem is left claiming to be enabled), and
+ * `initTelemetryExport` resolves normally with export off. `initPromise` is
+ * cleared too, so a later caller with a corrected configuration can retry.
+ */
+async function registerProvidersGuarded(signalConfig: SignalConfig, options: InitTelemetryOptions): Promise<void> {
+	try {
+		await registerProviders(signalConfig, options);
+	} catch (error) {
+		logger.warn("telemetry export disabled: OTLP provider registration failed", { error: String(error) });
+		await teardownProviders();
+		initPromise = undefined;
+	}
+}
+
+/**
+ * Release everything {@link registerProviders} may have assigned, best-effort.
+ *
+ * Ordering matters: the sinks come off the buses first so nothing keeps feeding
+ * providers that are on their way out, and module state is cleared before the
+ * (awaited, individually guarded) shutdowns so `isTelemetryExportEnabled()`
+ * reports `false` immediately rather than after the last flush attempt. The
+ * globals each provider claimed are reset as well — a provider left installed
+ * globally would keep buffering for an exporter that is never going to work.
+ */
+async function teardownProviders(): Promise<void> {
+	unregisterLogSink?.();
+	unregisterLogSink = undefined;
+	unregisterTelemetrySink?.();
+	unregisterTelemetrySink = undefined;
+	if (flushTimer) clearInterval(flushTimer);
+	flushTimer = undefined;
+
+	const pending: (NodeTracerProvider | LoggerProvider | MeterProvider)[] = [];
+	if (traceProvider) {
+		pending.push(traceProvider);
+		trace.disable();
+	}
+	if (logProvider) {
+		pending.push(logProvider);
+		logs.disable();
+	}
+	if (meterProvider) {
+		pending.push(meterProvider);
+		metrics.disable();
+	}
+	traceProvider = undefined;
+	logProvider = undefined;
+	meterProvider = undefined;
+	metricRecorder = undefined;
+	otelLogger = undefined;
+
+	await Promise.all(
+		pending.map(async provider => {
+			try {
+				await provider.shutdown();
+			} catch (error) {
+				logger.debug("telemetry provider shutdown failed during teardown", { error: String(error) });
+			}
+		}),
+	);
 }
 
 /**
@@ -198,6 +271,16 @@ export function resolveTelemetryEnv(
 	// endpoint above would otherwise enable all three.
 	const signals = settings.get("telemetry.signals");
 	if (Array.isArray(signals)) {
+		// A misspelling ("trace", "log") reads as "that signal was omitted" and
+		// silently switches it off, which is indistinguishable from a deliberate
+		// opt-out. Name the unrecognized entries once so the typo is visible.
+		const unknown = signals.filter(signal => !KNOWN_TELEMETRY_SIGNALS.has(signal as string));
+		if (unknown.length > 0) {
+			logger.warn(`telemetry.signals has unrecognized ${unknown.length === 1 ? "entry" : "entries"}`, {
+				unknown: unknown.map(String).join(","),
+				supported: [...KNOWN_TELEMETRY_SIGNALS].join(","),
+			});
+		}
 		if (!signals.includes("traces") && !out.OTEL_TRACES_EXPORTER) out.OTEL_TRACES_EXPORTER = "none";
 		if (!signals.includes("logs") && !out.OTEL_LOGS_EXPORTER) out.OTEL_LOGS_EXPORTER = "none";
 		if (!signals.includes("metrics") && !out.OTEL_METRICS_EXPORTER) out.OTEL_METRICS_EXPORTER = "none";
@@ -293,22 +376,15 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 		traceEnabled: traceProvider !== undefined,
 	});
 
-	const flushTimer = setInterval(() => {
+	// Module-scoped so the error boundary can clear a timer that was already
+	// armed when a later step threw.
+	flushTimer = setInterval(() => {
 		flushTelemetryExport().catch(() => {});
 	}, FLUSH_INTERVAL_MS);
 	flushTimer.unref();
 
 	postmortem.register("otel-export", async () => {
-		clearInterval(flushTimer);
-		unregisterLogSink?.();
-		unregisterLogSink = undefined;
-		unregisterTelemetrySink?.();
-		unregisterTelemetrySink = undefined;
-		const shutdowns: Promise<void>[] = [];
-		if (traceProvider) shutdowns.push(traceProvider.shutdown());
-		if (logProvider) shutdowns.push(logProvider.shutdown());
-		if (meterProvider) shutdowns.push(meterProvider.shutdown());
-		await Promise.all(shutdowns);
+		await teardownProviders();
 	});
 }
 

@@ -169,6 +169,7 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
+import type { CompactionStrategy } from "../telemetry/events";
 import {
 	type AutoCompactionTelemetry,
 	createAutoCompactionTelemetry,
@@ -250,7 +251,7 @@ import {
 	shouldEvaluateCodexAutoRedeem,
 	shouldPromptCodexAutoRedeem,
 } from "./codex-auto-reset";
-import { COMPACT_MODES } from "./compact-modes";
+import { findCompactMode } from "./compact-modes";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
@@ -4089,8 +4090,8 @@ export class AgentSession {
 	 * compact`, which branches on `snapcompact` alone), so they report the
 	 * in-place summary that actually ran.
 	 */
-	#manualCompactionStrategy(options: CompactOptions | undefined): string {
-		const override = options?.mode ? COMPACT_MODES.find(m => m.name === options.mode)?.overrides.strategy : undefined;
+	#manualCompactionStrategy(options: CompactOptions | undefined): CompactionStrategy {
+		const override = options?.mode ? findCompactMode(options.mode)?.overrides.strategy : undefined;
 		if (override) return override;
 		return this.settings.get("compaction.strategy") === "snapcompact" ? "snapcompact" : "context-full";
 	}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
+import { logger } from "@oh-my-pi/pi-utils";
 import { resolveExporterConfig, resolveTelemetryEnv } from "../src/telemetry/init";
 
 function fakeSettings(values: Record<string, unknown>) {
@@ -41,6 +42,45 @@ describe("settings-driven telemetry activation", () => {
 		const env = resolveTelemetryEnv(undefined, { OTEL_EXPORTER_OTLP_ENDPOINT: "http://env:4318" });
 		expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe("http://env:4318");
 		expect(env.OTEL_TRACES_EXPORTER).toBeUndefined();
+	});
+
+	it("warns once about unrecognized telemetry.signals members", () => {
+		// A typo reads as a deliberate omission and silently switches the signal
+		// off, so the misspelling has to be named rather than absorbed.
+		const warnings: { message: string; context: Record<string, unknown> | undefined }[] = [];
+		const unsink = logger.registerLogSink(event => {
+			if (event.level === "warn") warnings.push({ message: event.message, context: event.context });
+		});
+		let env: Record<string, string | undefined>;
+		try {
+			env = resolveTelemetryEnv(
+				fakeSettings({ "telemetry.enabled": true, "telemetry.signals": ["trace", "logs", "metric"] }),
+				{},
+			);
+		} finally {
+			unsink();
+		}
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]?.message).toContain("telemetry.signals has unrecognized entries");
+		expect(warnings[0]?.context?.unknown).toBe("trace,metric");
+		// The warning is advisory: the misspelled signals still resolve to "off",
+		// which is what the list literally asked for.
+		expect(env.OTEL_TRACES_EXPORTER).toBe("none");
+		expect(env.OTEL_METRICS_EXPORTER).toBe("none");
+		expect(env.OTEL_LOGS_EXPORTER).toBeUndefined();
+	});
+
+	it("stays silent when every telemetry.signals member is recognized", () => {
+		const warnings: string[] = [];
+		const unsink = logger.registerLogSink(event => {
+			if (event.level === "warn") warnings.push(event.message);
+		});
+		try {
+			resolveTelemetryEnv(fakeSettings({ "telemetry.enabled": true, "telemetry.signals": ["traces", "logs"] }), {});
+		} finally {
+			unsink();
+		}
+		expect(warnings).toEqual([]);
 	});
 
 	it("keeps a per-signal env exporter selection over the settings signals list", () => {

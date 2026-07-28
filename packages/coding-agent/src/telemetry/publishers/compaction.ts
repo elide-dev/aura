@@ -10,12 +10,17 @@ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { SnapcompactSavingsRecorder } from "../../session/snapcompact-savings-journal";
-import { type CompactionCompletedTelemetry, type CompactionTrigger, emitTelemetryEvent } from "../events";
+import {
+	type CompactionCompletedTelemetry,
+	type CompactionStrategy,
+	type CompactionTrigger,
+	emitTelemetryEvent,
+} from "../events";
 
 export interface CompactionEndFacts {
 	sessionId: string;
 	trigger: CompactionTrigger;
-	action: string;
+	action: CompactionStrategy;
 	/** The compaction outcome, as carried by `auto_compaction_end`. */
 	result: CompactionResult | undefined;
 	aborted: boolean;
@@ -123,7 +128,7 @@ export function createAutoCompactionTelemetry(host: CompactionTelemetryHost): Au
  * compaction and reject a call that actually succeeded.
  */
 export async function withManualCompactionTelemetry(
-	host: CompactionTelemetryHost & { strategy: () => string },
+	host: CompactionTelemetryHost & { strategy: () => CompactionStrategy },
 	run: () => Promise<CompactionResult>,
 ): Promise<CompactionResult> {
 	const now = host.now ?? (() => performance.now());
@@ -172,7 +177,7 @@ function safeTokens(host: CompactionTelemetryHost): number | undefined {
 	}
 }
 
-function safeStrategy(host: { strategy: () => string }): string {
+function safeStrategy(host: { strategy: () => CompactionStrategy }): CompactionStrategy {
 	try {
 		return host.strategy();
 	} catch (err) {

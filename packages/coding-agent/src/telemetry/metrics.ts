@@ -33,9 +33,13 @@ const CHAT_ERROR_TYPES: ReadonlySet<string> = new Set(["error", "aborted"]);
 /**
  * Phase an `errors.byType` key belongs to.
  *
- * Unknown keys default to `tool`: a tool that throws contributes its JS error
- * class name (`TypeError`, `AbortError`, …) rather than a `tool_*` constant, and
- * chat contributes only the two fixed stop reasons above.
+ * Unknown keys default to `tool`. Both phases can contribute a bare JS error
+ * class name (`TypeError`, `AbortError`, …): a tool that throws does, and so
+ * does a chat failure surfaced through the loop's `failChat` path, on top of the
+ * two fixed stop reasons above. The two are indistinguishable by key alone, so
+ * the ambiguity is unresolvable at this layer; `tool` is the majority case and
+ * is taken as the default rather than minting an "unknown" phase that would
+ * split the series without adding information.
  */
 function errorPhaseFor(errorType: string): "tool" | "chat" {
 	if (TOOL_ERROR_TYPES.has(errorType)) return "tool";

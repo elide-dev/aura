@@ -68,9 +68,6 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 		case "chat.usage":
 			deps.recorder?.recordChatUsage(event.event);
 			break;
-		case "cost.delta":
-			// covered by chat.usage cost counter; reserved for future per-step logs
-			break;
 		case "error.reported":
 			deps.recorder?.recordError(event.phase, event.errorType);
 			break;

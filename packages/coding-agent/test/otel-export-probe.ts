@@ -10,6 +10,9 @@
  * protobuf POST at /v1/traces.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	flushTelemetryExport,
 	initTelemetryExport,
@@ -22,8 +25,8 @@ let received = false;
 const server = Bun.serve({
 	port: 0,
 	async fetch(req) {
-		const path = new URL(req.url).pathname;
-		if (req.method === "POST" && path.endsWith("/v1/traces")) {
+		const endpoint = new URL(req.url).pathname;
+		if (req.method === "POST" && endpoint.endsWith("/v1/traces")) {
 			const body = await req.arrayBuffer();
 			if (body.byteLength > 0 && req.headers.get("content-type") === "application/x-protobuf") {
 				received = true;
@@ -39,6 +42,15 @@ const server = Bun.serve({
 
 process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://localhost:${server.port}/v1/traces`;
 process.env.OTEL_SERVICE_NAME = "oh-my-pi-export-probe";
+
+// Sandbox the config root so the probe's `aura.install.id` is minted into a temp
+// directory instead of persisting into the developer's real config root.
+// `PI_CONFIG_DIR` is resolved relative to $HOME, so the sandbox must live there.
+const configRoot = fs.mkdtempSync(path.join(os.homedir(), ".aura-export-probe-"));
+process.on("exit", () => fs.rmSync(configRoot, { recursive: true, force: true }));
+process.env.PI_CONFIG_DIR = path.basename(configRoot);
+const { refreshDirsFromEnv } = await import("@oh-my-pi/pi-utils/dirs");
+refreshDirsFromEnv();
 
 await initTelemetryExport();
 if (!isTelemetryExportEnabled()) {

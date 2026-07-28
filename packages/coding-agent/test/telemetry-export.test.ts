@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { initTelemetryExport, isTelemetryExportEnabled } from "@oh-my-pi/pi-coding-agent/telemetry-export";
+import {
+	createTelemetryExportConfig,
+	initTelemetryExport,
+	isTelemetryExportEnabled,
+	subscribeTelemetry,
+} from "@oh-my-pi/pi-coding-agent/telemetry-export";
+import { logger } from "@oh-my-pi/pi-utils";
+import { metrics, trace } from "@opentelemetry/api";
 
 /**
  * Gating contract for the OTLP export bootstrap. These cases all short-circuit
@@ -125,4 +132,102 @@ describe("initTelemetryExport signals export path", () => {
 		expect(output).toContain("PROBE: RECEIVED");
 		expect(code).toBe(0);
 	}, 20_000);
+});
+
+/**
+ * Registration error boundary.
+ *
+ * A malformed endpoint makes the OTLP exporter constructor throw, and telemetry
+ * must never be able to take the CLI down at startup. These cases run in-process
+ * on purpose: the contract under test is precisely that a failed registration
+ * leaves *nothing* behind, so there is no global singleton to leak — and an
+ * out-of-process probe could not prove the absence.
+ */
+describe("initTelemetryExport registration failures", () => {
+	const MALFORMED = "http://local host:4318";
+
+	function fakeSettings(values: Record<string, unknown>) {
+		return { get: (key: string) => values[key] } as never;
+	}
+
+	/** Every observable trace of a registration, from the outside. */
+	function assertNothingRegistered(): void {
+		expect(isTelemetryExportEnabled()).toBe(false);
+		// The gate the CLI reads: no export config means no agent-loop hooks.
+		expect(createTelemetryExportConfig(undefined)).toBeUndefined();
+		// A live NodeTracerProvider would hand back a recording span; the noop
+		// provider's span carries the all-zero span context.
+		const span = trace.getTracer("aura-teardown-probe").startSpan("probe");
+		const recording = span.isRecording();
+		span.end();
+		expect(recording).toBe(false);
+		// A live MeterProvider's counter is a real instrument, not the noop one.
+		expect(metrics.getMeterProvider().constructor.name).not.toBe("MeterProvider");
+		// The logger bridge must be off the log-sink list: while it is registered,
+		// every error-level record publishes an `error.reported` bus event.
+		const seen: string[] = [];
+		const unsubscribe = subscribeTelemetry(event => seen.push(event.type));
+		try {
+			logger.error("telemetry teardown probe", { code: "teardown_probe" });
+		} finally {
+			unsubscribe();
+		}
+		expect(seen).toEqual([]);
+	}
+
+	afterEach(() => {
+		// Belt and braces: any test here that unexpectedly DID register must not
+		// poison the rest of the suite.
+		assertNothingRegistered();
+	});
+
+	it("logs and disables instead of throwing when the settings endpoint is malformed", async () => {
+		const warnings: string[] = [];
+		const unsink = logger.registerLogSink(event => {
+			if (event.level === "warn") warnings.push(event.message);
+		});
+		try {
+			await initTelemetryExport({
+				settings: fakeSettings({ "telemetry.enabled": true, "telemetry.endpoint": MALFORMED }),
+			});
+		} finally {
+			unsink();
+		}
+		expect(warnings.some(w => w.includes("OTLP provider registration failed"))).toBe(true);
+		assertNothingRegistered();
+	});
+
+	it("tears down already-registered signals when a later signal's exporter throws", async () => {
+		// Traces get a valid endpoint through the environment (env wins per key, so
+		// the settings base is not consulted for that signal); metrics fall through
+		// to the malformed settings base and blow up in the exporter constructor —
+		// after the tracer provider has already been registered globally. Logs are
+		// switched off so the failure lands squarely between two registrations.
+		process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:4318/v1/traces";
+		process.env.OTEL_LOGS_EXPORTER = "none";
+		await initTelemetryExport({
+			settings: fakeSettings({ "telemetry.enabled": true, "telemetry.endpoint": MALFORMED }),
+		});
+		assertNothingRegistered();
+	});
+
+	it("does not memoize the failure, so a corrected configuration can retry", async () => {
+		// The first attempt must not leave a resolved initPromise behind: if it
+		// did, the second call would short-circuit and never reach the exporter,
+		// and no second warning would be logged.
+		const settings = fakeSettings({ "telemetry.enabled": true, "telemetry.endpoint": MALFORMED });
+		const warnings: string[] = [];
+		const unsink = logger.registerLogSink(event => {
+			if (event.level === "warn" && event.message.includes("OTLP provider registration failed")) {
+				warnings.push(event.message);
+			}
+		});
+		try {
+			await initTelemetryExport({ settings });
+			await initTelemetryExport({ settings });
+		} finally {
+			unsink();
+		}
+		expect(warnings).toHaveLength(2);
+	});
 });

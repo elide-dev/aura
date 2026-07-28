@@ -6,12 +6,20 @@
  * cheap no-op when nothing is subscribed, and subscriber failures never
  * propagate to publishers.
  */
-import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent, CostDelta } from "@oh-my-pi/pi-agent-core";
+import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { UsageHistoryEntry } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 
 export type SessionMode = "tui" | "acp" | "rpc" | "print" | "sdk";
 export type CompactionTrigger = "threshold" | "overflow" | "idle" | "incomplete" | "manual";
+/**
+ * The compaction path that actually ran. Closed vocabulary, matching
+ * `AutoCompactionEndEvent.action`: the manual path maps its `/compact`
+ * subcommand through `COMPACT_MODES`, which only ever yields members of this
+ * set, so both producers stay inside it and `aura.compaction.strategy` keeps a
+ * bounded cardinality.
+ */
+export type CompactionStrategy = "context-full" | "handoff" | "shake" | "snapcompact";
 export type CompactionOutcome = "ok" | "aborted" | "error" | "will-retry" | "skipped";
 export type ErrorPhase = "chat" | "tool" | "compaction" | "session";
 
@@ -54,11 +62,6 @@ export interface ChatUsageTelemetry {
 	event: ChatUsageEvent;
 }
 
-export interface CostDeltaTelemetry {
-	type: "cost.delta";
-	delta: CostDelta;
-}
-
 export interface ErrorReportedTelemetry {
 	type: "error.reported";
 	phase: ErrorPhase;
@@ -69,7 +72,7 @@ export interface ErrorReportedTelemetry {
 export interface CompactionCompletedTelemetry {
 	type: "compaction.completed";
 	sessionId: string;
-	strategy: string;
+	strategy: CompactionStrategy;
 	trigger: CompactionTrigger;
 	outcome: CompactionOutcome;
 	tokensBefore?: number;
@@ -95,7 +98,6 @@ export type TelemetryEvent =
 	| SessionEndedTelemetry
 	| TurnCompletedTelemetry
 	| ChatUsageTelemetry
-	| CostDeltaTelemetry
 	| ErrorReportedTelemetry
 	| CompactionCompletedTelemetry
 	| CompactionSavingsTelemetry

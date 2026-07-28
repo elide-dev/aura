@@ -42,6 +42,10 @@ Instrument scope (`otel_scope_name`) is `aura`.
 
 Common attributes: `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.response.finish_reason`, `aura.agent.id`, `aura.agent.name`, `aura.tool.status`, `aura.error.phase` (`chat` | `tool` | `compaction` | `session`), `error.type`, `aura.session.mode` (`tui` | `acp` | `rpc` | `print` | `sdk`), `aura.session.end_reason`, `aura.compaction.strategy` (`context-full` | `handoff` | `shake` | `snapcompact`), `aura.compaction.trigger` (`threshold` | `overflow` | `idle` | `incomplete` | `manual`), `aura.compaction.outcome` (`ok` | `aborted` | `error` | `will-retry` | `skipped`), `aura.usage_limit.id`, `aura.usage_limit.window`.
 
+`aura.usage_limit.utilization` deliberately carries neither the window's reset timestamp nor the plan tier. A reset timestamp is unbounded-cardinality — every snapshot would mint a new series — and the tier is not reliably known at snapshot time, so a partial `aura.account.tier` would be worse than none. Read the window with `aura.usage_limit.window` and get reset timing from the gauge dropping back toward zero.
+
+`aura.session.mode` has no built-in `sdk` producer: the value exists for hosts embedding aura through the SDK. To opt in, call `trackSessionLifecycle({ mode: "sdk", … })` (exported from the telemetry barrel, `packages/coding-agent/src/telemetry/index.ts`) around your session, and its start/end events flow through the same bus and instruments as the first-party modes.
+
 ### Log records
 
 Log scope (`otel_scope_name`) is `aura`. Each record carries an `eventName`:
