@@ -31,6 +31,18 @@ and after every upstream merge.
 | `packages/coding-agent/src/cli/args.ts` | `getExtraHelpText` documents `AURA_PROFILE` first with `OMP_PROFILE` marked legacy; `agents unpack` examples use `${APP_NAME}` and `${CONFIG_DIR_NAME}` |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
 | `packages/coding-agent/src/sdk.ts` | wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
+| `packages/metaharness/agent/omp_local.py` | Harbor's local-agent adapter stages generated gateway routing and benchmark config under the branded `~/.aura/agent` directory so Aura finds `models.yml` and does not fail before its first model request |
+| `packages/metaharness/src/runner.ts` | accepts `--path` for deterministic local Harbor capability tasks in addition to registry datasets, allowing Aura's runtime benchmark to execute checked-in/materialized task fixtures |
+| `packages/metaharness/src/runner.test.ts` | covers Aura's local Harbor `--path` launch contract alongside registry dataset launches |
+| `packages/metaharness/src/server.ts` | discovers externally launched CLI benchmark jobs during periodic sync and `/api/runs` reads, so completed runtime benchmark arms appear without restarting the dashboard |
+| `packages/metaharness/src/manager.test.ts` | covers periodic discovery of benchmark jobs launched outside the dashboard process |
+| `packages/metaharness/src/runtime-benchmark-suite.ts` | defines and materializes Aura's deterministic 12-task Harbor runtime capability suite |
+| `packages/metaharness/src/runtime-benchmark-suite.test.ts` | verifies the runtime task catalog and generated Harbor task structure |
+| `packages/metaharness/src/runtime-benchmark.ts` | orchestrates balanced matched agent arms, aggregates benchmark outcomes and tool usage, runs direct-vs-runtime microbenchmarks, and writes the comparison report |
+| `packages/metaharness/src/runtime-benchmark.test.ts` | covers matched arm construction, canonical tool-call counting, balanced ordering, and report metrics |
+| `packages/metaharness/package.json` | exposes the `bench:runtime` package script for the Aura runtime capability and microbenchmark suite |
+| `packages/metaharness/README.md` | documents the one-command runtime benchmark, its comparison contract, outputs, and focused run modes |
+| `package.json` | exposes root `bench:runtime` as the one-command entrypoint for Aura's matched-arm runtime evaluation |
 | `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.autoDownload` / `runtime.path` / `runtime.allowShell` and linking the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out |
 | `AGENTS.md` | appended the `## Aura fork conventions` section (points contributors at this file, states the runtime naming rule, locates specs/plans) |
 | `bun.lock` | one line: the `aura` bin entry mirroring the `packages/coding-agent/package.json` change. Regenerate with `bun install` rather than resolving a merge conflict by hand |

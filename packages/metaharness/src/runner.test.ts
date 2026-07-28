@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	buildHarborArgs,
 	buildHarborEnv,
 	buildResumeArgs,
 	collectForwardEnv,
@@ -101,6 +102,18 @@ describe("parseArgs validation", () => {
 	it("defaults to a generic, dataset-agnostic jobs directory", () => {
 		const cfg = parseArgs(["--model", "anthropic/claude-opus-4-8"]);
 		expect(cfg.jobsDir.endsWith("/runs/harbor")).toBe(true);
+	});
+});
+
+describe("local task paths", () => {
+	it("runs a local Harbor task with --path instead of a registry dataset", () => {
+		const cfg = parseArgs(["--model", "openai-codex/gpt-5.6-sol", "--path", "./fixtures/runtime-task"]);
+		const args = buildHarborArgs(cfg, "runtime-task", "/tmp/models.yml", null, null, null);
+
+		expect(cfg.taskPath).toBe(path.resolve("./fixtures/runtime-task"));
+		expect(args).toContain("-p");
+		expect(args).toContain(path.resolve("./fixtures/runtime-task"));
+		expect(args).not.toContain("-d");
 	});
 });
 

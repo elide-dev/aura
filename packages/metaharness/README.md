@@ -27,6 +27,29 @@ bun run serve --port 4700
 3. **Harbor owns trials.** The runner/serve layer polls each trial's
    `result.json` for progress, spend, and outcomes.
 
+## Runtime capability benchmark
+
+Run the matched Bash-vs-runtime agent suite plus deterministic runtime
+microbenchmarks from the repository root:
+
+```bash
+bun run bench:runtime
+```
+
+The command materializes 12 deterministic Harbor tasks, runs paired arms with
+alternating AB/BA order, and writes
+`runs/harbor/_bench/<prefix>-runtime-comparison.md`. Both arms use the same
+model, reasoning level, task fixtures, and attempts; only the runtime tools are
+added to the second arm.
+
+Useful controls:
+
+```bash
+bun run bench:runtime --task python-execution --attempts 1
+bun run bench:runtime --agent-only
+bun run bench:runtime --micro-only --micro-iterations 30
+```
+
 ## Server
 
 - `GET /` — experiments, runs, normalized traces, and a launch form for every benchmark.

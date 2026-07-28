@@ -463,6 +463,21 @@ describe("ManagerServer API", () => {
 		expect(liveExpDelete.status).toBe(400);
 		expect(manager.store.getRun("live-run")).not.toBeNull();
 	});
+
+	it("discovers CLI-launched jobs while the dashboard is already running", async () => {
+		const jobsDir = makeJobsDir();
+		const manager = new ManagerServer(jobsDir);
+		const server = manager.start(0);
+		cleanups.push(() => {
+			void manager.stop();
+		});
+		const base = `http://127.0.0.1:${server.port}`;
+
+		writeFixtureJob(jobsDir, "late-cli-run");
+
+		const runs = (await (await fetch(`${base}/api/runs`)).json()) as Array<{ jobName: string }>;
+		expect(runs.map(run => run.jobName)).toContain("late-cli-run");
+	});
 });
 
 describe("resolveArmLaunch", () => {

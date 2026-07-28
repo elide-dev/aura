@@ -47,6 +47,8 @@ const CONTAINER_DNS = process.env.OMP_BENCH_CONTAINER_DNS || "1.1.1.1";
 export interface Config {
 	models: string[];
 	dataset: string;
+	/** Local Harbor task directory. When set, this replaces the registry dataset. */
+	taskPath: string | null;
 	tasks: number;
 	concurrency: number;
 	attempts: number;
@@ -91,6 +93,7 @@ function defaultConfig(): Config {
 	return {
 		models: [],
 		dataset: "terminal-bench@2.0",
+		taskPath: null,
 		tasks: 20,
 		concurrency: 4,
 		attempts: 1,
@@ -157,6 +160,7 @@ Dataset / scale:
   -i, --include <glob>           Include task name (repeatable)
   -x, --exclude <glob>           Exclude task name (repeatable)
   -d, --dataset <name@ver>       Default terminal-bench@2.0
+  -p, --path <dir>               Run one local Harbor task directory instead of a registry dataset
 
 Gateway (auth, no keys in container):
       --gateway-url <url>        Default http://host.docker.internal:4000
@@ -276,6 +280,11 @@ export function parseArgs(argv: string[]): Config {
 			case "-d":
 			case "--dataset":
 				cfg.dataset = take(arg);
+				break;
+			case "-p":
+			case "--path":
+				cfg.taskPath = path.resolve(take(arg));
+				cfg.dataset = `local:${path.basename(cfg.taskPath)}`;
 				break;
 
 			case "--gateway-url":
@@ -1304,7 +1313,7 @@ function startVmnetGatewayForward(cfg: Config): { stop(): void } | null {
 	};
 }
 
-function buildHarborArgs(
+export function buildHarborArgs(
 	cfg: Config,
 	jobName: string,
 	modelsYaml: string,
@@ -1312,7 +1321,15 @@ function buildHarborArgs(
 	composeOverlayPath: string | null,
 	mountsJson: string | null,
 ): string[] {
-	const a: string[] = ["run", "-d", cfg.dataset, "-o", cfg.jobsDir, "--job-name", jobName];
+	const a: string[] = [
+		"run",
+		cfg.taskPath ? "-p" : "-d",
+		cfg.taskPath ?? cfg.dataset,
+		"-o",
+		cfg.jobsDir,
+		"--job-name",
+		jobName,
+	];
 	a.push("-n", String(cfg.concurrency), "-k", String(cfg.attempts), "-l", String(cfg.tasks));
 	for (const m of cfg.models) a.push("-m", m);
 	for (const inc of cfg.include) a.push("-i", inc);

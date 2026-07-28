@@ -238,6 +238,7 @@ export class ManagerServer {
 	}
 
 	#tick(): void {
+		this.#store.discover();
 		this.#store.syncActive();
 		const snapshot = JSON.stringify(this.#store.listRuns());
 		if (snapshot !== this.#lastSnapshot) {
@@ -306,6 +307,7 @@ export class ManagerServer {
 				const experiment = url.searchParams.get("experiment");
 				const status = url.searchParams.get("status");
 				const benchmark = url.searchParams.get("benchmark");
+				this.#store.discover();
 				let runs = this.#store.listRuns();
 				if (experiment) runs = runs.filter(r => experimentOf(r.jobName) === experiment);
 				if (status) runs = runs.filter(r => r.status === status);
