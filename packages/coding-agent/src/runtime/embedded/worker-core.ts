@@ -83,9 +83,23 @@ export class ExecutionWorkerCore {
 		}
 		const run = (): void => {
 			try {
-				if (message.type === "open") this.#open(message);
-				else if (message.type === "call") this.#call(message);
-				else this.#close(message);
+				switch (message.type) {
+					case "load":
+						this.#load(message);
+						break;
+					case "open":
+						this.#open(message);
+						break;
+					case "call":
+						this.#call(message);
+						break;
+					case "close":
+						this.#close(message);
+						break;
+					case "unload":
+						this.#unload(message);
+						break;
+				}
 			} catch (error) {
 				try {
 					this.#transport.send({ type: "error", id: message.id, error: serializedError(error) });
@@ -97,14 +111,57 @@ export class ExecutionWorkerCore {
 		this.#tail = this.#tail.then(run, run);
 	}
 
+	#load(message: Extract<ExecutionWorkerRequest, { type: "load" }>): void {
+		if (this.#handle !== undefined) {
+			throw new RuntimeRpcError("internal", "Embedded runtime execution worker cannot load over an open runtime.");
+		}
+		const retained = this.#library;
+		if (retained) {
+			if (retained.path !== message.libraryPath) {
+				throw new RuntimeRpcError("internal", "Embedded runtime execution worker cannot replace a loaded library.");
+			}
+			this.#transport.send({
+				type: "loaded",
+				id: message.id,
+				libraryPath: retained.path,
+				abiVersion: retained.abiVersion,
+				schemaHash: retained.schemaHash,
+			});
+			return;
+		}
+		const library = this.#openLibrary(message.libraryPath);
+		try {
+			this.#transport.send({
+				type: "loaded",
+				id: message.id,
+				libraryPath: library.path,
+				abiVersion: library.abiVersion,
+				schemaHash: library.schemaHash,
+			});
+			this.#library = library;
+		} catch (error) {
+			try {
+				library.closeLibrary();
+			} catch (closeError) {
+				logger.error("Failed to close embedded runtime library after worker load response failure", {
+					error: closeError,
+				});
+			}
+			throw error;
+		}
+	}
+
 	#open(message: Extract<ExecutionWorkerRequest, { type: "open" }>): void {
-		if (this.#library || this.#handle !== undefined) {
+		if (this.#handle !== undefined) {
 			throw new RuntimeRpcError("internal", "Embedded runtime execution worker is already open.");
 		}
-		let library: EmbeddedNativeLibrary | undefined;
+		let library = this.#library;
+		if (library && library.path !== message.libraryPath) {
+			throw new RuntimeRpcError("internal", "Embedded runtime execution worker cannot open a different loaded library.");
+		}
 		let openedHandle: bigint | undefined;
 		try {
-			library = this.#openLibrary(message.libraryPath);
+			library ??= this.#openLibrary(message.libraryPath);
 			const opened = library.open(message.request);
 			openedHandle = opened.handle;
 			const response = transferBytes(opened.response);
@@ -179,6 +236,16 @@ export class ExecutionWorkerCore {
 		if (!response) throw new RuntimeRpcError("internal", "Embedded runtime execution worker close returned no response.");
 		const transferable = transferBytes(response);
 		this.#transport.send({ type: "closed", id: message.id, response: transferable.bytes }, transferable.transfer);
+	}
+
+	#unload(message: Extract<ExecutionWorkerRequest, { type: "unload" }>): void {
+		if (this.#handle !== undefined) {
+			throw new RuntimeRpcError("internal", "Embedded runtime execution worker cannot unload an open runtime.");
+		}
+		const library = this.#library;
+		this.#library = undefined;
+		library?.closeLibrary();
+		this.#transport.send({ type: "unloaded", id: message.id });
 	}
 
 }
@@ -331,6 +398,7 @@ export class EmbeddedWorkerHost {
 	readonly #lifecycleOperations = new Set<Promise<void>>();
 	#nextId = 0;
 	#handle: bigint | undefined;
+	#loadedLibraryPath: string | undefined;
 	#activeRequestId: bigint | undefined;
 	#callTail: Promise<void> = Promise.resolve();
 	#accepting = true;
@@ -380,6 +448,34 @@ export class EmbeddedWorkerHost {
 		}
 	}
 
+	async load(
+		libraryPath: string,
+	): Promise<{ libraryPath: string; abiVersion: number; schemaHash: string }> {
+		this.#assertAccepting();
+		const finish = this.#beginLifecycleOperation();
+		try {
+			if (this.#handle !== undefined) {
+				throw new RuntimeRpcError("internal", "Embedded runtime worker host is already open.");
+			}
+			if (this.#loadedLibraryPath !== undefined && this.#loadedLibraryPath !== libraryPath) {
+				throw new RuntimeRpcError("internal", "Embedded runtime worker host cannot replace a loaded library.");
+			}
+			const id = this.#requestId();
+			const response = await this.#sendExecution({ type: "load", id, libraryPath });
+			if (response.type !== "loaded") {
+				throw this.#protocolFailure("Embedded runtime execution worker returned an invalid load response.");
+			}
+			this.#loadedLibraryPath = response.libraryPath;
+			return {
+				libraryPath: response.libraryPath,
+				abiVersion: response.abiVersion,
+				schemaHash: response.schemaHash,
+			};
+		} finally {
+			finish();
+		}
+	}
+
 	async open(
 		libraryPath: string,
 		request: Uint8Array,
@@ -390,6 +486,9 @@ export class EmbeddedWorkerHost {
 			if (this.#handle !== undefined) {
 				throw new RuntimeRpcError("internal", "Embedded runtime worker host is already open.");
 			}
+			if (this.#loadedLibraryPath !== undefined && this.#loadedLibraryPath !== libraryPath) {
+				throw new RuntimeRpcError("internal", "Embedded runtime worker host cannot open a different loaded library.");
+			}
 			const transferred = transferBytes(request);
 			const id = this.#requestId();
 			const response = await this.#sendExecution(
@@ -399,6 +498,10 @@ export class EmbeddedWorkerHost {
 			if (response.type !== "opened") {
 				throw this.#protocolFailure("Embedded runtime execution worker returned an invalid open response.");
 			}
+			if (this.#loadedLibraryPath !== undefined && response.libraryPath !== this.#loadedLibraryPath) {
+				throw this.#protocolFailure("Embedded runtime execution worker changed the loaded library path during open.");
+			}
+			this.#loadedLibraryPath = response.libraryPath;
 			this.#handle = response.handle;
 			try {
 				const initId = this.#requestId();
@@ -537,7 +640,19 @@ export class EmbeddedWorkerHost {
 
 	async #closeExecutionRuntime(): Promise<void> {
 		const handle = this.#handle;
-		if (handle === undefined) return;
+		if (handle === undefined) {
+			if (this.#loadedLibraryPath === undefined) return;
+			const id = this.#requestId();
+			try {
+				const response = await this.#sendExecution({ type: "unload", id });
+				if (response.type !== "unloaded") {
+					throw this.#protocolFailure("Embedded runtime execution worker returned an invalid unload response.");
+				}
+			} finally {
+				this.#loadedLibraryPath = undefined;
+			}
+			return;
+		}
 		const id = this.#requestId();
 		try {
 			const response = await this.#sendExecution({ type: "close", id, handle });
@@ -546,6 +661,7 @@ export class EmbeddedWorkerHost {
 			}
 		} finally {
 			this.#handle = undefined;
+			this.#loadedLibraryPath = undefined;
 		}
 	}
 
@@ -604,6 +720,7 @@ export class EmbeddedWorkerHost {
 		});
 		this.#accepting = false;
 		this.#handle = undefined;
+		this.#loadedLibraryPath = undefined;
 		const rejection = this.#failure;
 		for (const pending of this.#executionPending.values()) pending.reject(rejection);
 		for (const pending of this.#controlPending.values()) pending.reject(rejection);

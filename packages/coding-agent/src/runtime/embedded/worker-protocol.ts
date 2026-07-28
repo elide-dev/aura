@@ -5,9 +5,11 @@ export const EMBEDDED_CONTROL_WORKER_ARG = "__omp_worker_runtime_embed_control";
 
 export type ExecutionWorkerRequest =
 	| { type: "probe"; id: number }
+	| { type: "load"; id: number; libraryPath: string }
 	| { type: "open"; id: number; libraryPath: string; request: Uint8Array }
 	| { type: "call"; id: number; handle: bigint; request: Uint8Array }
-	| { type: "close"; id: number; handle: bigint };
+	| { type: "close"; id: number; handle: bigint }
+	| { type: "unload"; id: number };
 
 export type ControlWorkerRequest =
 	| { type: "probe"; id: number }
@@ -23,9 +25,11 @@ export interface EmbeddedWorkerError {
 
 export type ExecutionWorkerResponse =
 	| { type: "probed"; id: number }
+	| { type: "loaded"; id: number; libraryPath: string; abiVersion: number; schemaHash: string }
 	| { type: "opened"; id: number; libraryPath: string; handle: bigint; response: Uint8Array }
 	| { type: "called"; id: number; response: Uint8Array }
 	| { type: "closed"; id: number; response: Uint8Array }
+	| { type: "unloaded"; id: number }
 	| { type: "error"; id: number; error: EmbeddedWorkerError };
 
 export type ControlWorkerResponse =

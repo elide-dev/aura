@@ -570,6 +570,7 @@ export class AgentSession {
 	#preferWebsockets: boolean | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
+	#disposeRuntimeService: (() => Promise<void>) | undefined;
 
 	readonly #ttsr: TtsrCoordinator;
 	readonly #stats: SessionStatsTracker;
@@ -1148,6 +1149,7 @@ export class AgentSession {
 			skillsReloadable: config.skillsReloadable,
 		});
 		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
+		this.#disposeRuntimeService = config.agentKind === "main" ? config.disposeRuntimeService : undefined;
 		const ttsrHost: TtsrCoordinatorHost = {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
@@ -3475,6 +3477,19 @@ export class AgentSession {
 		}
 	}
 
+	async #disposeOwnedRuntime(): Promise<void> {
+		if (!this.#disposeRuntimeService) return;
+		try {
+			await withTimeout(
+				this.#disposeRuntimeService(),
+				3_000,
+				"Timed out disposing runtime service during session teardown",
+			);
+		} catch (error) {
+			logger.warn("Failed to dispose runtime service during session teardown", { error: String(error) });
+		}
+	}
+
 	async #disconnectOwnedMcp(): Promise<void> {
 		if (!this.#disconnectOwnedMcpManager) return;
 		try {
@@ -3535,6 +3550,7 @@ export class AgentSession {
 			this.#releaseOwnedComputerSessions(this.#eval.getKernelOwnerId()),
 			shutdownTinyTitleClient(),
 			this.#disconnectOwnedMcp(),
+			this.#disposeOwnedRuntime(),
 			advisorRecorderClosed,
 			hindsightState?.flushRetainQueue() ?? Promise.resolve(),
 			this.#disposeMnemopi(mnemopiState, options.mnemopiConsolidateTimeoutMs),

@@ -31,7 +31,9 @@ and after every upstream merge.
 | `packages/coding-agent/src/advisor/watchdog.ts` | `collectConfigCandidates` probes `NATIVE_CONFIG_DIR_NAMES` (branded + legacy `.omp`) per ancestor instead of only `.omp`, and the owner-dir/level classification keys off that list |
 | `packages/coding-agent/src/cli/args.ts` | `getExtraHelpText` documents `AURA_PROFILE` first with `OMP_PROFILE` marked legacy; `agents unpack` examples use `${APP_NAME}` and `${CONFIG_DIR_NAME}` |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
-| `packages/coding-agent/src/sdk.ts` | wires `getRuntimeService` on the `toolSession` literal: reads `runtime.*` settings per call and returns `getOrCreateRuntimeService(...)`, or `undefined` when disabled |
+| `packages/coding-agent/src/sdk.ts` | wires selected/composite runtime settings onto the lazy `toolSession.getRuntimeService` accessor; tracks services created during startup for failure cleanup; gives only the root `Main` session the cache-disposal callback so subagents share but never close its runtime |
+| `packages/coding-agent/src/session/agent-session-types.ts` | adds the optional root-owned `disposeRuntimeService` lifecycle callback to `AgentSessionConfig` |
+| `packages/coding-agent/src/session/agent-session.ts` | accepts the runtime disposal callback only for main sessions and runs it once inside the existing bounded parallel teardown |
 | `packages/metaharness/agent/omp_local.py` | Harbor's local-agent adapter stages generated gateway routing and benchmark config under the branded `~/.aura/agent` directory so Aura finds `models.yml` and does not fail before its first model request |
 | `packages/metaharness/src/runner.ts` | accepts `--path` for deterministic local Harbor capability tasks in addition to registry datasets, allowing Aura's runtime benchmark to execute checked-in/materialized task fixtures |
 | `packages/metaharness/src/runner.test.ts` | covers Aura's local Harbor `--path` launch contract alongside registry dataset launches |
@@ -80,16 +82,22 @@ read fallback, writes never legacy); keep those alongside upstream's.
 ## Fork-added files and directories (additive, no merge risk)
 
 - `packages/coding-agent/src/runtime/` — runtime capability core; `index.ts` owns the
-  `RuntimeSettingsValues` adapter/library settings and process-option mapping,
-  `resolve.ts` owns regular-file validation shared by binary and library resolution,
-  and `src/runtime/embedded/` contains the exact-precedence shared-library resolver,
-  handwritten embedded wire adapter, schema identity constants, the sole `bun:ffi`
-  ABI owner, the typed serialized-execution/independent-control dual-Worker host and
-  entries, plus checked-in TypeScript generated from WHIPLASH's canonical Cap'n Proto closure
+  selected-service cache key, atomic swap/retirement/disposal ordering, and
+  `RuntimeSettingsValues` adapter/library mapping; `service.ts` owns the idempotent
+  endpoint-awaiting close boundary; `transport/selected.ts` implements the exact
+  process/embedded/auto routing and composed status matrix; `transport/embedded.ts`
+  owns validation, lazy open/reuse, serial execution, cancellation races, poisoning,
+  teardown, and postmortem fallback; `resolve.ts` owns regular-file validation shared
+  by binary and library resolution; and `src/runtime/embedded/` contains the
+  exact-precedence shared-library resolver, handwritten embedded wire adapter, schema
+  identity constants, the sole `bun:ffi` ABI owner, and the typed
+  load-only-probe/serialized-execution/independent-control dual-Worker host and entries,
+  plus checked-in TypeScript generated from WHIPLASH's canonical Cap'n Proto closure
 - `scripts/sync-embedded-runtime-protocol.ts` — canonical WHIPLASH schema-closure
   generation, fingerprinting, and checked-in drift verification
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts` — runtime
-  status command, including exact JSON selection/ABI/schema fields and sanitized,
+  status command routed through the selected/composite endpoint and explicitly closed
+  after probing, including exact JSON selection/ABI/schema fields and sanitized,
   home-shortened, single-line adapter/library paths in plain output
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts` — aggregate
   diagnostics, including requested/effective adapter and embedded runtime library

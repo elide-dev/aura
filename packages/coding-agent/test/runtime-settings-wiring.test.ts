@@ -37,14 +37,16 @@ describe("runtime settings wiring", () => {
 
 	test("omits explicitPath when runtime.path is empty or whitespace", () => {
 		expect(resolveRuntimeEndpointOptions(defaults)).toEqual({
+			adapter: "process",
 			autoDownload: true,
 		});
 		expect(resolveRuntimeEndpointOptions({ ...defaults, autoDownload: false, path: "   " })).toEqual({
+			adapter: "process",
 			autoDownload: false,
 		});
 	});
 
-	test("passes a trimmed explicitPath through alongside autoDownload without changing process endpoint options", () => {
+	test("maps trimmed process and embedded paths with the selected adapter and download policy", () => {
 		expect(
 			resolveRuntimeEndpointOptions({
 				...defaults,
@@ -52,6 +54,11 @@ describe("runtime settings wiring", () => {
 				adapter: "auto",
 				embeddedPath: " /opt/aura/lib/libelide_embed.so ",
 			}),
-		).toEqual({ autoDownload: true, explicitPath: "/opt/aura/runtime" });
+		).toEqual({
+			adapter: "auto",
+			autoDownload: true,
+			explicitPath: "/opt/aura/runtime",
+			embeddedPath: "/opt/aura/lib/libelide_embed.so",
+		});
 	});
 });

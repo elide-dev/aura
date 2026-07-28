@@ -112,7 +112,12 @@ import type { MnemopiSessionState } from "./mnemopi/state";
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
-import { getOrCreateRuntimeService, resolveRuntimeEndpointOptions } from "./runtime";
+import {
+	disposeCachedRuntimeService,
+	getOrCreateRuntimeService,
+	resolveRuntimeEndpointOptions,
+	type RuntimeService,
+} from "./runtime";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
@@ -1554,6 +1559,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let session!: AgentSession;
 	let hasSession = false;
 	let hasRegistered = false;
+	let startupRuntimeService: RuntimeService | undefined;
 	const restrictToolNames = options.restrictToolNames === true;
 	const enableLsp = !restrictToolNames && (options.enableLsp ?? true);
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
@@ -1580,6 +1586,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const resolvedAgentDisplayName =
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const agentKind = (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? ("sub" as const) : ("main" as const);
+	const ownsRuntimeService = agentKind === "main" && resolvedAgentId === MAIN_AGENT_ID;
 	let registeredAgentRef: AgentRef | undefined;
 	/**
 	 * Forget the agent ref on teardown — unless the agent is being parked (or is
@@ -1665,8 +1672,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					enabled: settings.get("runtime.enabled"),
 					autoDownload: settings.get("runtime.autoDownload"),
 					path: settings.get("runtime.path") ?? "",
+					adapter: settings.get("runtime.adapter"),
+					embeddedPath: settings.get("runtime.embeddedPath") ?? "",
 				});
-				return opts ? getOrCreateRuntimeService(opts) : undefined;
+				return opts
+					? getOrCreateRuntimeService(
+							opts,
+							ownsRuntimeService && !hasSession
+								? created => {
+										startupRuntimeService = created;
+									}
+								: undefined,
+						)
+					: undefined;
 			},
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
@@ -3180,6 +3198,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					}
 				: undefined,
 			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
+			disposeRuntimeService: ownsRuntimeService ? () => disposeCachedRuntimeService() : undefined,
 			ttsrManager,
 			obfuscator,
 			agentId: resolvedAgentId,
@@ -3484,6 +3503,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
+				if (startupRuntimeService) await disposeCachedRuntimeService(startupRuntimeService);
 				if (asyncJobManager) {
 					if (AsyncJobManager.instance() === asyncJobManager) {
 						AsyncJobManager.setInstance(undefined);

@@ -58,6 +58,7 @@ type EmbeddedLanguage = EmbeddedRunInvocation["language"];
 const MAX_UINT64 = (1n << 64n) - 1n;
 const MAX_PROCESS_EXIT_CODE = 255;
 const ARGUMENT_SLICE_OFFSET = 1;
+export const MAX_EMBEDDED_ARGUMENT_COUNT = 0xffff;
 const WIRE_LANGUAGE: Record<EmbeddedLanguage, Language> = {
 	js: Language.JAVASCRIPT,
 	ts: Language.TYPESCRIPT,
@@ -93,7 +94,7 @@ export function encodeRunRequest(requestId: bigint, invocation: EmbeddedRunInvoc
 			requestId: requestId.toString(),
 		});
 	}
-	if (invocation.args.length > 0xffff) {
+	if (invocation.args.length > MAX_EMBEDDED_ARGUMENT_COUNT) {
 		throw new RuntimeRpcError("invalid-params", "Embedded runtime invocation has too many arguments.", {
 			argumentCount: invocation.args.length,
 		});

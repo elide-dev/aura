@@ -11,37 +11,62 @@ export { provisionRuntime } from "./provision";
 export { managedRuntimeRoot, managedVersionDir, resolveRuntimeBinary } from "./resolve";
 export * from "./service";
 export { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
+export * from "./transport/embedded";
+export * from "./transport/selected";
 
-import { RuntimeService } from "./service";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { RuntimeAdapter } from "./protocol";
-import { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
+import { RuntimeService } from "./service";
+import { SelectedRuntimeEndpoint, type SelectedEndpointOptions } from "./transport/selected";
 
-let cached: { key: string; service: RuntimeService } | undefined;
+interface CachedRuntimeService {
+	key: string;
+	service: RuntimeService;
+}
 
-/** Stable cache key over the options that change resolution behaviour. */
-function serviceCacheKey(opts?: LocalEndpointOptions): string {
+let cached: CachedRuntimeService | undefined;
+
+/** Stable cache key over every setting that changes endpoint selection or resolution. */
+function serviceCacheKey(options: SelectedEndpointOptions = {}): string {
 	return JSON.stringify({
-		explicitPath: opts?.explicitPath ?? null,
-		autoDownload: opts?.autoDownload ?? null,
+		adapter: options.adapter ?? "process",
+		embeddedPath: options.embeddedPath ?? null,
+		explicitPath: options.explicitPath ?? null,
+		autoDownload: options.autoDownload ?? null,
 	});
 }
 
 /**
- * Lazily build a service over the local endpoint, memoized on the options that
- * affect binary resolution (`explicitPath`, `autoDownload`). Identical options
- * hand back the cached instance; changed options build a fresh one, so live
- * edits to `runtime.*` settings take effect on the next call. Discarding an
- * instance is free because {@link LocalRuntimeEndpoint} holds no state — it
- * re-resolves the binary on every request.
- *
- * Only `explicitPath`/`autoDownload` participate in the key; callers that vary
- * `env`, `onProgress`, or the test injection hooks must not rely on the cache
- * noticing (construct the service directly instead).
+ * Lazily build the selected runtime service. A settings change publishes the
+ * replacement first, then retires the old endpoint without blocking its caller.
  */
-export function getOrCreateRuntimeService(opts?: LocalEndpointOptions): RuntimeService {
-	const key = serviceCacheKey(opts);
-	if (cached?.key !== key) cached = { key, service: new RuntimeService(new LocalRuntimeEndpoint(opts)) };
-	return cached.service;
+export function getOrCreateRuntimeService(
+	options: SelectedEndpointOptions = {},
+	onCreate?: (service: RuntimeService) => void,
+): RuntimeService {
+	const key = serviceCacheKey(options);
+	if (cached?.key === key) return cached.service;
+	const retired = cached?.service;
+	const service = new RuntimeService(new SelectedRuntimeEndpoint(options));
+	cached = { key, service };
+	onCreate?.(service);
+	if (retired) {
+		void retired.close().catch(error => {
+			logger.warn("Failed to close retired runtime service after settings change", { error: String(error) });
+		});
+	}
+	return service;
+}
+
+/**
+ * Atomically evict and then close a cached service. Supplying a retired service
+ * closes only that instance and cannot evict a newer replacement.
+ */
+export async function disposeCachedRuntimeService(service?: RuntimeService): Promise<void> {
+	const target = service ?? cached?.service;
+	if (!target) return;
+	if (cached?.service === target) cached = undefined;
+	await target.close();
 }
 
 /** Runtime settings as read from the `runtime.*` settings group. */
@@ -57,21 +82,22 @@ export interface RuntimeSettingsValues {
 }
 
 /**
- * Map runtime settings onto endpoint options. Returns `undefined` when the runtime is disabled,
- * which is the signal to expose no service at all.
+ * Map runtime settings onto selected endpoint options. Returns `undefined` when
+ * the runtime is disabled, which is the signal to expose no service at all.
  */
-export function resolveRuntimeEndpointOptions(
-	values: Pick<RuntimeSettingsValues, "enabled" | "autoDownload" | "path">,
-): LocalEndpointOptions | undefined {
+export function resolveRuntimeEndpointOptions(values: RuntimeSettingsValues): SelectedEndpointOptions | undefined {
 	if (!values.enabled) return undefined;
 	const explicit = values.path.trim();
+	const embedded = values.embeddedPath.trim();
 	return {
+		adapter: values.adapter,
 		autoDownload: values.autoDownload,
 		...(explicit === "" ? {} : { explicitPath: explicit }),
+		...(embedded === "" ? {} : { embeddedPath: embedded }),
 	};
 }
 
-/** Drop the memoized service so the next call builds a fresh one. */
+/** Drop the memoized test singleton without waiting for endpoint teardown. */
 export function resetRuntimeServiceForTests(): void {
 	cached = undefined;
 }

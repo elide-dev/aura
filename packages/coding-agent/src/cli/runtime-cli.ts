@@ -4,11 +4,11 @@
  */
 import { settings } from "../config/settings";
 import {
-	type LocalEndpointOptions,
-	LocalRuntimeEndpoint,
 	RUNTIME_PROTOCOL_VERSION,
 	RuntimeService,
 	type RuntimeSettingsValues,
+	type SelectedEndpointOptions,
+	SelectedRuntimeEndpoint,
 	resolveRuntimeEndpointOptions,
 } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
@@ -22,7 +22,9 @@ export interface RuntimeCommandArgs {
 /** Sentinel for `runtime.enabled = false`: there is no service to probe at all. */
 export const RUNTIME_DISABLED = { disabled: true } as const;
 
-export type StatusRuntime = Pick<RuntimeService, "status"> | typeof RUNTIME_DISABLED;
+export type StatusRuntime =
+	| (Pick<RuntimeService, "status"> & Partial<Pick<RuntimeService, "close">>)
+	| typeof RUNTIME_DISABLED;
 
 function isDisabled(runtime: StatusRuntime): runtime is typeof RUNTIME_DISABLED {
 	return "disabled" in runtime;
@@ -45,7 +47,7 @@ export function readRuntimeSettings(): RuntimeSettingsValues {
  * reporting status is read-only and must never provision a runtime as a side
  * effect. `undefined` means `runtime.enabled = false`.
  */
-export function resolveStatusEndpointOptions(values: RuntimeSettingsValues): LocalEndpointOptions | undefined {
+export function resolveStatusEndpointOptions(values: RuntimeSettingsValues): SelectedEndpointOptions | undefined {
 	const opts = resolveRuntimeEndpointOptions(values);
 	return opts === undefined ? undefined : { ...opts, autoDownload: false };
 }
@@ -59,7 +61,7 @@ export function resolveStatusEndpointOptions(values: RuntimeSettingsValues): Loc
 export function createStatusRuntime(values: RuntimeSettingsValues = readRuntimeSettings()): StatusRuntime {
 	const opts = resolveStatusEndpointOptions(values);
 	if (opts === undefined) return RUNTIME_DISABLED;
-	return new RuntimeService(new LocalRuntimeEndpoint(opts));
+	return new RuntimeService(new SelectedRuntimeEndpoint(opts));
 }
 
 
@@ -127,11 +129,15 @@ export async function runRuntimeCommand(
 		);
 		return 1;
 	}
-	const status = await service.status();
-	if (cmd.flags.json) {
-		print(JSON.stringify(status, null, 2));
-	} else {
-		print(formatRuntimeStatus(status));
+	try {
+		const status = await service.status();
+		if (cmd.flags.json) {
+			print(JSON.stringify(status, null, 2));
+		} else {
+			print(formatRuntimeStatus(status));
+		}
+		return status.available ? 0 : 1;
+	} finally {
+		await service.close?.();
 	}
-	return status.available ? 0 : 1;
 }

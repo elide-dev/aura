@@ -13,6 +13,16 @@ class RecordingEndpoint implements RuntimeEndpoint {
 	}
 }
 
+class ClosingEndpoint extends RecordingEndpoint {
+	closeCount = 0;
+	readonly closeGate = Promise.withResolvers<void>();
+
+	close(): Promise<void> {
+		this.closeCount += 1;
+		return this.closeGate.promise;
+	}
+}
+
 describe("RuntimeService", () => {
 	test("maps each capability to its protocol method", async () => {
 		const ep = new RecordingEndpoint();
@@ -42,5 +52,42 @@ describe("RuntimeService", () => {
 		const r = await svc.run({ code: "1" });
 		expect(r.exitCode).toBe(0);
 		expect(r.stdout).toBe("ok");
+	});
+
+	test("close is idempotent and waits for endpoint settlement", async () => {
+		const endpoint = new ClosingEndpoint();
+		const service = new RuntimeService(endpoint);
+		let settled = false;
+		const first = service.close();
+		void first.finally(() => {
+			settled = true;
+		});
+		const second = service.close();
+		expect(second).toBe(first);
+		expect(endpoint.closeCount).toBe(1);
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		endpoint.closeGate.resolve();
+		await first;
+		expect(settled).toBe(true);
+	});
+
+	test("calls begun after close return an internal error without reaching the endpoint", async () => {
+		const endpoint = new ClosingEndpoint();
+		const service = new RuntimeService(endpoint);
+		const close = service.close();
+		let thrown: unknown;
+		try {
+			await service.run({ code: "1" });
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toMatchObject({
+			name: "RuntimeRpcError",
+			code: "internal",
+		});
+		expect(endpoint.requests).toHaveLength(0);
+		endpoint.closeGate.resolve();
+		await close;
 	});
 });
