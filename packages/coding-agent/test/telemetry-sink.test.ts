@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emptyAgentRunCoverage, emptyAgentRunSummary } from "@oh-my-pi/pi-agent-core";
 import {
 	AggregationTemporality,
 	InMemoryMetricExporter,
@@ -6,6 +7,7 @@ import {
 	PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
 import { emitTelemetryEvent } from "../src/telemetry/events";
+import { errorEventFromLog } from "../src/telemetry/init";
 import { AuraMetricRecorder } from "../src/telemetry/metrics";
 import { registerOtlpSink } from "../src/telemetry/sink-otlp";
 
@@ -144,6 +146,84 @@ describe("otlp sink", () => {
 
 		unregister();
 		await provider.shutdown();
+	});
+
+	it("counts error.reported with phase attribute", async () => {
+		const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+		const provider = new MeterProvider({
+			readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+		});
+		const recorder = new AuraMetricRecorder(provider.getMeter("test"));
+		const logs: Array<{ eventName: string }> = [];
+		const unregister = registerOtlpSink({
+			recorder,
+			emitLog: (_level, _body, _attrs, eventName) => logs.push({ eventName }),
+		});
+
+		emitTelemetryEvent({ type: "error.reported", phase: "session", errorType: "log_error", message: "boom" });
+
+		const metrics = await collect(exporter, provider);
+		const errors = metrics.find(m => m.descriptor.name === "aura.agent.errors");
+		expect(errors).toBeDefined();
+		expect(errors?.dataPoints[0]?.attributes["aura.error.phase"]).toBe("session");
+		expect(errors?.dataPoints[0]?.attributes["error.type"]).toBe("log_error");
+		// The logger sink already forwarded the log line; the event exists for counting.
+		expect(logs).toHaveLength(0);
+
+		unregister();
+		await provider.shutdown();
+	});
+
+	it("stamps run-summary error types with chat/tool phase", async () => {
+		const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+		const provider = new MeterProvider({
+			readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+		});
+		const recorder = new AuraMetricRecorder(provider.getMeter("test"));
+		const unregister = registerOtlpSink({ recorder, emitLog: () => {} });
+
+		emitTelemetryEvent({
+			type: "turn.completed",
+			sessionId: "s1",
+			summary: {
+				...emptyAgentRunSummary(),
+				stepCount: 1,
+				errors: { total: 3, byType: { tool_timeout: 1, error: 1, TypeError: 1 } },
+			},
+			coverage: emptyAgentRunCoverage(),
+		});
+
+		const metrics = await collect(exporter, provider);
+		const errors = metrics.find(m => m.descriptor.name === "aura.agent.errors");
+		const phases = errors?.dataPoints.map(p => [p.attributes["error.type"], p.attributes["aura.error.phase"]]);
+		expect(phases).toContainEqual(["tool_timeout", "tool"]);
+		expect(phases).toContainEqual(["error", "chat"]);
+		// Thrown tool errors surface as JS class names; those attribute to the tool phase.
+		expect(phases).toContainEqual(["TypeError", "tool"]);
+
+		unregister();
+		await provider.shutdown();
+	});
+
+	it("derives session-phase error events from error-level log records only", () => {
+		expect(errorEventFromLog({ level: "warn", message: "careful", context: undefined, timestamp: new Date() })).toBe(
+			undefined,
+		);
+		expect(errorEventFromLog({ level: "error", message: "boom", context: undefined, timestamp: new Date() })).toEqual(
+			{
+				type: "error.reported",
+				phase: "session",
+				errorType: "log_error",
+				message: "boom",
+			},
+		);
+		// A caller-supplied `code` is the error taxonomy; anything else falls back.
+		expect(
+			errorEventFromLog({ level: "error", message: "boom", context: { code: "acp_failed" }, timestamp: new Date() }),
+		).toMatchObject({ errorType: "acp_failed" });
+		expect(
+			errorEventFromLog({ level: "error", message: "boom", context: { code: 42 }, timestamp: new Date() }),
+		).toMatchObject({ errorType: "log_error" });
 	});
 
 	it("never lets sink failures reach the publisher", () => {

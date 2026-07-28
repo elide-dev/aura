@@ -19,6 +19,30 @@ import type {
 
 const TOOL_STATUSES = ["ok", "error", "skipped", "blocked", "timeout", "aborted"] satisfies readonly ToolStatus[];
 
+/** Run-summary `errors.byType` keys contributed by non-ok tool statuses. */
+const TOOL_ERROR_TYPES: ReadonlySet<string> = new Set([
+	"tool_error",
+	"tool_skipped",
+	"tool_blocked",
+	"tool_timeout",
+	"tool_aborted",
+]);
+/** Run-summary `errors.byType` keys contributed by chat stop reasons. */
+const CHAT_ERROR_TYPES: ReadonlySet<string> = new Set(["error", "aborted"]);
+
+/**
+ * Phase an `errors.byType` key belongs to.
+ *
+ * Unknown keys default to `tool`: a tool that throws contributes its JS error
+ * class name (`TypeError`, `AbortError`, …) rather than a `tool_*` constant, and
+ * chat contributes only the two fixed stop reasons above.
+ */
+function errorPhaseFor(errorType: string): "tool" | "chat" {
+	if (TOOL_ERROR_TYPES.has(errorType)) return "tool";
+	if (CHAT_ERROR_TYPES.has(errorType)) return "chat";
+	return "tool";
+}
+
 export class AuraMetricRecorder {
 	readonly #tokenUsage: Histogram<Attributes>;
 	readonly #chatCostUsd: Counter<Attributes>;
@@ -167,7 +191,15 @@ export class AuraMetricRecorder {
 		}
 		for (const errorType in summary.errors.byType) {
 			const count = summary.errors.byType[errorType];
-			if (count > 0) this.#errors.add(count, metricAttributes({ ...runAttrs, "error.type": errorType }));
+			if (count > 0)
+				this.#errors.add(
+					count,
+					metricAttributes({
+						...runAttrs,
+						"error.type": errorType,
+						"aura.error.phase": errorPhaseFor(errorType),
+					}),
+				);
 		}
 	}
 

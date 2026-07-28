@@ -34,7 +34,7 @@ import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { Settings } from "../config/settings";
-import { emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
+import { type ErrorReportedTelemetry, emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
 import { buildResourceAttributes } from "./identity";
 import { AuraMetricRecorder } from "./metrics";
 import { registerOtlpSink } from "./sink-otlp";
@@ -277,6 +277,10 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 		otelLogger = logProvider.getLogger("aura");
 		unregisterLogSink = logger.registerLogSink(event => {
 			emitOtelLog(event.level, event.message, logAttributesFromContext(event.context), "aura.log", event.timestamp);
+			// Counting only: the record above already carries the message, so the OTLP
+			// sink deliberately emits no second log record for error.reported.
+			const errorEvent = errorEventFromLog(event);
+			if (errorEvent) emitTelemetryEvent(errorEvent);
 		});
 	}
 
@@ -353,6 +357,31 @@ function signalEnabled(
 		return false;
 	}
 	return true;
+}
+
+/**
+ * The `error.reported` event an error-level log record contributes, if any.
+ *
+ * Logger records are the only source of `session`-phase errors — chat, tool, and
+ * compaction failures reach the bus already classified by their own publishers.
+ * A caller-supplied `context.code` is the error taxonomy when present; otherwise
+ * the generic `log_error` keeps the `error.type` dimension bounded instead of
+ * minting one series per distinct message.
+ *
+ * Total by construction: it only reads the event and never logs, so the logger
+ * sink cannot recurse or throw back into a logging path.
+ *
+ * Exported for tests.
+ */
+export function errorEventFromLog(event: logger.LogEvent): ErrorReportedTelemetry | undefined {
+	if (event.level !== "error") return undefined;
+	const code = event.context?.code;
+	return {
+		type: "error.reported",
+		phase: "session",
+		errorType: typeof code === "string" && code.length > 0 ? code : "log_error",
+		message: event.message,
+	};
 }
 
 function emitRunSummaryLog(sessionId: string | undefined, summary: AgentRunSummary, coverage: AgentRunCoverage): void {
