@@ -20,6 +20,7 @@ import { fsFixtures } from "./fs";
 import { interactionFixtures } from "./interaction";
 import { memoryFixtures } from "./memory";
 import { miscFixtures } from "./misc";
+import { runtimeFixtures } from "./runtime";
 import { searchFixtures } from "./search";
 import { shellFixtures } from "./shell";
 import { webFixtures } from "./web";
@@ -36,5 +37,6 @@ export const galleryFixtures = {
 	...memoryFixtures,
 	...webFixtures,
 	...codeintelFixtures,
+	...runtimeFixtures,
 	...miscFixtures,
 };
