@@ -161,9 +161,9 @@ export function encodeRunRequest(requestId: bigint, invocation: EmbeddedRunInvoc
 	return new Uint8Array(message.toArrayBuffer());
 }
 
-export function decodeEmbeddedResponse(bytes: Uint8Array, expectedRequestId?: bigint): EmbeddedDecodedResponse {
+export function decodeEmbeddedResponse(bytes: Uint8Array, expectedRequestId: bigint): EmbeddedDecodedResponse {
 	try {
-		if (expectedRequestId !== undefined && (expectedRequestId < 0n || expectedRequestId > MAX_UINT64)) {
+		if (typeof expectedRequestId !== "bigint" || expectedRequestId < 0n || expectedRequestId > MAX_UINT64) {
 			throw new RuntimeRpcError("internal", `Invalid expected embedded runtime request id: ${expectedRequestId}.`);
 		}
 		const message = new Message(bytes, false);
@@ -176,20 +176,19 @@ export function decodeEmbeddedResponse(bytes: Uint8Array, expectedRequestId?: bi
 		}
 
 		const requestId = response.requestId;
-		if (expectedRequestId !== undefined && requestId !== expectedRequestId) {
-			throw new RuntimeRpcError(
-				"internal",
-				`Embedded runtime response request id ${requestId} does not match submitted request id ${expectedRequestId}.`,
-			);
-		}
 
 		switch (response.which()) {
 			case EmbeddedResponse_Which.OPENED:
-				if (requestId !== 0n) {
-					throw new RuntimeRpcError("internal", `Embedded runtime opened response must use request id 0, received ${requestId}.`);
+				if (expectedRequestId !== 0n || requestId !== 0n) {
+					throw new RuntimeRpcError(
+						"internal",
+						`Embedded runtime opened response requires expected and actual request id 0; received expected ${expectedRequestId}, actual ${requestId}.`,
+					);
 				}
 				return { type: "opened", requestId };
 			case EmbeddedResponse_Which.COMPLETED: {
+				assertPositiveCallRequestId(expectedRequestId, "completed");
+				assertExactRequestId(requestId, expectedRequestId);
 				const completed = response.completed;
 				if (
 					!Number.isInteger(completed.exitCode) ||
@@ -213,13 +212,19 @@ export function decodeEmbeddedResponse(bytes: Uint8Array, expectedRequestId?: bi
 				};
 			}
 			case EmbeddedResponse_Which.CANCELLED:
+				assertPositiveCallRequestId(expectedRequestId, "cancelled");
+				assertExactRequestId(requestId, expectedRequestId);
 				return { type: "cancelled", requestId };
 			case EmbeddedResponse_Which.CLOSED:
-				if (requestId !== 0n) {
-					throw new RuntimeRpcError("internal", `Embedded runtime closed response must use request id 0, received ${requestId}.`);
+				if (expectedRequestId !== 0n || requestId !== 0n) {
+					throw new RuntimeRpcError(
+						"internal",
+						`Embedded runtime closed response requires expected and actual request id 0; received expected ${expectedRequestId}, actual ${requestId}.`,
+					);
 				}
 				return { type: "closed", requestId };
 			case EmbeddedResponse_Which.FAILURE: {
+				assertExactRequestId(requestId, expectedRequestId);
 				const failure = response.failure;
 				return {
 					type: "failure",
@@ -236,6 +241,24 @@ export function decodeEmbeddedResponse(bytes: Uint8Array, expectedRequestId?: bi
 		throw new RuntimeRpcError("internal", "Failed to decode Cap'n Proto embedded runtime response.", {
 			cause: error instanceof Error ? error.message : String(error),
 		});
+	}
+}
+
+function assertPositiveCallRequestId(requestId: bigint, responseType: "completed" | "cancelled"): void {
+	if (requestId <= 0n) {
+		throw new RuntimeRpcError(
+			"internal",
+			`Embedded runtime ${responseType} response requires a positive request id; received ${requestId}.`,
+		);
+	}
+}
+
+function assertExactRequestId(actualRequestId: bigint, expectedRequestId: bigint): void {
+	if (actualRequestId !== expectedRequestId) {
+		throw new RuntimeRpcError(
+			"internal",
+			`Embedded runtime response request id ${actualRequestId} does not match submitted request id ${expectedRequestId}.`,
+		);
 	}
 }
 

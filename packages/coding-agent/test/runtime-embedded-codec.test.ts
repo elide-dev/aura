@@ -236,10 +236,33 @@ describe("embedded runtime protocol codec", () => {
 		);
 	});
 
+	test("requires positive request ids for completed and cancelled responses", () => {
+		const completed = serializeResponse(0n, (response) => {
+			const result = response._initCompleted();
+			result.exitCode = 0;
+			result._initStdout(0);
+			result._initStderr(0);
+		});
+		expectInternalError(() => decodeEmbeddedResponse(completed, 0n), "positive request id");
+		expectInternalError(
+			() => decodeEmbeddedResponse(serializeResponse(0n, (response) => (response.cancelled = true)), 0n),
+			"positive request id",
+		);
+	});
+
+	test("rejects failure responses whose ids do not match the submitted request", () => {
+		const failure = serializeResponse(30n, (response) => {
+			const detail = response._initFailure();
+			detail.code = WireFailureCode.INTERNAL;
+			detail.message = "dispatch failed";
+		});
+		expectInternalError(() => decodeEmbeddedResponse(failure, 31n), "request id");
+	});
+
 	test("rejects malformed and truncated messages as internal RPC errors", () => {
-		expectInternalError(() => decodeEmbeddedResponse(Uint8Array.of(0, 1, 2)), "Cap'n Proto");
+		expectInternalError(() => decodeEmbeddedResponse(Uint8Array.of(0, 1, 2), 0n), "Cap'n Proto");
 		const valid = serializeResponse(0n, (response) => (response.opened = true));
-		expectInternalError(() => decodeEmbeddedResponse(valid.subarray(0, valid.length - 3)), "Cap'n Proto");
+		expectInternalError(() => decodeEmbeddedResponse(valid.subarray(0, valid.length - 3), 0n), "Cap'n Proto");
 	});
 
 	test("rejects unknown response unions", () => {

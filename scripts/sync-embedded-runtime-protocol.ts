@@ -1,13 +1,13 @@
-import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
-const REPOSITORY_ROOT = resolve(import.meta.dir, "..");
-const CODING_AGENT_ROOT = join(REPOSITORY_ROOT, "packages", "coding-agent");
+const REPOSITORY_ROOT = path.resolve(import.meta.dir, "..");
+const CODING_AGENT_ROOT = path.join(REPOSITORY_ROOT, "packages", "coding-agent");
 const EMBEDDED_SCHEMA_ENTRY = "protocol/elide/v1/embed.capnp";
 const PROTOCOL_ROOT = "protocol/elide/v1";
-const GENERATED_ROOT = join(CODING_AGENT_ROOT, "src", "runtime", "embedded", "generated");
-const SCHEMA_CONSTANTS_PATH = join(CODING_AGENT_ROOT, "src", "runtime", "embedded", "schema.ts");
+const GENERATED_ROOT = path.join(CODING_AGENT_ROOT, "src", "runtime", "embedded", "generated");
+const SCHEMA_CONSTANTS_PATH = path.join(CODING_AGENT_ROOT, "src", "runtime", "embedded", "schema.ts");
 const IMPORT_PATTERN = /\bimport\s+"([^"\r\n]+)"/g;
 const NUL = "\0";
 const EXPECTED_CAPNP_ES_VERSION = "0.0.14";
@@ -62,13 +62,13 @@ function normalizeLineEndings(content: string): string {
 	return content.replace(/\r\n?/g, "\n");
 }
 
-function repositoryRelativePath(root: string, path: string): string {
-	return relative(root, path).split(sep).join("/");
+function repositoryRelativePath(root: string, targetPath: string): string {
+	return path.relative(root, targetPath).split(path.sep).join("/");
 }
 
-function isWithin(root: string, path: string): boolean {
-	const pathFromRoot = relative(root, path);
-	return pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot);
+function isWithin(root: string, targetPath: string): boolean {
+	const pathFromRoot = path.relative(root, targetPath);
+	return pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${path.sep}`) && !path.isAbsolute(pathFromRoot);
 }
 
 function importsIn(content: string): string[] {
@@ -87,27 +87,27 @@ function importsIn(content: string): string[] {
 	return imports;
 }
 
-async function canonicalSchemaPath(path: string, context: string): Promise<string> {
-	if (!(await Bun.file(path).exists())) {
+async function canonicalSchemaPath(schemaPath: string, context: string): Promise<string> {
+	if (!(await Bun.file(schemaPath).exists())) {
 		throw new Error(`Missing local import ${context}`);
 	}
 	try {
-		return await realpath(path);
+		return await fs.realpath(schemaPath);
 	} catch (cause) {
 		throw new Error(`Unable to resolve local import ${context}`, { cause });
 	}
 }
 
 async function collectEmbeddedSchemaClosure(root: string): Promise<EmbeddedSchemaClosure> {
-	const repositoryRoot = resolve(root);
-	const protocolRoot = resolve(repositoryRoot, PROTOCOL_ROOT);
+	const repositoryRoot = path.resolve(root);
+	const protocolRoot = path.resolve(repositoryRoot, PROTOCOL_ROOT);
 	let canonicalProtocolRoot: string;
 	try {
-		canonicalProtocolRoot = await realpath(protocolRoot);
+		canonicalProtocolRoot = await fs.realpath(protocolRoot);
 	} catch (cause) {
 		throw new Error(`WHIPLASH protocol root does not exist: ${protocolRoot}`, { cause });
 	}
-	const entry = resolve(repositoryRoot, EMBEDDED_SCHEMA_ENTRY);
+	const entry = path.resolve(repositoryRoot, EMBEDDED_SCHEMA_ENTRY);
 	const visited = new Set<string>();
 	const files: EmbeddedSchemaFile[] = [];
 
@@ -122,13 +122,13 @@ async function collectEmbeddedSchemaClosure(root: string): Promise<EmbeddedSchem
 		if (visited.has(canonicalPath)) return;
 
 		const content = await Bun.file(canonicalPath).text();
-		const path = repositoryRelativePath(repositoryRoot, logicalPath);
+		const repositoryPath = repositoryRelativePath(repositoryRoot, logicalPath);
 		visited.add(canonicalPath);
-		files.push({ path, sourcePath: logicalPath, content });
+		files.push({ path: repositoryPath, sourcePath: logicalPath, content });
 
 		for (const importPath of importsIn(content)) {
 			if (importPath.startsWith("/") || !importPath.endsWith(".capnp")) continue;
-			await visit(resolve(dirname(logicalPath), importPath), `${importPath} from ${path}`);
+			await visit(path.resolve(path.dirname(logicalPath), importPath), `${importPath} from ${repositoryPath}`);
 		}
 	}
 
@@ -149,11 +149,11 @@ function computeEmbeddedSchemaHash(files: readonly EmbeddedSchemaFile[]): string
 }
 
 async function findPackageRoot(entryPath: string, packageName: string): Promise<string> {
-	let candidate = dirname(await realpath(entryPath));
+	let candidate = path.dirname(await fs.realpath(entryPath));
 	for (;;) {
-		const manifestPath = join(candidate, "package.json");
+		const manifestPath = path.join(candidate, "package.json");
 		if (await Bun.file(manifestPath).exists()) {
-			const manifest: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
+			const manifest: unknown = JSON.parse(await fs.readFile(manifestPath, "utf8"));
 			if (
 				typeof manifest === "object" &&
 				manifest !== null &&
@@ -163,14 +163,14 @@ async function findPackageRoot(entryPath: string, packageName: string): Promise<
 				return candidate;
 			}
 		}
-		const parent = dirname(candidate);
+		const parent = path.dirname(candidate);
 		if (parent === candidate) throw new Error(`Unable to locate installed package root for ${packageName}`);
 		candidate = parent;
 	}
 }
 
 async function readInstalledVersion(packageRoot: string, packageName: string): Promise<string> {
-	const manifest: unknown = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+	const manifest: unknown = JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8"));
 	if (
 		typeof manifest !== "object" ||
 		manifest === null ||
@@ -198,32 +198,32 @@ async function prepareCompilerWorkspace(compilerRoot: string): Promise<void> {
 		throw new Error(`Expected local TypeScript ${EXPECTED_TYPESCRIPT_VERSION}, found ${typescriptVersion}`);
 	}
 
-	const nodeModules = join(compilerRoot, "node_modules");
-	await mkdir(nodeModules, { recursive: true });
+	const nodeModules = path.join(compilerRoot, "node_modules");
+	await fs.mkdir(nodeModules, { recursive: true });
 	await Promise.all([
-		cp(capnpPackageRoot, join(nodeModules, "capnp-es"), { recursive: true, dereference: true }),
-		cp(typescriptPackageRoot, join(nodeModules, "typescript"), { recursive: true, dereference: true }),
+		fs.cp(capnpPackageRoot, path.join(nodeModules, "capnp-es"), { recursive: true, dereference: true }),
+		fs.cp(typescriptPackageRoot, path.join(nodeModules, "typescript"), { recursive: true, dereference: true }),
 	]);
-	const binRoot = join(nodeModules, ".bin");
-	await mkdir(binRoot, { recursive: true });
-	await symlink(join("..", "capnp-es", "dist", "compiler", "capnpc-js.mjs"), join(binRoot, "capnp-es"), "file");
+	const binRoot = path.join(nodeModules, ".bin");
+	await fs.mkdir(binRoot, { recursive: true });
+	await fs.symlink(path.join("..", "capnp-es", "dist", "compiler", "capnpc-js.mjs"), path.join(binRoot, "capnp-es"), "file");
 }
 
 async function collectFiles(root: string): Promise<string[]> {
 	try {
-		if (!(await stat(root)).isDirectory()) return [];
+		if (!(await fs.stat(root)).isDirectory()) return [];
 	} catch (error) {
 		if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return [];
 		throw error;
 	}
 	const files: string[] = [];
 	async function visit(directory: string): Promise<void> {
-		const entries = await readdir(directory, { withFileTypes: true });
+		const entries = await fs.readdir(directory, { withFileTypes: true });
 		entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 		for (const entry of entries) {
-			const path = join(directory, entry.name);
-			if (entry.isDirectory()) await visit(path);
-			else if (entry.isFile()) files.push(repositoryRelativePath(root, path));
+			const filePath = path.join(directory, entry.name);
+			if (entry.isDirectory()) await visit(filePath);
+			else if (entry.isFile()) files.push(repositoryRelativePath(root, filePath));
 		}
 	}
 	await visit(root);
@@ -233,7 +233,7 @@ async function collectFiles(root: string): Promise<string[]> {
 function stripSourceRoots(content: string, roots: readonly string[]): string {
 	let stripped = normalizeLineEndings(content);
 	for (const root of roots) {
-		const variants = new Set([root, root.split(sep).join("/"), root.replaceAll("\\", "/")]);
+		const variants = new Set([root, root.split(path.sep).join("/"), root.replaceAll("\\", "/")]);
 		for (const variant of variants) {
 			stripped = stripped.replaceAll(`${variant}/`, "").replaceAll(variant, ".");
 		}
@@ -242,17 +242,18 @@ function stripSourceRoots(content: string, roots: readonly string[]): string {
 }
 
 async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: string): Promise<Map<string, string>> {
-	const compilerRoot = join(temporaryRoot, "compiler");
-	const rawOutputRoot = join(temporaryRoot, "raw-generated");
+	const compilerRoot = path.join(temporaryRoot, "compiler");
+	const rawOutputRoot = path.join(temporaryRoot, "raw-generated");
 	await prepareCompilerWorkspace(compilerRoot);
-	await mkdir(rawOutputRoot, { recursive: true });
+	await fs.mkdir(rawOutputRoot, { recursive: true });
 
 	const command = [
 		"bunx",
 		"--bun",
+		"--no-install",
 		"capnp-es",
 		...closure.files.map((file) => file.sourcePath),
-		`-I${join(closure.repositoryRoot, "third_party")}`,
+		`-I${path.join(closure.repositoryRoot, "third_party")}`,
 		`-ots:${rawOutputRoot}`,
 		`--src-prefix=${closure.protocolRoot}`,
 	];
@@ -266,7 +267,7 @@ async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: s
 	const exitCode = await child.exited;
 	if (exitCode !== 0) throw new Error(`capnp-es generation failed with exit code ${exitCode}`);
 
-	const canonicalRepositoryRoot = await realpath(closure.repositoryRoot);
+	const canonicalRepositoryRoot = await fs.realpath(closure.repositoryRoot);
 	const sourceRoots = [closure.repositoryRoot, canonicalRepositoryRoot];
 	const generatedFiles = await collectFiles(rawOutputRoot);
 	const expectedFiles = closure.files.map((file) => file.path.slice(`${PROTOCOL_ROOT}/`.length).replace(/\.capnp$/, ".ts"));
@@ -280,15 +281,15 @@ async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: s
 	}
 
 	const output = new Map<string, string>();
-	for (const path of generatedFiles) {
-		const source = await readFile(join(rawOutputRoot, path), "utf8");
+	for (const generatedFile of generatedFiles) {
+		const source = await fs.readFile(path.join(rawOutputRoot, generatedFile), "utf8");
 		const normalized = stripSourceRoots(source, sourceRoots);
 		for (const sourceRoot of sourceRoots) {
 			if (normalized.includes(sourceRoot) || normalized.includes(sourceRoot.replaceAll("\\", "/"))) {
-				throw new Error(`Generated binding still contains an absolute WHIPLASH path: ${path}`);
+				throw new Error(`Generated binding still contains an absolute WHIPLASH path: ${generatedFile}`);
 			}
 		}
-		output.set(path, normalized.endsWith("\n") ? normalized : `${normalized}\n`);
+		output.set(generatedFile, normalized.endsWith("\n") ? normalized : `${normalized}\n`);
 	}
 	return output;
 }
@@ -298,15 +299,15 @@ function schemaConstants(hash: string): string {
 }
 
 async function writeGeneratedFiles(files: ReadonlyMap<string, string>, schema: string): Promise<void> {
-	await rm(GENERATED_ROOT, { recursive: true, force: true });
-	await mkdir(GENERATED_ROOT, { recursive: true });
-	for (const [path, content] of files) {
-		const destination = join(GENERATED_ROOT, path);
-		await mkdir(dirname(destination), { recursive: true });
-		await writeFile(destination, content, "utf8");
+	await fs.rm(GENERATED_ROOT, { recursive: true, force: true });
+	await fs.mkdir(GENERATED_ROOT, { recursive: true });
+	for (const [relativePath, content] of files) {
+		const destination = path.join(GENERATED_ROOT, relativePath);
+		await fs.mkdir(path.dirname(destination), { recursive: true });
+		await fs.writeFile(destination, content, "utf8");
 	}
-	await mkdir(dirname(SCHEMA_CONSTANTS_PATH), { recursive: true });
-	await writeFile(SCHEMA_CONSTANTS_PATH, schema, "utf8");
+	await fs.mkdir(path.dirname(SCHEMA_CONSTANTS_PATH), { recursive: true });
+	await fs.writeFile(SCHEMA_CONSTANTS_PATH, schema, "utf8");
 }
 
 async function checkGeneratedFiles(files: ReadonlyMap<string, string>, schema: string): Promise<void> {
@@ -316,14 +317,14 @@ async function checkGeneratedFiles(files: ReadonlyMap<string, string>, schema: s
 	if (checkedInFiles.join("\n") !== generatedFiles.join("\n")) {
 		drift.push(`file set differs (checked in: ${checkedInFiles.join(", ") || "none"}; generated: ${generatedFiles.join(", ")})`);
 	}
-	for (const [path, content] of files) {
-		const checkedInPath = join(GENERATED_ROOT, path);
+	for (const [relativePath, content] of files) {
+		const checkedInPath = path.join(GENERATED_ROOT, relativePath);
 		if (!(await Bun.file(checkedInPath).exists())) continue;
-		if ((await readFile(checkedInPath, "utf8")) !== content) drift.push(`${path} differs`);
+		if ((await fs.readFile(checkedInPath, "utf8")) !== content) drift.push(`${relativePath} differs`);
 	}
 	if (!(await Bun.file(SCHEMA_CONSTANTS_PATH).exists())) {
 		drift.push("schema.ts is missing");
-	} else if ((await readFile(SCHEMA_CONSTANTS_PATH, "utf8")) !== schema) {
+	} else if ((await fs.readFile(SCHEMA_CONSTANTS_PATH, "utf8")) !== schema) {
 		drift.push("schema.ts differs");
 	}
 	if (drift.length > 0) {
@@ -335,7 +336,7 @@ async function main(): Promise<void> {
 	const options = parseOptions(process.argv.slice(2));
 	const closure = await collectEmbeddedSchemaClosure(options.whiplashRoot);
 	const hash = computeEmbeddedSchemaHash(closure.files);
-	const temporaryRoot = await mkdtemp(join(tmpdir(), "aura-embedded-protocol-"));
+	const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aura-embedded-protocol-"));
 	try {
 		const generated = await generateBindings(closure, temporaryRoot);
 		const schema = schemaConstants(hash);
@@ -346,7 +347,7 @@ async function main(): Promise<void> {
 			`${options.check ? "Verified" : "Generated"} embedded runtime protocol (${generated.size} files, sha256 ${hash})\n`,
 		);
 	} finally {
-		await rm(temporaryRoot, { recursive: true, force: true });
+		await fs.rm(temporaryRoot, { recursive: true, force: true });
 	}
 }
 
