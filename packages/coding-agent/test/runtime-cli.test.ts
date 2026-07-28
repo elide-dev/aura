@@ -161,11 +161,24 @@ describe("aura runtime status", () => {
 	// says, the status probe resolves with auto-download off.
 	test("status options force autoDownload off regardless of settings", () => {
 		expect(resolveStatusEndpointOptions(DEFAULT_RUNTIME_SETTINGS)).toEqual({
+			adapter: "process",
 			autoDownload: false,
 		});
 		expect(resolveStatusEndpointOptions({ ...DEFAULT_RUNTIME_SETTINGS, path: " /opt/bin/rt " })).toEqual({
+			adapter: "process",
 			autoDownload: false,
 			explicitPath: "/opt/bin/rt",
+		});
+		expect(
+			resolveStatusEndpointOptions({
+				...DEFAULT_RUNTIME_SETTINGS,
+				adapter: "auto",
+				embeddedPath: " /opt/aura/lib/libelide_embed.so ",
+			}),
+		).toEqual({
+			adapter: "auto",
+			autoDownload: false,
+			embeddedPath: "/opt/aura/lib/libelide_embed.so",
 		});
 		expect(resolveStatusEndpointOptions({ ...DEFAULT_RUNTIME_SETTINGS, enabled: false })).toBeUndefined();
 	});
