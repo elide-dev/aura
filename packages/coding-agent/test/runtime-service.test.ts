@@ -23,6 +23,7 @@ describe("RuntimeService", () => {
 		await svc.insights({ code: "x", insight: "y" });
 		await svc.profile({ code: "x", mode: "cpusampling" });
 		await svc.spawn({ mode: "serve", directory: "public" });
+		await svc.advice({});
 		await svc.status();
 		expect(ep.requests.map(r => r.method)).toEqual([
 			"runtime/run",
@@ -31,6 +32,7 @@ describe("RuntimeService", () => {
 			"runtime/insights",
 			"runtime/profile",
 			"runtime/spawn",
+			"runtime/advice",
 			"runtime/status",
 		]);
 	});

@@ -480,7 +480,7 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `l
 
 ### Runtime
 
-The `run`, `check`, `build`, `insights`, and `profile` tools execute on a managed runtime binary, as do the six JVM tools (`jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc`), which compile and run Java/Kotlin on the embedded JVM, and the two long-running flows `runtime_debug` (a CDP/DAP debug endpoint) and `serve` (static files over HTTP), which are supervised as `hub` jobs rather than by the runtime layer. All thirteen are gated on `runtime.enabled`; when it is off, none of them register.
+The `run`, `check`, `build`, `insights`, and `profile` tools execute on a managed runtime binary, as do the six JVM tools (`jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc`), which compile and run Java/Kotlin on the embedded JVM, and the two long-running flows `runtime_debug` (a CDP/DAP debug endpoint) and `serve` (static files over HTTP), which are supervised as `hub` jobs rather than by the runtime layer. `project_advice` rides the same gate but is read-only: it asks the runtime for its build/run/test/install guidance for the current project and executes nothing. All fourteen are gated on `runtime.enabled`; when it is off, none of them register.
 
 ```yaml
 runtime:
@@ -509,10 +509,10 @@ backtick command substitution, and compound-statement bodies
 
 Which tool a blocked command is pointed at depends on what is active. `run`, `check`,
 and `build` are always-on tools, so a bare invocation, `run …`, and `build …` name
-them directly. The `jvm_*` tools and `serve` are *discoverable* — absent from the tool
-schema until discovered — and an interceptor rule only ever names a tool that is
+them directly. The `jvm_*` tools, `serve`, and `project_advice` are *discoverable* — absent
+from the tool schema until discovered — and an interceptor rule only ever names a tool that is
 currently registered. So a direct `jar …` invocation names `jvm_jar` once the JVM
-suite is active, and otherwise falls through to the generic guidance that names `run` and points at
+suite is active, and `project advice` names `project_advice`, and otherwise falls through to the generic guidance that names `run` and points at
 the rest of the suite. Either way the command is blocked; only the suggestion
 differs.
 
@@ -534,7 +534,7 @@ container, or an SSH hop.
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 
-See [run](./tools/run.md), [check](./tools/check.md), [build](./tools/build.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for per-tool behavior, and [jvm_run](./tools/jvm_run.md), [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), [jvm_deps](./tools/jvm_deps.md), [jvm_javadoc](./tools/jvm_javadoc.md) for the JVM suite, and [runtime_debug](./tools/runtime_debug.md) and [serve](./tools/serve.md) for the two supervised long-running flows (their handle is a `hub` job name, so `hub logs`/`hub stop` apply — there is no separate stop tool). `jvm_jar` (create) and `jvm_javadoc` are the only runtime tools that write into your project: both require `output` to resolve *inside* the session cwd, both refuse an existing output unless `overwrite: true` is passed, and `jvm_javadoc`'s replace path additionally only accepts a previous docs output (empty, or carrying `index.html` plus one of javadoc's own scaffolding files). Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
+See [run](./tools/run.md), [check](./tools/check.md), [build](./tools/build.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for per-tool behavior, and [jvm_run](./tools/jvm_run.md), [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), [jvm_deps](./tools/jvm_deps.md), [jvm_javadoc](./tools/jvm_javadoc.md) for the JVM suite, and [runtime_debug](./tools/runtime_debug.md) and [serve](./tools/serve.md) for the two supervised long-running flows (their handle is a `hub` job name, so `hub logs`/`hub stop` apply — there is no separate stop tool), and [project_advice](./tools/project_advice.md) for the read-only project-guidance tool. `jvm_jar` (create) and `jvm_javadoc` are the only runtime tools that write into your project: both require `output` to resolve *inside* the session cwd, both refuse an existing output unless `overwrite: true` is passed, and `jvm_javadoc`'s replace path additionally only accepts a previous docs output (empty, or carrying `index.html` plus one of javadoc's own scaffolding files). Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
 
 ### Native computer use
 

@@ -41,6 +41,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"jvm_jar",
 	"jvm_deps",
 	"jvm_javadoc",
+	"project_advice",
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];

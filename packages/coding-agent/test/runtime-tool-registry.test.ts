@@ -110,3 +110,23 @@ describe("JVM tool registry", () => {
 		expect(run?.summary).toContain("embedded JVM");
 	});
 });
+
+describe("project_advice registry", () => {
+	test("is a builtin name, collides with no legacy alias, and is not essential", () => {
+		expect(BUILTIN_TOOL_NAMES).toContain("project_advice");
+		expect(normalizeToolName("project_advice")).toBe("project_advice");
+		expect("project_advice" in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
+		expect(new Set(BUILTIN_TOOL_NAMES).size).toBe(BUILTIN_TOOL_NAMES.length);
+	});
+
+	test("gates on runtime.enabled and is the one read-approved runtime tool", async () => {
+		expect(await BUILTIN_TOOLS.project_advice(stubSession(false))).toBeNull();
+		const tool = await BUILTIN_TOOLS.project_advice(stubSession(true));
+		expect(tool?.name).toBe("project_advice");
+		expect(tool?.loadMode).toBe("discoverable");
+		expect(tool?.approval).toBe("read");
+		for (const name of [...RUNTIME_TOOLS, ...JVM_TOOLS]) {
+			expect((await BUILTIN_TOOLS[name](stubSession(true)))?.approval).toBe("exec");
+		}
+	});
+});

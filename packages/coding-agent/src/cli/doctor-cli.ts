@@ -583,8 +583,8 @@ export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint",
  */
 const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | undefined> = {
 	// RuntimeRunTool/CheckTool/BuildTool/InsightsTool/ProfileTool, the two launch
-	// tools (RuntimeDebugTool/RuntimeServeTool), and the six Jvm*Tool classes all
-	// gate on `runtime.enabled`.
+	// tools (RuntimeDebugTool/RuntimeServeTool), the six Jvm*Tool classes, and
+	// RuntimeAdviceTool all gate on `runtime.enabled`.
 	...Object.fromEntries(
 		[
 			"run",
@@ -600,6 +600,7 @@ const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | und
 			"jvm_jar",
 			"jvm_deps",
 			"jvm_javadoc",
+			"project_advice",
 		].map(name => [name, (s: ToolGateSettings) => (s.runtimeEnabled ? undefined : "runtime.enabled = false")]),
 	),
 	// DebugTool.createIf

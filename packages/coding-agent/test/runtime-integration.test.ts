@@ -210,6 +210,46 @@ describe.skipIf(!realBin)("runtime integration (real binary)", () => {
 		}, 120_000);
 	});
 
+	/**
+	 * `project advice` is the runtime's own feature, and BUCKSHOT recorded it
+	 * crashing outright on 1.4.0-nightly.20260712. It works cleanly on the pinned
+	 * 1.4.x line (verified on 1.4.2+20260720), so this runs unguarded beyond the
+	 * usual real-binary skip — a crash here should fail the suite loudly rather
+	 * than be skipped away, because the tool's whole value is this output.
+	 */
+	describe("project advice", () => {
+		test("reports a detected project from the real directory, with no ANSI escapes", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-advice-live-"));
+			try {
+				await fs.writeFile(
+					path.join(dir, "elide.pkl"),
+					'amends "elide:project.pkl"\n\nname = "adviceprobe"\nversion = "9.8.7"\n',
+				);
+				const r = await svc.advice({ cwd: dir, timeoutMs: 120_000 });
+				expect(r.exitCode).toBe(0);
+				const report = `${r.stdout}${r.stderr}`;
+				// It read *this* directory's manifest, which is why the flow has no workdir.
+				expect(report).toContain("adviceprobe");
+				expect(report).toContain("9.8.7");
+				// `--no-color` plus `NO_COLOR=1` is why no escape-stripping pass exists.
+				expect(report).not.toContain("\u001b[");
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		}, 180_000);
+
+		test("a directory with no project still yields the runtime's command guidance", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-advice-bare-"));
+			try {
+				const r = await svc.advice({ cwd: dir, timeoutMs: 120_000 });
+				expect(r.exitCode).toBe(0);
+				expect(`${r.stdout}${r.stderr}`.length).toBeGreaterThan(0);
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		}, 180_000);
+	});
+
 	describe("serve launch descriptor", () => {
 		test("the composed argv serves a directory and prints a scrapable endpoint", async () => {
 			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aura-serve-live-"));

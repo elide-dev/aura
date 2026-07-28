@@ -9,6 +9,7 @@ import {
 	type JvmLanguage,
 	okResponse,
 	RUNTIME_PROTOCOL_VERSION,
+	type RuntimeAdviceParams,
 	type RuntimeBuildParams,
 	type RuntimeDebugProtocol,
 	type RuntimeEndpointRule,
@@ -309,6 +310,8 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 					return okResponse(req.id, await this.execJvm(req.params as RuntimeJvmParams, signal));
 				case "runtime/spawn":
 					return okResponse(req.id, await this.describeSpawn(req.params as RuntimeSpawnParams));
+				case "runtime/advice":
+					return okResponse(req.id, await this.execAdvice(req.params as RuntimeAdviceParams | undefined, signal));
 				case "runtime/check":
 					return okResponse(req.id, await this.execBuild(req.params as RuntimeBuildParams, [], signal));
 				case "runtime/build": {
@@ -684,6 +687,24 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			source,
 			shimWarning: source === "path" ? PATH_SHIM_WARNING : undefined,
 		};
+	}
+
+	// ── runtime/advice ───────────────────────────────────────────────────────
+	// Read-only, and deliberately the one exec flow with no workdir: the guidance
+	// is produced by *detecting* `elide.pkl` and package manifests, so it has to
+	// run in the real project directory — a temp workdir would always report an
+	// empty project. Nothing is materialized, nothing is written, and the JVM env
+	// hygiene does not apply because no JVM toolchain is invoked.
+
+	// `params` is optional all the way down: every field is, so a caller with
+	// nothing to say may legitimately send no params object at all.
+	private async execAdvice(params: RuntimeAdviceParams | undefined, signal?: AbortSignal): Promise<RuntimeExecResult> {
+		const { binaryPath } = await this.ensureBinary();
+		return this.spawn(
+			[binaryPath, "project", "advice", "--error-format=plain", "--no-color"],
+			{ cwd: params?.cwd, timeoutMs: params?.timeoutMs },
+			signal,
+		);
 	}
 
 	private async execBuild(

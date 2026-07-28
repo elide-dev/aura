@@ -65,6 +65,7 @@ import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
+import { RuntimeAdviceTool } from "./runtime-advice";
 import { RuntimeBuildTool } from "./runtime-build";
 import { RuntimeCheckTool } from "./runtime-check";
 import { RuntimeDebugTool } from "./runtime-debug";
@@ -444,6 +445,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	jvm_jar: JvmJarTool.createIf,
 	jvm_deps: JvmDepsTool.createIf,
 	jvm_javadoc: JvmJavadocTool.createIf,
+	project_advice: RuntimeAdviceTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {

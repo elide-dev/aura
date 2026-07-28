@@ -1,5 +1,6 @@
 import {
 	createRequest,
+	type RuntimeAdviceParams,
 	type RuntimeBuildParams,
 	type RuntimeCheckParams,
 	type RuntimeExecResult,
@@ -58,6 +59,14 @@ export class RuntimeService {
 	 */
 	spawn(params: RuntimeSpawnParams, signal?: AbortSignal): Promise<RuntimeLaunchDescriptor> {
 		return this.call("runtime/spawn", params, signal);
+	}
+	/**
+	 * The runtime's own build/run/test/install guidance for a project directory.
+	 * Read-only, and it runs in the real directory — the guidance is derived from
+	 * the manifests it finds there.
+	 */
+	advice(params: RuntimeAdviceParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
+		return this.call("runtime/advice", params, signal);
 	}
 	status(): Promise<RuntimeStatusResult> {
 		return this.call("runtime/status", undefined);

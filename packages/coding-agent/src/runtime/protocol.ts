@@ -25,6 +25,7 @@ export type RuntimeMethod =
 	| "runtime/profile"
 	| "runtime/jvm"
 	| "runtime/spawn"
+	| "runtime/advice"
 	| "runtime/status";
 
 export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
@@ -202,6 +203,18 @@ export interface RuntimeLaunchDescriptor {
 	 * rather than refusing the launch.
 	 */
 	shimWarning?: string;
+}
+
+/**
+ * Parameters for `runtime/advice` — the runtime's own project guidance. There is
+ * nothing to configure but *where* to look: the guidance is derived entirely from
+ * what the directory contains (`elide.pkl`, package manifests), so `cwd` is the
+ * only input and it names a real project directory, never a request workdir.
+ */
+export interface RuntimeAdviceParams {
+	/** Project directory to inspect. Defaults to the endpoint process cwd. */
+	cwd?: string;
+	timeoutMs?: number;
 }
 
 export interface RuntimeBuildParams {

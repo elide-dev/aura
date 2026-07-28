@@ -137,6 +137,8 @@ describe("doctor's tool-gate table matches the real registry", () => {
 				"jvm_javadoc",
 				"jvm_run",
 				"profile",
+				// Read-only, but registered on the same gate: no runtime, no advice.
+				"project_advice",
 				"run",
 				// The two long-running flows ride the same gate.
 				"runtime_debug",
