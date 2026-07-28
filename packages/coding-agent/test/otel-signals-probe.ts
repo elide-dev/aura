@@ -6,15 +6,21 @@
  *
  * Stands up a loopback OTLP/proto receiver, points the standard env vars at it,
  * registers the providers, drives a log record through the bridged
- * `@oh-my-pi/pi-utils` logger and metric instruments through the agent
- * telemetry hooks, flushes, and exits 0 only if the receiver got a non-empty
- * protobuf POST at both /v1/logs and /v1/metrics.
+ * `@oh-my-pi/pi-utils` logger, metric instruments through the agent telemetry
+ * hooks, and one of every telemetry-bus event through the public
+ * `emitTelemetryEvent`, flushes, and exits 0 only if the receiver got a
+ * non-empty protobuf POST at both /v1/logs and /v1/metrics carrying the
+ * expected resource attributes, metric points, and log event names.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import { emptyAgentRunCoverage, emptyAgentRunSummary } from "@oh-my-pi/pi-agent-core";
 import {
 	createTelemetryExportConfig,
+	emitTelemetryEvent,
 	flushTelemetryExport,
 	initTelemetryExport,
 	isTelemetryExportEnabled,
@@ -23,6 +29,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 
 const seen = new Set<string>();
 const metricPayloads: Uint8Array[] = [];
+const logPayloads: Uint8Array[] = [];
 
 interface ProtobufField {
 	readonly number: number;
@@ -71,13 +78,17 @@ function protobufFields(bytes: Uint8Array): ProtobufField[] {
 	return fields;
 }
 
+function text(bytes: Uint8Array): string {
+	return new TextDecoder().decode(bytes);
+}
+
 function pointCountForMetric(bytes: Uint8Array, metricName: string): number | undefined {
 	const fields = protobufFields(bytes);
-	const isMetric = fields.some(
-		field => field.number === 1 && field.bytes && new TextDecoder().decode(field.bytes) === metricName,
-	);
+	const isMetric = fields.some(field => field.number === 1 && field.bytes && text(field.bytes) === metricName);
 	if (isMetric) {
-		const aggregation = fields.find(field => field.number === 7 || field.number === 9)?.bytes;
+		// Metric.data oneof: gauge=5, sum=7, histogram=9 — each wrapping repeated
+		// data_points at field 1.
+		const aggregation = fields.find(field => field.number === 5 || field.number === 7 || field.number === 9)?.bytes;
 		if (!aggregation) return undefined;
 		return protobufFields(aggregation).filter(field => field.number === 1).length;
 	}
@@ -100,16 +111,104 @@ function assertSingleMetricPoint(metricName: string): void {
 	}
 }
 
+/** Weaker sibling of {@link assertSingleMetricPoint}: any exported point will do. */
+function assertMetricExported(metricName: string): void {
+	const counts = metricPayloads.map(payload => pointCountForMetric(payload, metricName));
+	if (!counts.some(count => count !== undefined && count > 0)) {
+		throw new Error(`${metricName} exported no data points (saw ${counts.join(",") || "no payloads"})`);
+	}
+}
+
+/**
+ * `service.name`-style resource attributes carried by an OTLP export request.
+ *
+ * Walks `resource_{metrics,logs} (1) -> resource (1) -> attributes (1) ->
+ * KeyValue{key(1), value(2) -> AnyValue.string_value(1)}`. Non-string values are
+ * skipped; every attribute the resource builder mints is a string.
+ */
+function resourceAttributes(payload: Uint8Array): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const resourceSignal of protobufFields(payload)) {
+		if (resourceSignal.number !== 1 || !resourceSignal.bytes) continue;
+		for (const resource of protobufFields(resourceSignal.bytes)) {
+			if (resource.number !== 1 || !resource.bytes) continue;
+			for (const keyValue of protobufFields(resource.bytes)) {
+				if (keyValue.number !== 1 || !keyValue.bytes) continue;
+				const parts = protobufFields(keyValue.bytes);
+				const key = parts.find(part => part.number === 1)?.bytes;
+				const anyValue = parts.find(part => part.number === 2)?.bytes;
+				if (!key || !anyValue) continue;
+				const stringValue = protobufFields(anyValue).find(part => part.number === 1)?.bytes;
+				if (stringValue) out[text(key)] = text(stringValue);
+			}
+		}
+	}
+	return out;
+}
+
+/**
+ * `LogRecord.event_name` (field 12) values in an OTLP logs request, via
+ * `resource_logs (1) -> scope_logs (2) -> log_records (2)`.
+ */
+function logEventNames(payload: Uint8Array): string[] {
+	const names: string[] = [];
+	for (const resourceLogs of protobufFields(payload)) {
+		if (resourceLogs.number !== 1 || !resourceLogs.bytes) continue;
+		for (const scopeLogs of protobufFields(resourceLogs.bytes)) {
+			if (scopeLogs.number !== 2 || !scopeLogs.bytes) continue;
+			for (const record of protobufFields(scopeLogs.bytes)) {
+				if (record.number !== 2 || !record.bytes) continue;
+				const eventName = protobufFields(record.bytes).find(field => field.number === 12)?.bytes;
+				if (eventName) names.push(text(eventName));
+			}
+		}
+	}
+	return names;
+}
+
+function assertLogEventName(eventName: string): void {
+	const seenNames = logPayloads.flatMap(logEventNames);
+	if (!seenNames.includes(eventName)) {
+		throw new Error(`no log record with eventName ${eventName} (saw ${seenNames.join(",") || "none"})`);
+	}
+}
+
+/**
+ * Every export must carry the pseudonymous identity the collector groups by.
+ * `OTEL_SERVICE_NAME` is deliberately left unset above so this also pins the
+ * built-in default rather than whatever the environment happened to supply.
+ */
+function assertResourceIdentity(kind: string, payloads: readonly Uint8Array[]): void {
+	if (payloads.length === 0) throw new Error(`${kind}: no payloads to check resource attributes on`);
+	for (const payload of payloads) {
+		const attrs = resourceAttributes(payload);
+		if (attrs["service.name"] !== "aura") {
+			throw new Error(`${kind}: service.name expected "aura", got ${JSON.stringify(attrs["service.name"])}`);
+		}
+		if (!attrs["service.version"]) throw new Error(`${kind}: service.version missing`);
+		if (!/^[0-9a-f-]{36}$/.test(attrs["aura.install.id"] ?? "")) {
+			throw new Error(`${kind}: aura.install.id expected a UUID, got ${JSON.stringify(attrs["aura.install.id"])}`);
+		}
+	}
+}
+
 const server = Bun.serve({
 	port: 0,
 	async fetch(req) {
-		const path = new URL(req.url).pathname;
+		const endpoint = new URL(req.url).pathname;
 		if (req.method === "POST" && req.headers.get("content-type")?.startsWith("application/x-protobuf")) {
 			const body = await req.arrayBuffer();
-			if (path.endsWith("/v1/metrics")) metricPayloads.push(new Uint8Array(body));
+			// Empty bodies are not collected: they carry no resource block, so a
+			// stray one would fail the resource assertions for no real reason.
 			if (body.byteLength > 0) {
-				if (path.endsWith("/v1/logs")) seen.add("logs");
-				if (path.endsWith("/v1/metrics")) seen.add("metrics");
+				if (endpoint.endsWith("/v1/logs")) {
+					logPayloads.push(new Uint8Array(body));
+					seen.add("logs");
+				}
+				if (endpoint.endsWith("/v1/metrics")) {
+					metricPayloads.push(new Uint8Array(body));
+					seen.add("metrics");
+				}
 			}
 		}
 		return new Response('{"partialSuccess":{}}', {
@@ -122,9 +221,20 @@ const server = Bun.serve({
 const base = `http://localhost:${server.port}`;
 process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${base}/v1/logs`;
 process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `${base}/v1/metrics`;
-process.env.OTEL_SERVICE_NAME = "oh-my-pi-signals-probe";
+// OTEL_SERVICE_NAME is left unset on purpose: the resource assertions below pin
+// aura's built-in default service name, which an override would mask.
+delete process.env.OTEL_SERVICE_NAME;
 // Force a short metric export interval so the periodic reader flushes fast.
 process.env.OTEL_METRIC_EXPORT_INTERVAL = "500";
+
+// Sandbox the config root so the probe's `aura.install.id` is minted into a temp
+// directory instead of persisting into the developer's real config root.
+// `PI_CONFIG_DIR` is resolved relative to $HOME, so the sandbox must live there.
+const configRoot = fs.mkdtempSync(path.join(os.homedir(), ".aura-signals-probe-"));
+process.on("exit", () => fs.rmSync(configRoot, { recursive: true, force: true }));
+process.env.PI_CONFIG_DIR = path.basename(configRoot);
+const { refreshDirsFromEnv } = await import("@oh-my-pi/pi-utils/dirs");
+refreshDirsFromEnv();
 
 await initTelemetryExport();
 if (!isTelemetryExportEnabled()) {
@@ -194,6 +304,48 @@ const coverage: AgentRunCoverage = {
 };
 config.onRunEnd?.(summary, coverage);
 
+// One of every remaining bus event, straight through the public emitter, so the
+// session / compaction / usage-limit / error signals are covered end to end.
+// `turn.completed` is not emitted here: `onRunEnd` above publishes it (with the
+// active session id stamped by the host, `undefined` in this process).
+emitTelemetryEvent({ type: "session.started", sessionId: "probe", mode: "print", resumed: false });
+emitTelemetryEvent({
+	type: "session.ended",
+	sessionId: "probe",
+	mode: "print",
+	durationMs: 1000,
+	activeMs: 500,
+	turns: 1,
+	tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+	estimatedCostUsd: 0,
+	endReason: "probe",
+});
+emitTelemetryEvent({
+	type: "compaction.completed",
+	sessionId: "probe",
+	// The auto path's strategy vocabulary (`AutoCompactionEndEvent.action`).
+	strategy: "context-full",
+	trigger: "manual",
+	outcome: "ok",
+	tokensBefore: 1000,
+	tokensAfter: 100,
+	durationMs: 50,
+});
+emitTelemetryEvent({ type: "compaction.savings", provider: "anthropic", model: "probe-model", savedTokens: 42 });
+emitTelemetryEvent({
+	type: "usage_limit.snapshot",
+	entry: {
+		recordedAt: 1,
+		provider: "anthropic",
+		accountKey: "acct",
+		limitId: "l1",
+		label: "5h",
+		windowLabel: "5h",
+		usedFraction: 0.4,
+	},
+});
+emitTelemetryEvent({ type: "error.reported", phase: "session", errorType: "probe_error", message: "probe" });
+
 await flushTelemetryExport();
 // The metric reader exports on its own interval; wait one cycle then flush.
 await Bun.sleep(700);
@@ -201,6 +353,16 @@ await flushTelemetryExport();
 assertSingleMetricPoint("aura.agent.chat.calls");
 assertSingleMetricPoint("aura.agent.tool.calls");
 assertSingleMetricPoint("aura.agent.tool.duration");
+assertMetricExported("aura.session.duration");
+assertMetricExported("aura.compaction.count");
+assertMetricExported("aura.compaction.tokens_saved");
+assertMetricExported("aura.snapcompact.tokens_saved");
+assertMetricExported("aura.usage_limit.utilization");
+assertMetricExported("aura.agent.errors");
+assertLogEventName("aura.session.ended");
+assertResourceIdentity("metrics", metricPayloads);
+assertResourceIdentity("logs", logPayloads);
+console.log("PROBE: SIGNALS OK");
 await server.stop(true);
 
 const ok = seen.has("logs") && seen.has("metrics");

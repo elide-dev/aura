@@ -108,12 +108,21 @@ describe("initTelemetryExport signals export path", () => {
 
 	it("exports log records and metrics to OTLP/proto receivers", async () => {
 		// Same subprocess isolation as the trace probe: the logs/metrics probe
-		// drives the bridged logger and the agent telemetry metric hooks, then
-		// asserts protobuf POSTs landed at both /v1/logs and /v1/metrics.
+		// drives the bridged logger, the agent telemetry metric hooks, and one of
+		// every telemetry-bus event, then asserts protobuf POSTs landed at both
+		// /v1/logs and /v1/metrics with the expected resource attributes, metric
+		// data points, and log event names. Assertion failures land on stderr, so
+		// it is folded into the diagnostic below rather than discarded.
 		const probe = fileURLToPath(new URL("./otel-signals-probe.ts", import.meta.url));
 		const proc = Bun.spawn(["bun", probe], { stdout: "pipe", stderr: "pipe" });
-		const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
-		expect(stdout).toContain("PROBE: RECEIVED");
+		const [code, stdout, stderr] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
+		const output = `${stdout}\n${stderr}`;
+		expect(output).toContain("PROBE: SIGNALS OK");
+		expect(output).toContain("PROBE: RECEIVED");
 		expect(code).toBe(0);
 	}, 20_000);
 });

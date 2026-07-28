@@ -4,8 +4,13 @@
 
 ### Added
 
+- Aura now exports its own operational telemetry to any OTLP `http/protobuf` collector, off by default. New `telemetry.*` settings (`telemetry.enabled`, `telemetry.endpoint`, `telemetry.headers`, `telemetry.signals`, and the `telemetry.identity.hostname`/`.account`/`.workspace` opt-ins) mirror the standard `OTEL_*` environment variables, with env winning per key and `OTEL_SDK_DISABLED=true` overriding everything. Beyond the existing GenAI spans and run metrics, four new signal families are exported: session lifecycle (`aura.session.started`/`aura.session.ended` log records, `aura.session.duration`, `aura.session.turns`), compaction (`aura.compaction.completed` log records, an `aura.compaction` span, and `aura.compaction.count`/`.duration`/`.tokens_saved`/`.effectiveness`, plus `aura.snapcompact.tokens_saved`), subscription usage limits (`aura.usage_limit.utilization`), and errors classified by `aura.error.phase` (`chat`, `tool`, `compaction`, `session`). See [docs/telemetry.md](../../docs/telemetry.md).
 - `omp usage` now surfaces auto-disabled credentials as red `✗` tombstone rows (identity, how long ago, the shortened upstream cause — e.g. `Refresh token expired` — and a re-login hint), including a provider section when no active credential remains. User-driven tombstones (`replaced by newer credential`, `deleted by user`) and API-key rows stay hidden. Requires a broker with `GET /v1/credentials/disabled`; older brokers degrade to no tombstone rows.
 - `omp usage` warns about Anthropic's ~30-day OAuth grant lifetime: accounts whose interactive login (`authorizedAt`) is within a week of the deadline get a yellow `⚠ re-login within <time>` line, and past-deadline accounts a red one. Grants die server-side exactly ~30 days after login regardless of refresh rotation, so this is the only warning before the broker auto-disables the row.
+
+### Changed
+
+- **Breaking (telemetry consumers):** every exported metric, log attribute, and log event name was renamed from the `pi.omp.*` prefix to `aura.*` (e.g. `pi.omp.agent.tool.calls` → `aura.agent.tool.calls`, `pi.omp.tool.status` → `aura.tool.status`, `pi.omp.agent.run.completed` → `aura.agent.run.completed`). The default `service.name` resource attribute changed from `oh-my-pi` to `aura` (still overridable with `OTEL_SERVICE_NAME`), and the metric/log instrumentation scope — `otel_scope_name` on the wire — changed from `@oh-my-pi/pi-coding-agent` to `aura`. The GenAI spans emitted by the agent loop are unchanged, including their `@oh-my-pi/pi-agent-core` scope. Existing dashboards and collector pipelines that match on the old names need updating.
 
 ### Fixed
 
