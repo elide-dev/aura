@@ -77,29 +77,45 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 
 	async #statusResponse(request: RuntimeRpcRequest): Promise<RuntimeRpcResponse> {
 		try {
-			const processStatus = await this.#endpointStatus(this.#process, request.id);
+			const processStatusPromise = this.#endpointStatus(this.#process, request.id);
 			if (this.#adapter === "process") {
+				const processStatus = await processStatusPromise;
 				return okResponse(request.id, {
 					...processStatus,
 					adapter: "process",
 					effectiveAdapter: "process",
 				});
 			}
-			const embeddedStatus = await this.#endpointStatus(this.#embedded, request.id);
+
+			const [processResult, embeddedResult] = await Promise.allSettled([
+				processStatusPromise,
+				this.#endpointStatus(this.#embedded, request.id),
+			]);
+			if (embeddedResult.status === "rejected") throw embeddedResult.reason;
+			const embeddedStatus = embeddedResult.value;
 			const candidate = embeddedStatus.available || embeddedStatus.embeddedLibraryPath !== undefined;
 			if (this.#adapter === "auto" && !candidate) {
+				if (processResult.status === "rejected") throw processResult.reason;
 				return okResponse(request.id, {
-					...processStatus,
+					...processResult.value,
 					adapter: "auto",
 					effectiveAdapter: "process",
 				});
 			}
+
+			const processMetadata =
+				processResult.status === "fulfilled"
+					? {
+							...(processResult.value.version === undefined ? {} : { version: processResult.value.version }),
+							...(processResult.value.binaryPath === undefined
+								? {}
+								: { binaryPath: processResult.value.binaryPath }),
+							...(processResult.value.source === undefined ? {} : { source: processResult.value.source }),
+						}
+					: {};
 			return okResponse(request.id, {
-				...processStatus,
 				...embeddedStatus,
-				version: processStatus.version,
-				binaryPath: processStatus.binaryPath,
-				source: processStatus.source,
+				...processMetadata,
 				available: embeddedStatus.available,
 				guidance: embeddedStatus.guidance,
 				protocolVersion: RUNTIME_PROTOCOL_VERSION,

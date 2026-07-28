@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Message } from "capnp-es";
 import {
@@ -191,11 +192,14 @@ class StubEndpoint implements RuntimeEndpoint {
 		readonly label: string,
 		readonly statusResult: RuntimeStatusResult,
 		readonly runError?: RuntimeRpcError,
+		readonly statusError?: RuntimeRpcError,
 	) {}
 
 	async request(request: RuntimeRpcRequest): Promise<RuntimeRpcResponse> {
 		this.requests.push(request);
-		if (request.method === "runtime/status") return okResponse(request.id, this.statusResult);
+		if (request.method === "runtime/status") {
+			return this.statusError ? errorResponse(request.id, this.statusError) : okResponse(request.id, this.statusResult);
+		}
 		if (this.runError) return errorResponse(request.id, this.runError);
 		return okResponse(request.id, {
 			exitCode: 0,
@@ -352,6 +356,32 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		expect(status.embeddedLibraryPath).toBe("/runtime/lib/libelide_embed.so");
 		expect(status.binaryPath).toBeUndefined();
 	});
+	test("non-process status survives a failed process probe, while auto without a candidate preserves it", async () => {
+		const processFailure = new RuntimeRpcError("internal", "process binary is corrupt");
+		for (const adapter of ["embedded", "auto"] as const) {
+			const processEndpoint = new StubEndpoint("process", processStatus, undefined, processFailure);
+			const embedded = new StubEndpoint("embedded", validEmbeddedStatus);
+			const endpoint = new SelectedRuntimeEndpoint({ adapter, processEndpoint, embeddedEndpoint: embedded });
+			const status = unwrapResponse<RuntimeStatusResult>(
+				await endpoint.request(rpcRequest(1, "runtime/status", undefined)),
+			);
+			expect(status).toMatchObject({
+				available: true,
+				adapter,
+				effectiveAdapter: "embedded",
+				embeddedLibraryPath: "/runtime/lib/libelide_embed.so",
+			});
+			expect(status.binaryPath).toBeUndefined();
+		}
+
+		const processEndpoint = new StubEndpoint("process", processStatus, undefined, processFailure);
+		const embedded = new StubEndpoint("embedded", noEmbeddedStatus);
+		const endpoint = new SelectedRuntimeEndpoint({ adapter: "auto", processEndpoint, embeddedEndpoint: embedded });
+		expect(
+			responseError(await endpoint.request(rpcRequest(2, "runtime/status", undefined))).error.message,
+		).toContain("corrupt");
+	});
+
 });
 
 describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
@@ -491,6 +521,29 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		await endpoint.close();
 	});
 
+	test("reserves FIFO position before asynchronous preparation completes", async () => {
+		const host = new FakeEmbeddedHost();
+		const directory = await fs.stat(process.cwd());
+		const firstPreparation = Promise.withResolvers<void>();
+		const endpoint = embeddedEndpoint(host, {
+			stat: async cwd => {
+				if (cwd.endsWith("/slow")) await firstPreparation.promise;
+				return directory;
+			},
+		});
+		const first = endpoint.request(rpcRequest(1, "runtime/run", { code: "first", language: "js", cwd: "/slow" }));
+		const second = endpoint.request(rpcRequest(2, "runtime/run", { code: "second", language: "js", cwd: "/fast" }));
+		await flushMicrotasks();
+		await flushMicrotasks();
+		expect(host.callIds).toEqual([]);
+		firstPreparation.resolve();
+		await Promise.all([first, second]);
+		expect(host.callIds).toEqual([1n, 2n]);
+		const firstCall = new Message(host.callRequests[0], false).getRoot(EmbeddedCallRequest);
+		expect(firstCall.invocation.invocation.cli.command.run.sourceCode.code).toBe("first");
+		await endpoint.close();
+	});
+
 	test("starts timeout accounting only when a request reaches the queue head", async () => {
 		vi.useFakeTimers();
 		try {
@@ -559,6 +612,54 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	test("timeout cancellation failure poisons and fails the current request even if the call completes", async () => {
+		vi.useFakeTimers();
+		try {
+			const host = new FakeEmbeddedHost();
+			const callGate = Promise.withResolvers<Uint8Array>();
+			host.callImpl = () => callGate.promise;
+			host.cancelImpl = async () => {
+				throw new RuntimeRpcError("internal", "control worker died");
+			};
+			const endpoint = embeddedEndpoint(host);
+			const pending = endpoint.request(
+				rpcRequest(1, "runtime/run", { code: "1", language: "js", timeoutMs: 10 }),
+			);
+			await host.waitForCalls(1);
+			vi.advanceTimersByTime(10);
+			await flushMicrotasks();
+			callGate.resolve(completedResponse(1n, { stdout: "must not escape" }));
+			expect(responseError(await pending).error.message).toContain("control worker died");
+			expect(
+				responseError(
+					await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" })),
+				).error.code,
+			).toBe("internal");
+			expect(host.callIds).toEqual([1n]);
+			await endpoint.close();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("a cancelled runtime_call response is a poisoning protocol failure", async () => {
+		const host = new FakeEmbeddedHost();
+		host.callImpl = async requestId => cancelledResponse(requestId);
+		const endpoint = embeddedEndpoint(host);
+		expect(
+			responseError(
+				await endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+			).error.code,
+		).toBe("internal");
+		expect(
+			responseError(
+				await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" })),
+			).error.code,
+		).toBe("internal");
+		expect(host.callIds).toEqual([1n]);
+		await endpoint.close();
 	});
 
 	test("external abort cancels an active call, waits for native settlement, and leaves the queue reusable", async () => {

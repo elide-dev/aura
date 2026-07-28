@@ -9,7 +9,8 @@ import { Settings } from "../src/config/settings";
 import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { logger, TempDir } from "@oh-my-pi/pi-utils";
+import { runStartupFailureCleanupSteps } from "../src/sdk";
 
 function createAgent(): Agent {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -128,4 +129,35 @@ describe("runtime ownership in AgentSession disposal", () => {
 		await disposal;
 		expect(settled).toBe(true);
 	});
+	test("startup cleanup continues after a rejecting runtime close and keeps failures contained", async () => {
+		const events: string[] = [];
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		await runStartupFailureCleanupSteps([
+			{
+				label: "runtime",
+				cleanup: async () => {
+					events.push("runtime");
+					throw new Error("runtime close failed");
+				},
+			},
+			{
+				label: "manager",
+				cleanup: async () => {
+					events.push("manager");
+				},
+			},
+			{
+				label: "auth",
+				cleanup: () => {
+					events.push("auth");
+				},
+			},
+		]);
+		expect(events).toEqual(["runtime", "manager", "auth"]);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to clean up createAgentSession resource after startup error",
+			expect.objectContaining({ resource: "runtime", error: "runtime close failed" }),
+		);
+	});
+
 });

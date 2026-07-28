@@ -61,6 +61,7 @@ export interface EmbeddedEndpointOptions {
 	resolveRuntime?: typeof resolveRuntimeBinary;
 	createWorkerHost?: () => EmbeddedRuntimeWorkerHost;
 	now?: () => number;
+	stat?: (path: string) => Promise<Stats>;
 }
 
 interface PreparedRun {
@@ -70,7 +71,7 @@ interface PreparedRun {
 
 interface QueuedRun {
 	readonly rpcId: number;
-	readonly prepared: PreparedRun;
+	readonly preparation: Promise<PreparedRun>;
 	readonly signal: AbortSignal | undefined;
 	readonly resolve: (response: RuntimeRpcResponse) => void;
 	queuedAbort: (() => void) | undefined;
@@ -83,7 +84,6 @@ type EmbeddedSelection =
 
 type CallOutcome =
 	| { kind: "completed"; result: EmbeddedExecutionResult }
-	| { kind: "cancelled" }
 	| { kind: "failure"; response: Extract<EmbeddedDecodedResponse, { type: "failure" }> };
 
 type CancelOutcome = { kind: "matched" } | { kind: "late" };
@@ -117,9 +117,8 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				throw new RuntimeRpcError("invalid-params", `Embedded runtime endpoint does not support ${request.method}.`);
 			}
 			if (signal?.aborted) throw new RuntimeRpcError("cancelled", CANCELLED_MESSAGE);
-			const prepared = await this.#prepareRun(request.params);
-			if (signal?.aborted) throw new RuntimeRpcError("cancelled", CANCELLED_MESSAGE);
-			return await this.#enqueue(request.id, prepared, signal);
+			const preparation = this.#prepareRun(request.params);
+			return await this.#enqueue(request.id, preparation, signal);
 		} catch (error) {
 			return errorResponse(request.id, runtimeError(error));
 		}
@@ -292,7 +291,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		const cwd = path.resolve(cwdValue === undefined ? process.cwd() : cwdValue);
 		let cwdStat: Stats;
 		try {
-			cwdStat = await fs.stat(cwd);
+			cwdStat = await (this.#options.stat ?? fs.stat)(cwd);
 		} catch {
 			throw new RuntimeRpcError("invalid-params", `Runtime working directory does not exist: ${cwd}.`, { cwd });
 		}
@@ -348,12 +347,17 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		};
 	}
 
-	#enqueue(rpcId: number, prepared: PreparedRun, signal: AbortSignal | undefined): Promise<RuntimeRpcResponse> {
+	#enqueue(
+		rpcId: number,
+		preparation: Promise<PreparedRun>,
+		signal: AbortSignal | undefined,
+	): Promise<RuntimeRpcResponse> {
+		void preparation.catch(() => undefined);
 		if (this.#closing) {
 			return Promise.resolve(errorResponse(rpcId, new RuntimeRpcError("internal", "Embedded runtime endpoint is closed.")));
 		}
 		const pending = Promise.withResolvers<RuntimeRpcResponse>();
-		const queued: QueuedRun = { rpcId, prepared, signal, resolve: pending.resolve, queuedAbort: undefined };
+		const queued: QueuedRun = { rpcId, preparation, signal, resolve: pending.resolve, queuedAbort: undefined };
 		if (signal) {
 			queued.queuedAbort = () => {
 				const index = this.#queue.indexOf(queued);
@@ -388,8 +392,25 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				queued.resolve(errorResponse(queued.rpcId, new RuntimeRpcError("cancelled", CANCELLED_MESSAGE)));
 				continue;
 			}
+			let prepared: PreparedRun;
 			try {
-				queued.resolve(okResponse(queued.rpcId, await this.#execute(queued.prepared, queued.signal)));
+				prepared = await queued.preparation;
+			} catch (error) {
+				queued.resolve(errorResponse(queued.rpcId, runtimeError(error)));
+				continue;
+			}
+			if (this.#closing) {
+				queued.resolve(
+					errorResponse(queued.rpcId, new RuntimeRpcError("internal", "Embedded runtime endpoint is closed.")),
+				);
+				continue;
+			}
+			if (queued.signal?.aborted) {
+				queued.resolve(errorResponse(queued.rpcId, new RuntimeRpcError("cancelled", CANCELLED_MESSAGE)));
+				continue;
+			}
+			try {
+				queued.resolve(okResponse(queued.rpcId, await this.#execute(prepared, queued.signal)));
 			} catch (error) {
 				queued.resolve(errorResponse(queued.rpcId, runtimeError(error)));
 			}
@@ -452,14 +473,17 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		}
 
 		let cancelOutcome: CancelOutcome | undefined;
+		let cancellationFailure: RuntimeRpcError | undefined;
 		if (cancelPromise) {
 			try {
 				cancelOutcome = await cancelPromise;
 			} catch (error) {
 				this.#poison(runtimeError(error));
+				cancellationFailure = this.#poisoned;
 			}
 		}
 		if (externalAbort) throw new RuntimeRpcError("cancelled", CANCELLED_MESSAGE);
+		if (cancellationFailure) throw cancellationFailure;
 		if (callOutcome.kind === "failure") {
 			const failure = new RuntimeRpcError("internal", callOutcome.response.message || "Embedded runtime call failed.", {
 				failureCode: callOutcome.response.code,
@@ -469,9 +493,6 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		}
 
 		const durationMs = Math.round(Math.max(0, finishedAt - startedAt));
-		if (callOutcome.kind === "cancelled") {
-			return { exitCode: 1, stdout: "", stderr: "", durationMs, killed: timeoutFired };
-		}
 		return {
 			...callOutcome.result,
 			durationMs,
@@ -562,7 +583,6 @@ function snapshotEnvironment(environment: NodeJS.ProcessEnv): Readonly<Record<st
 function decodeCallOutcome(bytes: Uint8Array, requestId: bigint): CallOutcome {
 	const response = decodeEmbeddedResponse(bytes, requestId);
 	if (response.type === "completed") return { kind: "completed", result: response.result };
-	if (response.type === "cancelled") return { kind: "cancelled" };
 	if (response.type === "failure") return { kind: "failure", response };
 	throw new RuntimeRpcError("internal", `Embedded runtime returned ${response.type} for a call.`);
 }

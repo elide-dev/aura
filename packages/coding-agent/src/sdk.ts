@@ -868,6 +868,27 @@ async function cleanupSshResources(): Promise<void> {
 		}
 	}
 }
+export interface StartupFailureCleanupStep {
+	readonly label: string;
+	readonly cleanup: () => void | Promise<void>;
+}
+
+/** Run every independent pre-session cleanup step without letting one failure suppress the rest. */
+export async function runStartupFailureCleanupSteps(
+	steps: readonly StartupFailureCleanupStep[],
+): Promise<void> {
+	for (const step of steps) {
+		try {
+			await step.cleanup();
+		} catch (cleanupError) {
+			logger.warn("Failed to clean up createAgentSession resource after startup error", {
+				resource: step.label,
+				error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+			});
+		}
+	}
+}
+
 
 function registerSshCleanup(): void {
 	if (sshCleanupRegistered) return;
@@ -3503,18 +3524,44 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
-				if (startupRuntimeService) await disposeCachedRuntimeService(startupRuntimeService);
-				if (asyncJobManager) {
-					if (AsyncJobManager.instance() === asyncJobManager) {
-						AsyncJobManager.setInstance(undefined);
-					}
-					await asyncJobManager.dispose({ timeoutMs: 3_000 });
+				const cleanupSteps: StartupFailureCleanupStep[] = [];
+				if (startupRuntimeService) {
+					cleanupSteps.push({
+						label: "runtime",
+						cleanup: () => disposeCachedRuntimeService(startupRuntimeService),
+					});
 				}
-				await releaseComputerSessionsForOwner(evalKernelOwnerId);
-				await disposeKernelSessionsByOwner(evalKernelOwnerId);
-				await disposeRubyKernelSessionsByOwner(evalKernelOwnerId);
-				await disposeJuliaKernelSessionsByOwner(evalKernelOwnerId);
-				if (ownsAuthStorage) authStorage.close();
+				if (asyncJobManager) {
+					cleanupSteps.push({
+						label: "async jobs",
+						cleanup: async () => {
+							if (AsyncJobManager.instance() === asyncJobManager) {
+								AsyncJobManager.setInstance(undefined);
+							}
+							await asyncJobManager.dispose({ timeoutMs: 3_000 });
+						},
+					});
+				}
+				cleanupSteps.push(
+					{
+						label: "computer sessions",
+						cleanup: () => releaseComputerSessionsForOwner(evalKernelOwnerId),
+					},
+					{
+						label: "eval kernels",
+						cleanup: () => disposeKernelSessionsByOwner(evalKernelOwnerId),
+					},
+					{
+						label: "Ruby kernels",
+						cleanup: () => disposeRubyKernelSessionsByOwner(evalKernelOwnerId),
+					},
+					{
+						label: "Julia kernels",
+						cleanup: () => disposeJuliaKernelSessionsByOwner(evalKernelOwnerId),
+					},
+				);
+				if (ownsAuthStorage) cleanupSteps.push({ label: "auth storage", cleanup: () => authStorage.close() });
+				await runStartupFailureCleanupSteps(cleanupSteps);
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {
