@@ -88,7 +88,6 @@ import {
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
-	buildToolCallStartUpdate,
 	extractAssistantMessageText,
 	mapAgentSessionEventToAcpSessionUpdates,
 	normalizeReplayToolArguments,
@@ -1713,6 +1712,12 @@ export class AcpAgent implements Agent {
 			planExists: true,
 		};
 		if (!approved) {
+			// Rejection keeps plan mode active for another planning turn. Promote the
+			// reviewed path into plan-mode state so the next `#buildPlanModeMessage()`
+			// targets the plan just reviewed, not the stale state path.
+			if (state.planFilePath !== planFilePath) {
+				session.setPlanModeState({ ...state, planFilePath });
+			}
 			const normalizedTitle = normalizePlanTitle(resolvedTitle).title;
 			return {
 				content: [
@@ -2174,14 +2179,18 @@ export class AcpAgent implements Agent {
 					typeof toolItem.name === "string"
 				) {
 					const args = this.#buildReplayAssistantToolArgs(toolItem);
-					const update = buildToolCallStartUpdate({
-						toolCallId: toolItem.id,
-						toolName: toolItem.name,
-						args,
-						status: "completed",
-						cwd,
-					});
-					notifications.push({ sessionId, update });
+					notifications.push(
+						...mapAgentSessionEventToAcpSessionUpdates(
+							{
+								type: "tool_execution_start",
+								toolCallId: toolItem.id,
+								toolName: toolItem.name,
+								args,
+							},
+							sessionId,
+							{ cwd },
+						),
+					);
 					replayedToolCallIds.add(toolItem.id);
 					replayedToolCallArgs.set(toolItem.id, args);
 				}
