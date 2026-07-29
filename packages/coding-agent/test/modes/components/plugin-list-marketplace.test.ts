@@ -14,6 +14,7 @@ import {
 	PluginSettingsComponent,
 } from "@oh-my-pi/pi-coding-agent/modes/components/plugin-settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 
 beforeAll(async () => {
 	await initTheme();
@@ -118,8 +119,8 @@ describe("PluginListComponent", () => {
 
 		const text = stripVTControlCharacters(component.render(120).join("\n"));
 		expect(text).toContain("No plugins installed");
-		expect(text).toContain("omp plugin install <package>");
-		expect(text).toContain("omp plugin install <name>@<marketplace>");
+		expect(text).toContain(`${APP_NAME} plugin install <package>`);
+		expect(text).toContain(`${APP_NAME} plugin install <name>@<marketplace>`);
 	});
 
 	it("routes enter on a marketplace entry to onMarketplaceSelect", () => {

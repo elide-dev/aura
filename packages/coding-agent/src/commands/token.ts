@@ -3,6 +3,7 @@
  */
 
 import { PROVIDER_REGISTRY } from "@oh-my-pi/pi-ai";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import chalk from "chalk";
 import { isAuthenticated, ModelRegistry } from "../config/model-registry";
@@ -40,11 +41,11 @@ export default class Token extends Command {
 	};
 
 	static examples = [
-		"# Get API key for Anthropic\n  omp token anthropic",
-		"# Get raw Copilot credential JSON\n  omp token github-copilot --raw",
-		"# Force refresh and get Gemini CLI token\n  omp token google-gemini-cli --force-refresh",
-		"# List Anthropic OAuth accounts\n  omp token anthropic --list",
-		"# Get the 2nd Anthropic OAuth account's token\n  omp token anthropic --account 2",
+		`# Get API key for Anthropic\n  ${APP_NAME} token anthropic`,
+		`# Get raw Copilot credential JSON\n  ${APP_NAME} token github-copilot --raw`,
+		`# Force refresh and get Gemini CLI token\n  ${APP_NAME} token google-gemini-cli --force-refresh`,
+		`# List Anthropic OAuth accounts\n  ${APP_NAME} token anthropic --list`,
+		`# Get the 2nd Anthropic OAuth account's token\n  ${APP_NAME} token anthropic --account 2`,
 	];
 
 	async run(): Promise<void> {

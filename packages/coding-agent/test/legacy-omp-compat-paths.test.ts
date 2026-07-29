@@ -13,6 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { collectConfigCandidates } from "@oh-my-pi/pi-coding-agent/advisor/watchdog";
 import { runAgentsCommand } from "@oh-my-pi/pi-coding-agent/cli/agents-cli";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets";
 import {
 	CONFIG_DIR_NAME,
@@ -21,6 +22,7 @@ import {
 	removeSyncWithRetries,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState } from "./helpers/settings-test-state";
 
 let tempDir: string;
 let project: string;
@@ -76,6 +78,22 @@ test("`agents unpack --project` writes to the branded agents dir, never the lega
 	expect(fs.existsSync(brandedDir)).toBe(true);
 	expect(fs.readdirSync(brandedDir).some(name => name.endsWith(".md"))).toBe(true);
 	expect(fs.readdirSync(path.join(project, LEGACY_CONFIG_DIR_NAME, "agents"))).toEqual([]);
+});
+
+test("an invalid legacy `.omp/config.yml` errors without being quarantined — the legacy dir is never written", async () => {
+	const settingsState = beginSettingsTest();
+	const legacyConfigPath = path.join(project, LEGACY_CONFIG_DIR_NAME, "config.yml");
+	const malformed = 'modelRoles:\n  default: "unterminated\n';
+	writeFile(legacyConfigPath, malformed);
+	try {
+		await expect(Settings.init({ cwd: project, agentDir })).rejects.toThrow("Settings config is invalid");
+	} finally {
+		restoreSettingsTestState(settingsState);
+	}
+
+	// The invalid file is reported, not moved aside: no `.broken-` backup, content intact.
+	expect(fs.readFileSync(legacyConfigPath, "utf8")).toBe(malformed);
+	expect(fs.readdirSync(path.join(project, LEGACY_CONFIG_DIR_NAME))).toEqual(["config.yml"]);
 });
 
 test("watchdog config discovery probes the branded project dir alongside the legacy `.omp` dir", async () => {

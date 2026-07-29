@@ -1,4 +1,5 @@
 import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import type { SearchResponse } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import {
@@ -68,7 +69,7 @@ async function searchWithAuthStorage(
 	const apiKey = await authStorage.getApiKey("parallel", sessionId, { signal: params.signal });
 	if (!apiKey) {
 		throw new ParallelApiError(
-			"Parallel credentials not found. Set PARALLEL_API_KEY or login with 'omp /login parallel'.",
+			`Parallel credentials not found. Set PARALLEL_API_KEY or login with '${APP_NAME} /login parallel'.`,
 		);
 	}
 

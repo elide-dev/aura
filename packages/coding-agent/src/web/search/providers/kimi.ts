@@ -8,7 +8,7 @@
  * Endpoint: POST https://api.kimi.com/coding/v1/search
  */
 import { type ApiKey, type AuthStorage, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, APP_NAME } from "@oh-my-pi/pi-utils";
 
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -146,7 +146,7 @@ export async function searchKimi(params: KimiSearchParams): Promise<SearchRespon
 	const keyOrResolver = await resolveKey(params.authStorage, params.sessionId, params.signal);
 	if (!keyOrResolver) {
 		throw new Error(
-			"Kimi search credentials not found. Kimi web search uses the Kimi Code service (api.kimi.com); set MOONSHOT_SEARCH_API_KEY / KIMI_SEARCH_API_KEY to a Kimi Code Console key, or login with 'omp /login kimi-code'. A Moonshot Open Platform key (MOONSHOT_API_KEY) is not accepted here.",
+			`Kimi search credentials not found. Kimi web search uses the Kimi Code service (api.kimi.com); set MOONSHOT_SEARCH_API_KEY / KIMI_SEARCH_API_KEY to a Kimi Code Console key, or login with '${APP_NAME} /login kimi-code'. A Moonshot Open Platform key (MOONSHOT_API_KEY) is not accepted here.`,
 		);
 	}
 

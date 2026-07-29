@@ -4,20 +4,35 @@
  * Handles `omp update` to check for and install updates.
  * Uses the installer that owns the active omp executable when it can be detected.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { $which, APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	$which,
+	APP_NAME,
+	DIST_HOMEBREW_FORMULA,
+	DIST_INSTALL_URL,
+	DIST_MISE_TOOL,
+	DIST_NPM_REGISTRY,
+	DIST_PACKAGE,
+	DIST_REPO,
+	DIST_UPDATE_CHANNEL,
+	isEnoent,
+	VERSION,
+} from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 
-const REPO = "can1357/oh-my-pi";
-const PACKAGE = "@oh-my-pi/pi-coding-agent";
-const HOMEBREW_FORMULA = "can1357/tap/omp";
-const MISE_TOOL = "github:can1357/oh-my-pi";
+const REPO = DIST_REPO;
+const PACKAGE = DIST_PACKAGE;
+const HOMEBREW_FORMULA = DIST_HOMEBREW_FORMULA;
+const MISE_TOOL = DIST_MISE_TOOL;
 /**
  * Official npm registry origin.
  *
@@ -29,7 +44,8 @@ const MISE_TOOL = "github:can1357/oh-my-pi";
  * `No version matching "X" found for specifier "<pkg>" (but package exists)`.
  * See #1686.
  */
-const NPM_REGISTRY = "https://registry.npmjs.org/";
+const NPM_REGISTRY = DIST_NPM_REGISTRY;
+const GITHUB_API = "https://api.github.com";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
 const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
@@ -63,6 +79,191 @@ function currentNativeTag(): string {
 interface ReleaseInfo {
 	tag: string;
 	version: string;
+}
+
+export interface ReleaseBinaryAsset {
+	url: string;
+	/**
+	 * GitHub API asset endpoint (`/repos/…/releases/assets/<id>`). Downloads
+	 * from a private repository must use this with an Authorization header and
+	 * `Accept: application/octet-stream`; `url` (the browser download URL) only
+	 * works for public repositories.
+	 */
+	apiUrl?: string;
+	size: number;
+	digest: string;
+}
+
+type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+/**
+ * Select and validate the binary asset from GitHub release metadata.
+ */
+export function resolveReleaseBinaryAsset(
+	release: unknown,
+	expectedTag: string,
+	binaryName: string,
+): ReleaseBinaryAsset {
+	if (!isRecord(release)) {
+		throw new Error("Invalid GitHub release metadata");
+	}
+	if (release.tag_name !== expectedTag) {
+		throw new Error(`GitHub release tag mismatch: expected ${expectedTag}`);
+	}
+	if (release.draft !== false || release.prerelease !== false) {
+		throw new Error(`GitHub release ${expectedTag} is not a published stable release`);
+	}
+	if (!Array.isArray(release.assets)) {
+		throw new Error(`GitHub release ${expectedTag} has no asset list`);
+	}
+
+	const matches = release.assets.filter(asset => isRecord(asset) && asset.name === binaryName);
+	if (matches.length !== 1) {
+		throw new Error(`GitHub release ${expectedTag} has ${matches.length} assets named ${binaryName}`);
+	}
+
+	const asset = matches[0];
+	if (!isRecord(asset) || asset.state !== "uploaded") {
+		throw new Error(`GitHub release asset ${binaryName} is not fully uploaded`);
+	}
+	if (typeof asset.size !== "number" || !Number.isSafeInteger(asset.size) || asset.size <= 0) {
+		throw new Error(`GitHub release asset ${binaryName} has an invalid size`);
+	}
+	if (typeof asset.digest !== "string") {
+		throw new Error(`GitHub release asset ${binaryName} has no digest`);
+	}
+	const digest = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest)?.[1];
+	if (!digest) {
+		throw new Error(`GitHub release asset ${binaryName} has an unsupported digest`);
+	}
+
+	const expectedUrl = `https://github.com/${REPO}/releases/download/${expectedTag}/${binaryName}`;
+	if (asset.browser_download_url !== expectedUrl) {
+		throw new Error(`GitHub release asset ${binaryName} has an unexpected download URL`);
+	}
+
+	// The API asset endpoint is the only download path that honors an
+	// Authorization header (required while the release repo is private).
+	const expectedApiUrlPrefix = `${GITHUB_API}/repos/${REPO}/releases/assets/`;
+	const apiUrl = typeof asset.url === "string" && asset.url.startsWith(expectedApiUrlPrefix) ? asset.url : undefined;
+
+	return {
+		url: expectedUrl,
+		apiUrl,
+		size: asset.size,
+		digest: `sha256:${digest.toLowerCase()}`,
+	};
+}
+
+async function getReleaseBinaryAsset(
+	expectedVersion: string,
+	binaryName: string,
+	fetchImpl: Fetch = fetch,
+	githubToken: string | undefined = $env.GITHUB_TOKEN || $env.GH_TOKEN,
+): Promise<ReleaseBinaryAsset> {
+	const tag = `v${expectedVersion}`;
+	const headers: Record<string, string> = {
+		Accept: "application/vnd.github+json",
+		"X-GitHub-Api-Version": "2022-11-28",
+	};
+	if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+
+	let response: Response;
+	try {
+		response = await fetchImpl(`${GITHUB_API}/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`, {
+			headers,
+			signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out fetching GitHub release metadata after 30s", { cause: err });
+		}
+		throw err;
+	}
+	if ((response.status === 403 && !githubToken) || response.status === 429) {
+		throw new Error(
+			"GitHub API rate limit exceeded while fetching release metadata; retry later or set GITHUB_TOKEN or GH_TOKEN",
+		);
+	}
+	if (!response.ok) {
+		throw new Error(`Failed to fetch GitHub release metadata: ${response.statusText}`);
+	}
+
+	return resolveReleaseBinaryAsset(await response.json(), tag, binaryName);
+}
+
+export interface VerifiedBinaryDownloadOptions {
+	url: string;
+	targetPath: string;
+	expectedSize: number;
+	expectedDigest: string;
+	fetchImpl?: Fetch;
+	headers?: Record<string, string>;
+}
+
+/**
+ * Download a binary and verify its GitHub-reported size and SHA-256 digest.
+ */
+export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOptions): Promise<void> {
+	const fetchImpl = options.fetchImpl ?? fetch;
+	await unlinkIfExists(options.targetPath);
+
+	let response: Response;
+	try {
+		response = await fetchImpl(options.url, {
+			redirect: "follow",
+			headers: options.headers,
+			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+		}
+		throw err;
+	}
+	if (!response.ok || !response.body) {
+		throw new Error(`Download failed: ${response.statusText}`);
+	}
+
+	const hash = createHash("sha256");
+	let size = 0;
+	const verifier = new Transform({
+		transform(chunk, _encoding, callback) {
+			size += chunk.byteLength;
+			if (size > options.expectedSize) {
+				callback(
+					new Error(
+						`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received at least ${size}`,
+					),
+				);
+				return;
+			}
+			hash.update(chunk);
+			callback(null, chunk);
+		},
+	});
+
+	try {
+		await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
+		const digest = `sha256:${hash.digest("hex")}`;
+		if (size !== options.expectedSize) {
+			throw new Error(`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`);
+		}
+		if (digest !== options.expectedDigest) {
+			throw new Error(`Downloaded binary digest mismatch: expected ${options.expectedDigest}, received ${digest}`);
+		}
+		await fs.promises.chmod(options.targetPath, 0o755);
+	} catch (err) {
+		await unlinkIfExists(options.targetPath);
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+		}
+		throw err;
+	}
 }
 
 /** Result from running the installed binary and parsing its reported version. */
@@ -209,6 +410,13 @@ interface UpdateMethodResolutionOptions {
 	miseBinDirs?: readonly string[];
 	miseDataDir?: string;
 	npmBinDir?: string;
+	/**
+	 * Whether the resolved omp path is a plain file (the standalone binary)
+	 * rather than a package-manager symlink. Stops a binary install from being
+	 * misrouted to npm/bun when the global bin dir overlaps the installer's
+	 * target directory.
+	 */
+	ompIsRegularFile?: boolean;
 }
 
 type UpdateTarget =
@@ -223,15 +431,26 @@ function resolveUpdateMethod(
 	bunBinDir: string | undefined,
 	options: UpdateMethodResolutionOptions = {},
 ): UpdateMethod {
-	const { homebrewPrefix, miseBinDirs = [], miseDataDir, npmBinDir } = options;
+	const { homebrewPrefix, miseBinDirs = [], miseDataDir, npmBinDir, ompIsRegularFile = false } = options;
 	const launcherExtension = path.extname(ompPath).toLowerCase();
 	const isWindowsScriptLauncher =
 		launcherExtension === ".cmd" || launcherExtension === ".ps1" || launcherExtension === ".bat";
 	if (homebrewPrefix && isPathInDirectory(ompPath, path.join(homebrewPrefix, "bin"))) return "brew";
 	if (miseBinDirs.some(dir => isPathInDirectory(ompPath, dir))) return "mise";
 	if (miseDataDir && isPathInDirectory(ompPath, path.join(miseDataDir, "shims"))) return "mise";
-	if (bunBinDir && isPathInDirectory(ompPath, bunBinDir)) return "bun";
-	if ((npmBinDir && isPathInDirectory(ompPath, npmBinDir)) || isWindowsScriptLauncher) return "npm";
+	// A plain executable file in a package-manager bin dir is the standalone
+	// binary the installer placed there, not an npm/bun-managed install (those
+	// symlink into node_modules on POSIX). When the global bin dir overlaps the
+	// installer's default (~/.local/bin), classifying by directory alone routes
+	// a binary install through npm/bun, whose reinstall then collides with the
+	// existing file (npm EEXIST). Fall through to binary replacement instead.
+	// Windows is excluded: there package managers write regular-file shims
+	// (bun's .exe launcher, npm's .cmd/.ps1), so a regular file is NOT evidence
+	// of a standalone install and the override would hijack managed installs.
+	const isStandaloneRegularFile = ompIsRegularFile && process.platform !== "win32";
+	if (bunBinDir && isPathInDirectory(ompPath, bunBinDir) && !isStandaloneRegularFile) return "bun";
+	if ((npmBinDir && isPathInDirectory(ompPath, npmBinDir) && !isStandaloneRegularFile) || isWindowsScriptLauncher)
+		return "npm";
 	return "binary";
 }
 
@@ -252,7 +471,22 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
 	const ompPath = resolveOmpPath();
 
 	if (ompPath) {
-		const method = resolveUpdateMethod(ompPath, bunBinDir, { homebrewPrefix, miseBinDirs, miseDataDir, npmBinDir });
+		// Package-manager installs symlink the bin entry into node_modules; the
+		// standalone installer writes a plain executable. When the global bin dir
+		// overlaps the installer's default (~/.local/bin), that file type — not
+		// directory containment — distinguishes a binary install from npm/bun.
+		let ompIsRegularFile = false;
+		try {
+			const stat = fs.lstatSync(ompPath);
+			ompIsRegularFile = stat.isFile() && !stat.isSymbolicLink();
+		} catch {}
+		const method = resolveUpdateMethod(ompPath, bunBinDir, {
+			homebrewPrefix,
+			miseBinDirs,
+			miseDataDir,
+			npmBinDir,
+			ompIsRegularFile,
+		});
 		if (method === "binary") return { method, path: ompPath };
 		return { method };
 	}
@@ -263,18 +497,63 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
 }
 
 /**
- * Get the latest release info from the npm registry.
- * Uses npm instead of GitHub API to avoid unauthenticated rate limiting.
+ * Get the latest release info from the configured distribution channel.
+ *
+ * `github`: latest published release of {@link REPO}. The fork repository is
+ * private, so the request carries `GITHUB_TOKEN`/`GH_TOKEN` when present;
+ * without one this throws and callers decide whether that is fatal (`aura
+ * update`) or silent (the startup check).
+ *
+ * `npm`: `<registry>/<package>/latest` — upstream's channel, kept for a future
+ * aura npm publish. npm is preferred over the GitHub API there because it has
+ * no unauthenticated rate limiting.
  */
-async function getLatestRelease(): Promise<ReleaseInfo> {
+export async function getLatestRelease(timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS): Promise<ReleaseInfo> {
+	if (DIST_UPDATE_CHANNEL === "github") {
+		const headers: Record<string, string> = {
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		};
+		const githubToken = $env.GITHUB_TOKEN || $env.GH_TOKEN;
+		if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+
+		let response: Response;
+		try {
+			response = await fetch(`${GITHUB_API}/repos/${REPO}/releases/latest`, {
+				headers,
+				signal: withTimeoutSignal(timeoutMs),
+			});
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new Error(`Timed out fetching release info after ${Math.round(timeoutMs / 1000)}s`, { cause: err });
+			}
+			throw err;
+		}
+		if ((response.status === 403 && !githubToken) || response.status === 429) {
+			throw new Error(
+				"GitHub API rate limit exceeded while fetching release info; retry later or set GITHUB_TOKEN or GH_TOKEN",
+			);
+		}
+		if (!response.ok) {
+			throw new Error(`Failed to fetch release info: ${response.statusText}`);
+		}
+
+		const data = (await response.json()) as { tag_name?: string };
+		const tag = data.tag_name;
+		if (typeof tag !== "string" || !/^v\d+\.\d+\.\d+$/.test(tag)) {
+			throw new Error(`Latest GitHub release has an unexpected tag: ${String(tag)}`);
+		}
+		return { tag, version: tag.slice(1) };
+	}
+
 	let response: Response;
 	try {
 		response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`, {
-			signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
+			signal: withTimeoutSignal(timeoutMs),
 		});
 	} catch (err) {
 		if (isTimeoutError(err)) {
-			throw new Error("Timed out fetching release info after 30s", { cause: err });
+			throw new Error(`Timed out fetching release info after ${Math.round(timeoutMs / 1000)}s`, { cause: err });
 		}
 		throw err;
 	}
@@ -656,7 +935,7 @@ async function printVerification(expectedVersion: string): Promise<void> {
 		return;
 	}
 	console.log(chalk.yellow(`\nWarning: ${formatVerificationFailure(result, expectedVersion)}`));
-	console.log(chalk.yellow(`You may need to reinstall: curl -fsSL https://omp.sh/install | sh`));
+	console.log(chalk.yellow(`You may need to reinstall from ${DIST_INSTALL_URL}`));
 }
 
 async function unlinkIfExists(filePath: string): Promise<void> {
@@ -895,36 +1174,40 @@ async function updateViaMise(expectedVersion: string, force: boolean): Promise<v
 /**
  * Download a release binary to a target path, replacing an existing file.
  */
-async function updateViaBinaryAt(targetPath: string, expectedVersion: string): Promise<void> {
-	const binaryName = getBinaryName();
-	const tag = `v${expectedVersion}`;
-	const url = `https://github.com/${REPO}/releases/download/${tag}/${binaryName}`;
-
+export async function updateViaBinaryAt(
+	targetPath: string,
+	expectedVersion: string,
+	options: {
+		binaryName?: string;
+		fetchImpl?: Fetch;
+		githubToken?: string;
+		verifyInstalledVersion?: typeof verifyInstalledVersion;
+	} = {},
+): Promise<void> {
+	const binaryName = options.binaryName ?? getBinaryName();
 	const tempPath = `${targetPath}.new`;
 	// Unique per attempt: a stale backup from an earlier update may still be
 	// locked (it is the previous process image on Windows), and a fixed name
 	// would force the move-aside rename to overwrite it. pid + timestamp keeps
 	// two forced updates in the same millisecond from colliding.
 	const backupPath = `${targetPath}.${Date.now()}.${process.pid}.bak`;
+	const githubToken = options.githubToken ?? ($env.GITHUB_TOKEN || $env.GH_TOKEN);
+	const asset = await getReleaseBinaryAsset(expectedVersion, binaryName, options.fetchImpl, githubToken);
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
-
-	let response: Response;
-	try {
-		response = await fetch(url, {
-			redirect: "follow",
-			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
-		});
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
-		}
-		throw err;
-	}
-	if (!response.ok || !response.body) {
-		throw new Error(`Download failed: ${response.statusText}`);
-	}
-	const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
-	await pipeline(response.body, fileStream);
+	// With a token, download through the API asset endpoint: the plain
+	// browser download URL 404s while the release repository is private.
+	const useApiDownload = Boolean(githubToken && asset.apiUrl);
+	await downloadVerifiedBinary({
+		url: useApiDownload && asset.apiUrl ? asset.apiUrl : asset.url,
+		targetPath: tempPath,
+		expectedSize: asset.size,
+		expectedDigest: asset.digest,
+		fetchImpl: options.fetchImpl,
+		headers: useApiDownload
+			? { Accept: "application/octet-stream", Authorization: `Bearer ${githubToken}` }
+			: undefined,
+	});
+	console.log(chalk.dim(`Verified ${asset.digest}`));
 
 	console.log(chalk.dim("Installing update..."));
 	await replaceBinaryForUpdate({
@@ -932,7 +1215,7 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 		tempPath,
 		backupPath,
 		expectedVersion,
-		verifyInstalledVersion,
+		verifyInstalledVersion: options.verifyInstalledVersion ?? verifyInstalledVersion,
 	});
 	// Reclaim backups from earlier updates whose owning process has since exited.
 	await sweepStaleBackups(targetPath);
