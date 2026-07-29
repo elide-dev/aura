@@ -10,6 +10,7 @@ import {
 	type RuntimeRunParams,
 	RuntimeService,
 } from "../../coding-agent/src/runtime";
+import { isRegularFile as isRuntimeRegularFile, runtimeBinaryNames } from "../../coding-agent/src/runtime/resolve";
 import { readBenchmarkSnapshot } from "./benchmarks";
 import { materializeRuntimeTasks, RUNTIME_TASKS } from "./runtime-benchmark-suite";
 
@@ -381,10 +382,7 @@ export async function measureAdapterCase<T>(options: AdapterCaseOptions<T>): Pro
 	options.validate((await options.embedded()).value);
 	const processSamples: number[] = [];
 	const embeddedSamples: number[] = [];
-	const accept = async (
-		operation: () => Promise<TimedAdapterSample<T>>,
-		samples: number[],
-	): Promise<void> => {
+	const accept = async (operation: () => Promise<TimedAdapterSample<T>>, samples: number[]): Promise<void> => {
 		const sample = await operation();
 		options.validate(sample.value);
 		if (!Number.isFinite(sample.durationMs) || sample.durationMs <= 0) {
@@ -611,7 +609,7 @@ const ADAPTER_RUN_CASES: readonly RuntimeAdapterRunCase[] = [
 	{
 		name: "Warm TS startup",
 		params: {
-			code: 'const value: number = 42; console.log(`adapter-ts-startup:${value}`)',
+			code: "const value: number = 42; console.log('adapter-ts-startup:' + value)",
 			language: "ts",
 		},
 		expectedStdout: "adapter-ts-startup:42\n",
@@ -661,9 +659,7 @@ async function timedRuntimeRun(
 	return { durationMs: performance.now() - startedAt, value };
 }
 
-async function measureEmbeddedCold(
-	embeddedService: AdapterBenchmarkRuntime,
-): Promise<AdapterMicroResult> {
+async function measureEmbeddedCold(embeddedService: AdapterBenchmarkRuntime): Promise<AdapterMicroResult> {
 	const sample = await timedRuntimeRun(embeddedService, ADAPTER_COLD_JS);
 	validateAdapterOutput(sample.value, "adapter-cold-js\n");
 	return summarizeAdapterSamples("Embedded cold open + first JS", null, [sample.durationMs]);
@@ -686,16 +682,19 @@ async function timedCancellation(
 	service: AdapterBenchmarkRuntime,
 ): Promise<TimedAdapterSample<CancellationObservation>> {
 	const controller = new AbortController();
-	const active = service.run(ADAPTER_CANCELLATION_PARAMS, controller.signal).then<CancellationSettlement>(
-		() => ({ kind: "resolved" }),
-		error => ({ kind: "rejected", error }),
-	);
+	const active = service
+		.run(ADAPTER_CANCELLATION_PARAMS, controller.signal)
+		.then<CancellationSettlement, CancellationSettlement>(
+			() => ({ kind: "resolved" }),
+			error => ({ kind: "rejected", error }),
+		);
 	await Bun.sleep(ADAPTER_CANCELLATION_ENTER_DELAY_MS);
 	const startedAt = performance.now();
 	controller.abort();
 	const settlement = await settleWithin(active, ADAPTER_CANCELLATION_BOUND_MS);
 	const durationMs = performance.now() - startedAt;
-	if (settlement.kind === "resolved") throw new Error("runtime cancellation unexpectedly completed the infinite guest");
+	if (settlement.kind === "resolved")
+		throw new Error("runtime cancellation unexpectedly completed the infinite guest");
 	if (!(settlement.error instanceof RuntimeRpcError)) {
 		if (settlement.error instanceof Error) throw settlement.error;
 		throw new Error(`runtime cancellation failed: ${String(settlement.error)}`);
@@ -771,21 +770,42 @@ export async function runAdapterMicrobenchmarks(
 		throw new Error("adapter benchmark iterations must be a positive integer");
 	}
 	const services: AdapterBenchmarkRuntime[] = [];
+	let outcome: { kind: "completed"; results: AdapterMicroResult[] } | { kind: "failed"; error: unknown };
 	try {
 		const processService = dependencies.createProcessService(config);
 		services.push(processService);
 		const embeddedService = dependencies.createEmbeddedService(config);
 		services.push(embeddedService);
-		return await dependencies.runCases(config, processService, embeddedService);
-	} finally {
-		const closed = await Promise.allSettled(services.map(service => service.close()));
-		const failure = closed.find(result => result.status === "rejected");
-		if (failure?.status === "rejected") throw failure.reason;
+		outcome = { kind: "completed", results: await dependencies.runCases(config, processService, embeddedService) };
+	} catch (error) {
+		outcome = { kind: "failed", error };
 	}
+
+	const closed = await Promise.allSettled(services.map(service => service.close()));
+	if (outcome.kind === "failed") throw outcome.error;
+	const closeFailure = closed.find(result => result.status === "rejected");
+	if (closeFailure?.status === "rejected") throw closeFailure.reason;
+	return outcome.results;
 }
 
-export function packagedRuntimeBinaryForLibrary(libraryPath: string): string {
-	return path.resolve(path.dirname(libraryPath), "..", "bin", "elide");
+export interface PackagedRuntimeBinaryOptions {
+	platform?: NodeJS.Platform;
+	isRegularFile?: (candidate: string) => Promise<boolean>;
+}
+
+export async function packagedRuntimeBinaryForLibrary(
+	libraryPath: string,
+	options: PackagedRuntimeBinaryOptions = {},
+): Promise<string> {
+	const platform = options.platform ?? process.platform;
+	const pathImpl = platform === "win32" ? path.win32 : path.posix;
+	const binaryDir = pathImpl.resolve(pathImpl.dirname(libraryPath), "..", "bin");
+	const probe = options.isRegularFile ?? isRuntimeRegularFile;
+	for (const name of runtimeBinaryNames(platform)) {
+		const candidate = pathImpl.join(binaryDir, name);
+		if (await probe(candidate)) return candidate;
+	}
+	throw new Error(`No packaged runtime binary found in ${binaryDir} for embedded library ${libraryPath}.`);
 }
 
 export function parseRuntimeBenchmarkCli(
@@ -889,7 +909,7 @@ async function main(): Promise<void> {
 			kind: "completed",
 			results: await runAdapterMicrobenchmarks({
 				iterations: opts.microIterations,
-				processBinaryPath: packagedRuntimeBinaryForLibrary(opts.embeddedLib),
+				processBinaryPath: await packagedRuntimeBinaryForLibrary(opts.embeddedLib),
 				embeddedLibraryPath: opts.embeddedLib,
 				env: process.env,
 			}),

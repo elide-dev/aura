@@ -1,4 +1,4 @@
-import * as nodeFs from "node:fs";
+import type * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,7 +27,13 @@ export function managedVersionDir(version = ELIDE_VERSION): string {
 	return path.join(managedRuntimeRoot(), version);
 }
 
-const BINARY_NAMES = process.platform === "win32" ? ["elide.exe", "elide.cmd", "elide"] : ["elide"];
+const WINDOWS_RUNTIME_BINARY_NAMES = ["elide.exe", "elide.cmd", "elide"] as const;
+const POSIX_RUNTIME_BINARY_NAMES = ["elide"] as const;
+
+/** Canonical executable probe order for packaged and managed runtime distributions. */
+export function runtimeBinaryNames(platform: NodeJS.Platform = process.platform): readonly string[] {
+	return platform === "win32" ? WINDOWS_RUNTIME_BINARY_NAMES : POSIX_RUNTIME_BINARY_NAMES;
+}
 
 export async function isRegularFile(filePath: string): Promise<boolean> {
 	try {
@@ -46,7 +52,7 @@ export async function findBinaryInTree(dir: string): Promise<string | null> {
 		return null;
 	}
 	// direct hit: dir/bin/elide
-	for (const name of BINARY_NAMES) {
+	for (const name of runtimeBinaryNames()) {
 		const direct = path.join(dir, "bin", name);
 		if (await isRegularFile(direct)) return direct;
 	}

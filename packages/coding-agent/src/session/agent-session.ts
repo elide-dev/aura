@@ -440,10 +440,25 @@ type SetSessionNameWithTrigger = (
 	trigger?: SessionNameTrigger,
 ) => Promise<boolean>;
 
+const INERT_RUNTIME_SETTINGS = Object.freeze({
+	enabled: false,
+	autoDownload: false,
+	path: "",
+	adapter: "process" as const,
+	embeddedPath: "",
+});
+const INERT_RUNTIME_SERVICE_SCOPE: AgentSessionConfig["runtimeServiceScope"] = {
+	readSettings: () => INERT_RUNTIME_SETTINGS,
+};
+type AgentSessionConstructionConfig = Omit<AgentSessionConfig, "runtimeServiceScope"> & {
+	runtimeServiceScope?: AgentSessionConfig["runtimeServiceScope"];
+};
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	readonly runtimeServiceScope: AgentSessionConfig["runtimeServiceScope"];
 	/** Entries of tools mounted under `xd://`; empty when virtual devices are unmounted. */
 	getXdevToolEntries: () => Array<{ name: string; summary: string }>;
 	readonly yieldQueue: YieldQueue;
@@ -857,10 +872,11 @@ export class AgentSession {
 		return listPlanFiles({ localProtocolOptions: this.#localProtocolOptions() });
 	}
 
-	constructor(config: AgentSessionConfig) {
+	constructor(config: AgentSessionConstructionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.runtimeServiceScope = config.runtimeServiceScope ?? INERT_RUNTIME_SERVICE_SCOPE;
 		this.#modelRegistry = config.modelRegistry;
 		const bashHost: BashRunnerHost = {
 			agent: this.agent,
@@ -3543,8 +3559,11 @@ export class AgentSession {
 		const hindsightState = this.getHindsightSessionState();
 		const mnemopiState = setMnemopiSessionState(this, undefined);
 		const advisorRecorderClosed = this.#advisors.recorderClosed();
-		const results = await Promise.allSettled([
-			this.#disposeOwnedAsyncJobs(),
+		// Descendant tasks share the root runtime without holding a lease. Drain
+		// the owning job manager first so their abort/settlement paths cannot race
+		// the final root lease release and close an endpoint under an active call.
+		const asyncJobResults = await Promise.allSettled([this.#disposeOwnedAsyncJobs()]);
+		const teardownResults = await Promise.allSettled([
 			this.#eval.disposeKernels(),
 			this.#releaseOwnedBrowserTabs(this.sessionManager.getSessionId()),
 			this.#releaseOwnedComputerSessions(this.#eval.getKernelOwnerId()),
@@ -3555,6 +3574,7 @@ export class AgentSession {
 			hindsightState?.flushRetainQueue() ?? Promise.resolve(),
 			this.#disposeMnemopi(mnemopiState, options.mnemopiConsolidateTimeoutMs),
 		]);
+		const results = [...asyncJobResults, ...teardownResults];
 		for (const result of results) {
 			if (result.status === "rejected") {
 				logger.warn("Session dispose subsystem failed during parallel teardown", {

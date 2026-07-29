@@ -8,6 +8,7 @@ import {
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
 	type RuntimeStatusResult,
+	toRuntimeRpcError,
 } from "../protocol";
 import type { RuntimeEndpoint } from "../service";
 import { EmbeddedRuntimeEndpoint } from "./embedded";
@@ -20,10 +21,24 @@ export interface SelectedEndpointOptions extends LocalEndpointOptions {
 	embeddedEndpoint?: RuntimeEndpoint;
 }
 
+interface AutoRunPreflight {
+	readonly request: RuntimeRpcRequest;
+	readonly ready: Promise<unknown>;
+}
+
+interface QueuedAutoRun {
+	readonly preflight: AutoRunPreflight;
+	readonly signal: AbortSignal | undefined;
+	readonly resolve: (response: RuntimeRpcResponse) => void;
+	queuedAbort: (() => void) | undefined;
+}
+
 export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 	readonly #adapter: RuntimeAdapter;
 	readonly #process: RuntimeEndpoint;
 	readonly #embedded: RuntimeEndpoint;
+	readonly #autoQueue: QueuedAutoRun[] = [];
+	#autoDrain: Promise<void> | undefined;
 	#closing = false;
 	#closePromise: Promise<void> | undefined;
 
@@ -49,30 +64,140 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 			return this.#process.request(request, signal);
 		}
 		if (this.#adapter === "embedded") return this.#embedded.request(request, signal);
-		try {
-			const embeddedStatus = await this.#endpointStatus(this.#embedded, request.id);
-			return embeddedStatus.available || embeddedStatus.embeddedLibraryPath !== undefined
-				? this.#embedded.request(request, signal)
-				: this.#process.request(request, signal);
-		} catch (error) {
-			return errorResponse(request.id, runtimeError(error));
-		}
+		return this.#enqueueAuto(request, signal);
 	}
 
 	close(): Promise<void> {
 		if (this.#closePromise) return this.#closePromise;
 		this.#closing = true;
+		for (const queued of this.#autoQueue.splice(0)) {
+			if (queued.queuedAbort) queued.signal?.removeEventListener("abort", queued.queuedAbort);
+			queued.resolve(
+				errorResponse(queued.preflight.request.id, new RuntimeRpcError("internal", "Runtime endpoint is closed.")),
+			);
+		}
 		this.#closePromise = this.#closeEndpoints();
 		return this.#closePromise;
 	}
 
 	async #closeEndpoints(): Promise<void> {
+		if (this.#autoDrain) await Promise.allSettled([this.#autoDrain]);
 		const endpoints = this.#process === this.#embedded ? [this.#process] : [this.#process, this.#embedded];
-		const results = await Promise.allSettled(
-			endpoints.map(endpoint => endpoint.close?.() ?? Promise.resolve()),
-		);
+		const results = await Promise.allSettled(endpoints.map(endpoint => endpoint.close?.() ?? Promise.resolve()));
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
+	}
+
+	#enqueueAuto(request: RuntimeRpcRequest, signal: AbortSignal | undefined): Promise<RuntimeRpcResponse> {
+		const preflight: AutoRunPreflight =
+			this.#embedded instanceof EmbeddedRuntimeEndpoint
+				? this.#embedded.preflightRunRequest(request)
+				: { request: snapshotRunRequest(request), ready: Promise.resolve() };
+		// Preflight starts before FIFO dispatch. Observe it immediately so a later
+		// invalid item cannot become an unhandled rejection while a slow head
+		// blocks the drain, or after abort/close removes it from the queue.
+		void preflight.ready.catch(() => undefined);
+		const pending = Promise.withResolvers<RuntimeRpcResponse>();
+		const queued: QueuedAutoRun = {
+			preflight,
+			signal,
+			resolve: pending.resolve,
+			queuedAbort: undefined,
+		};
+		if (signal) {
+			queued.queuedAbort = () => {
+				const index = this.#autoQueue.indexOf(queued);
+				if (index < 0) return;
+				this.#autoQueue.splice(index, 1);
+				pending.resolve(
+					errorResponse(
+						preflight.request.id,
+						new RuntimeRpcError("cancelled", "Runtime execution was cancelled."),
+					),
+				);
+			};
+			signal.addEventListener("abort", queued.queuedAbort, { once: true });
+		}
+		this.#autoQueue.push(queued);
+		this.#startAutoDrain();
+		return pending.promise;
+	}
+
+	#startAutoDrain(): void {
+		if (this.#autoDrain) return;
+		const settled = Promise.withResolvers<void>();
+		this.#autoDrain = settled.promise;
+		void this.#drainAutoQueue()
+			.then(settled.resolve, settled.reject)
+			.finally(() => {
+				if (this.#autoDrain === settled.promise) this.#autoDrain = undefined;
+				if (this.#autoQueue.length > 0 && !this.#closing) this.#startAutoDrain();
+			});
+	}
+
+	async #drainAutoQueue(): Promise<void> {
+		while (!this.#closing) {
+			const queued = this.#autoQueue.shift();
+			if (!queued) return;
+			if (queued.queuedAbort) queued.signal?.removeEventListener("abort", queued.queuedAbort);
+			queued.queuedAbort = undefined;
+			if (queued.signal?.aborted) {
+				queued.resolve(
+					errorResponse(
+						queued.preflight.request.id,
+						new RuntimeRpcError("cancelled", "Runtime execution was cancelled."),
+					),
+				);
+				continue;
+			}
+			try {
+				await queued.preflight.ready;
+			} catch (error) {
+				queued.resolve(errorResponse(queued.preflight.request.id, toRuntimeRpcError(error)));
+				continue;
+			}
+			if (queued.signal?.aborted) {
+				queued.resolve(
+					errorResponse(
+						queued.preflight.request.id,
+						new RuntimeRpcError("cancelled", "Runtime execution was cancelled."),
+					),
+				);
+				continue;
+			}
+			if (this.#closing) {
+				queued.resolve(
+					errorResponse(
+						queued.preflight.request.id,
+						new RuntimeRpcError("internal", "Runtime endpoint is closed."),
+					),
+				);
+				continue;
+			}
+			let embeddedStatus: RuntimeStatusResult;
+			try {
+				embeddedStatus = await this.#endpointStatus(this.#embedded, queued.preflight.request.id);
+			} catch (error) {
+				queued.resolve(errorResponse(queued.preflight.request.id, toRuntimeRpcError(error)));
+				continue;
+			}
+			if (this.#closing) {
+				queued.resolve(
+					errorResponse(
+						queued.preflight.request.id,
+						new RuntimeRpcError("internal", "Runtime endpoint is closed."),
+					),
+				);
+				continue;
+			}
+			const endpoint =
+				embeddedStatus.available || embeddedStatus.embeddedLibraryPath !== undefined
+					? this.#embedded
+					: this.#process;
+			void endpoint.request(queued.preflight.request, queued.signal).then(queued.resolve, error => {
+				queued.resolve(errorResponse(queued.preflight.request.id, toRuntimeRpcError(error)));
+			});
+		}
 	}
 
 	async #statusResponse(request: RuntimeRpcRequest): Promise<RuntimeRpcResponse> {
@@ -123,7 +248,7 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 				effectiveAdapter: "embedded",
 			});
 		} catch (error) {
-			return errorResponse(request.id, runtimeError(error));
+			return errorResponse(request.id, toRuntimeRpcError(error));
 		}
 	}
 
@@ -135,6 +260,26 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 		return response.result as RuntimeStatusResult;
 	}
 }
+function snapshotRunRequest(request: RuntimeRpcRequest): RuntimeRpcRequest {
+	const params = request.params;
+	if (params === null || typeof params !== "object") return request;
+	if (Array.isArray(params)) return { ...request, params: [...params] };
+	const raw = params as Record<string, unknown>;
+	const args = raw.args;
+	const stdin = raw.stdin;
+	return {
+		...request,
+		params: {
+			code: raw.code,
+			path: raw.path,
+			language: raw.language,
+			args: Array.isArray(args) ? [...args] : args,
+			stdin: stdin instanceof Uint8Array ? new Uint8Array(stdin) : stdin,
+			timeoutMs: raw.timeoutMs,
+			cwd: raw.cwd === undefined ? process.cwd() : raw.cwd,
+		},
+	};
+}
 
 function isJvmRun(params: unknown): boolean {
 	if (params === null || typeof params !== "object" || Array.isArray(params)) return false;
@@ -144,9 +289,4 @@ function isJvmRun(params: unknown): boolean {
 	if (typeof raw.path !== "string") return false;
 	const extension = path.extname(raw.path).toLowerCase();
 	return extension === ".java" || extension === ".kt" || extension === ".kts";
-}
-
-function runtimeError(error: unknown): RuntimeRpcError {
-	if (error instanceof RuntimeRpcError) return error;
-	return new RuntimeRpcError("internal", error instanceof Error ? error.message : String(error));
 }

@@ -2,10 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	embeddedRuntimeLibraryName,
-	resolveEmbeddedRuntimeLibrary,
-} from "../src/runtime/embedded/resolve";
+import { embeddedRuntimeLibraryName, resolveEmbeddedRuntimeLibrary } from "../src/runtime/embedded/resolve";
 import type { ResolvedRuntime } from "../src/runtime/resolve";
 
 async function makeFile(root: string, relativePath: string): Promise<string> {

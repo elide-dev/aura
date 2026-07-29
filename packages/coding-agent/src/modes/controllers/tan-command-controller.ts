@@ -122,6 +122,7 @@ export class TanCommandController {
 							modelRegistry,
 							authStorage: modelRegistry.authStorage,
 							settings,
+							runtimeServiceScope: session.runtimeServiceScope,
 							hasUI: false,
 							enableMCP: false,
 							customTools,

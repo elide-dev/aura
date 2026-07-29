@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { okResponse, type RuntimeRpcRequest, type RuntimeRpcResponse } from "../src/runtime/protocol";
 import { type RuntimeEndpoint, RuntimeService } from "../src/runtime/service";
 
@@ -89,5 +92,42 @@ describe("RuntimeService", () => {
 		expect(endpoint.requests).toHaveLength(0);
 		endpoint.closeGate.resolve();
 		await close;
+	});
+
+	test("runtime status and doctor modules load when the native addon is unavailable", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aura-runtime-import-"));
+		try {
+			const preloadPath = path.join(directory, "forbid-native.ts");
+			const entryPath = path.join(directory, "entry.ts");
+			await fs.writeFile(
+				preloadPath,
+				[
+					'import { plugin } from "bun";',
+					"plugin({",
+					'  name: "forbid-pi-natives",',
+					"  setup(build) {",
+					"    build.onResolve({ filter: /@oh-my-pi\\/pi-natives/ }, () => {",
+					'      throw new Error("pi-natives must not load");',
+					"    });",
+					"  },",
+					"});",
+				].join("\n"),
+			);
+			await fs.writeFile(
+				entryPath,
+				[
+					`import ${JSON.stringify(path.resolve(import.meta.dir, "../src/cli/runtime-cli.ts"))};`,
+					`import ${JSON.stringify(path.resolve(import.meta.dir, "../src/cli/doctor-cli.ts"))};`,
+				].join("\n"),
+			);
+			const child = Bun.spawn([process.execPath, "--preload", preloadPath, entryPath], {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+			expect(exitCode, stderr).toBe(0);
+		} finally {
+			await fs.rm(directory, { recursive: true, force: true });
+		}
 	});
 });

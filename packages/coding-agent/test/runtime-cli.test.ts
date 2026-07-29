@@ -74,10 +74,8 @@ describe("aura runtime status", () => {
 			embeddedAbiVersion: 1,
 			embeddedSchemaHash: "8a6b5aa3",
 		};
-		await runRuntimeCommand(
-			{ action: "status", flags: { json: true } },
-			{ status: async () => status },
-			line => lines.push(line),
+		await runRuntimeCommand({ action: "status", flags: { json: true } }, { status: async () => status }, line =>
+			lines.push(line),
 		);
 		expect(JSON.parse(lines.join("\n"))).toEqual(status);
 	});

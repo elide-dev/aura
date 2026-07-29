@@ -10,9 +10,10 @@ import {
 	countToolCalls,
 	formatComparison,
 	measureAdapterCase,
+	packagedRuntimeBinaryForLibrary,
 	parseRuntimeBenchmarkCli,
-	runAdapterMicrobenchmarks,
 	RUNTIME_TOOLS,
+	runAdapterMicrobenchmarks,
 	summarizeAdapterSamples,
 	validateAdapterOutput,
 } from "./runtime-benchmark";
@@ -42,6 +43,45 @@ function summary(arm: "baseline" | "runtime"): ArmSummary {
 	};
 }
 describe("runtime benchmark orchestration", () => {
+	it("resolves the packaged Linux process binary next to the embedded library", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-package-linux-"));
+		cleanups.push(root);
+		const libraryPath = path.join(root, "lib", "libelide_embed.so");
+		const binaryPath = path.join(root, "bin", "elide");
+		fs.mkdirSync(path.dirname(libraryPath), { recursive: true });
+		fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
+		fs.writeFileSync(libraryPath, "library");
+		fs.writeFileSync(binaryPath, "binary");
+
+		expect(await packagedRuntimeBinaryForLibrary(libraryPath, { platform: "linux" })).toBe(binaryPath);
+	});
+
+	it("probes canonical Windows packaged binary names in precedence order", async () => {
+		const libraryPath = String.raw`C:\runtime\lib\elide_embed.dll`;
+		const expected = String.raw`C:\runtime\bin\elide.cmd`;
+		const probed: string[] = [];
+
+		const resolved = await packagedRuntimeBinaryForLibrary(libraryPath, {
+			platform: "win32",
+			isRegularFile: candidate => {
+				probed.push(candidate);
+				return Promise.resolve(candidate === expected);
+			},
+		});
+
+		expect(resolved).toBe(expected);
+		expect(probed).toEqual([String.raw`C:\runtime\bin\elide.exe`, expected]);
+	});
+
+	it("rejects a packaged embedded library without a sibling process binary", async () => {
+		await expect(
+			packagedRuntimeBinaryForLibrary("/runtime/lib/libelide_embed.so", {
+				platform: "linux",
+				isRegularFile: () => Promise.resolve(false),
+			}),
+		).rejects.toThrow("No packaged runtime binary found");
+	});
+
 	it("builds matched baseline and runtime launches for every capability task", () => {
 		const launches = buildArmLaunches({
 			model: "openai-codex/gpt-5.6-sol",
@@ -224,7 +264,9 @@ describe("runtime benchmark orchestration", () => {
 
 		expect(report).toContain("## Runtime adapter microbenchmarks");
 		expect(report).toContain("| Case | Process runtime | Embedded runtime | Speedup |");
-		expect(report).toContain("| Embedded cold open + first JS | — | 123.00 ms (single cold sample) | Not comparable |");
+		expect(report).toContain(
+			"| Embedded cold open + first JS | — | 123.00 ms (single cold sample) | Not comparable |",
+		);
 		expect(report).toContain(
 			"| Warm JS startup | 25.00 ms p50 / 38.50 ms p95 | 5.00 ms p50 / 7.70 ms p95 | 5.00× p50 / 5.00× p95 |",
 		);
@@ -249,6 +291,37 @@ describe("runtime benchmark orchestration", () => {
 			},
 			close: async () => {
 				closed.push(name);
+			},
+		});
+
+		await expect(
+			runAdapterMicrobenchmarks(
+				{
+					iterations: 30,
+					processBinaryPath: "/runtime/bin/elide",
+					embeddedLibraryPath: "/runtime/lib/libelide_embed.so",
+				},
+				{
+					createProcessService: () => runtime("process"),
+					createEmbeddedService: () => runtime("embedded"),
+					runCases: async () => {
+						throw new Error("measurement failed");
+					},
+				},
+			),
+		).rejects.toThrow("measurement failed");
+		expect(closed).toEqual(["process", "embedded"]);
+	});
+
+	it("preserves the measurement failure when service cleanup also fails", async () => {
+		const closed: string[] = [];
+		const runtime = (name: string): AdapterBenchmarkRuntime => ({
+			run: async () => {
+				throw new Error(`${name} run should not be called`);
+			},
+			close: async () => {
+				closed.push(name);
+				if (name === "embedded") throw new Error("embedded close failed");
 			},
 		});
 

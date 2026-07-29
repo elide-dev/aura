@@ -3,18 +3,17 @@ import { Message, utils } from "capnp-es";
 import {
 	decodeEmbeddedResponse,
 	EmbeddedFailureCode,
+	type EmbeddedRunInvocation,
 	encodeOpenRequest,
 	encodeRunRequest,
-	type EmbeddedRunInvocation,
 } from "../src/runtime/embedded/codec";
-import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
-import { ArgumentSuite_Args_Which, Argument_Value_Which, CliCommand } from "../src/runtime/embedded/generated/cli";
+import { Argument_Value_Which, ArgumentSuite_Args_Which, CliCommand } from "../src/runtime/embedded/generated/cli";
 import {
 	EmbeddedCallRequest,
-	EmbeddedFailureCode as WireFailureCode,
 	EmbeddedOpenRequest,
 	EmbeddedResponse,
+	EmbeddedFailureCode as WireFailureCode,
 } from "../src/runtime/embedded/generated/embed";
 import { Language } from "../src/runtime/embedded/generated/engine";
 import {
@@ -24,6 +23,7 @@ import {
 	EngineInvocation_CliInvocation_SourceLanguage,
 	EngineInvocation_Invocation_Which,
 } from "../src/runtime/embedded/generated/invocation";
+import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 
 const encoder = new TextEncoder();
@@ -108,8 +108,8 @@ describe("embedded runtime protocol codec", () => {
 		const argsUnion = wireInvocation.args.args;
 		expect(argsUnion.which()).toBe(ArgumentSuite_Args_Which.LIST);
 		const wireArgs = listValues(argsUnion.list);
-		expect(wireArgs.map((argument) => argument.key)).toEqual(["--", "--flag", "two words", ""]);
-		expect(wireArgs.map((argument) => argument.value.which())).toEqual([
+		expect(wireArgs.map(argument => argument.key)).toEqual(["--", "--flag", "two words", ""]);
+		expect(wireArgs.map(argument => argument.value.which())).toEqual([
 			Argument_Value_Which.NO_VALUE,
 			Argument_Value_Which.NO_VALUE,
 			Argument_Value_Which.NO_VALUE,
@@ -117,11 +117,15 @@ describe("embedded runtime protocol codec", () => {
 		]);
 		expect(run.scriptArgs.offset).toBe(1);
 		expect(run.scriptArgs.count).toBe(3);
-		expect(wireArgs.slice(run.scriptArgs.offset, run.scriptArgs.offset + run.scriptArgs.count).map((argument) => argument.key)).toEqual(invocation.args);
+		expect(
+			wireArgs
+				.slice(run.scriptArgs.offset, run.scriptArgs.offset + run.scriptArgs.count)
+				.map(argument => argument.key),
+		).toEqual(invocation.args);
 
 		expect(wireInvocation.meta.engineConfig.directories.workingDir.path.pathString.path).toBe("/workspace/project");
 		expect(wireInvocation.env.size).toBe(3);
-		expect(listValues(wireInvocation.env.vars).map((variable) => [variable.key, variable.value])).toEqual([
+		expect(listValues(wireInvocation.env.vars).map(variable => [variable.key, variable.value])).toEqual([
 			["ALPHA", "one"],
 			["EMPTY", ""],
 			["NO_COLOR", "1"],
@@ -145,16 +149,25 @@ describe("embedded runtime protocol codec", () => {
 		expect(run.sourceCode.which()).toBe(EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which.FILE);
 		expect(run.sourceCode.file.filepath.pathString.path).toBe("/workspace/project/scripts/main.py");
 		const allArgs = listValues(request.invocation.args.args.list);
-		expect(allArgs.slice(run.scriptArgs.offset, run.scriptArgs.offset + run.scriptArgs.count).map((argument) => argument.key)).toEqual(invocation.args);
+		expect(
+			allArgs
+				.slice(run.scriptArgs.offset, run.scriptArgs.offset + run.scriptArgs.count)
+				.map(argument => argument.key),
+		).toEqual(invocation.args);
 	});
 
 	test("decodes every response union arm", () => {
-		expect(decodeEmbeddedResponse(serializeResponse(0n, (response) => (response.opened = true)), 0n)).toEqual({
+		expect(
+			decodeEmbeddedResponse(
+				serializeResponse(0n, response => (response.opened = true)),
+				0n,
+			),
+		).toEqual({
 			type: "opened",
 			requestId: 0n,
 		});
 
-		const completed = serializeResponse(7n, (response) => {
+		const completed = serializeResponse(7n, response => {
 			const result = response._initCompleted();
 			result.exitCode = 17;
 			const stdout = encoder.encode("out ✓");
@@ -168,16 +181,26 @@ describe("embedded runtime protocol codec", () => {
 			result: { exitCode: 17, stdout: "out ✓", stderr: "err!", killed: false },
 		});
 
-		expect(decodeEmbeddedResponse(serializeResponse(8n, (response) => (response.cancelled = true)), 8n)).toEqual({
+		expect(
+			decodeEmbeddedResponse(
+				serializeResponse(8n, response => (response.cancelled = true)),
+				8n,
+			),
+		).toEqual({
 			type: "cancelled",
 			requestId: 8n,
 		});
-		expect(decodeEmbeddedResponse(serializeResponse(0n, (response) => (response.closed = true)), 0n)).toEqual({
+		expect(
+			decodeEmbeddedResponse(
+				serializeResponse(0n, response => (response.closed = true)),
+				0n,
+			),
+		).toEqual({
 			type: "closed",
 			requestId: 0n,
 		});
 
-		const failure = serializeResponse(9n, (response) => {
+		const failure = serializeResponse(9n, response => {
 			const detail = response._initFailure();
 			detail.code = WireFailureCode.BUSY;
 			detail.message = "another call is active";
@@ -191,7 +214,7 @@ describe("embedded runtime protocol codec", () => {
 	});
 
 	test("preserves nonzero guest exits as completed results", () => {
-		const bytes = serializeResponse(70n, (response) => {
+		const bytes = serializeResponse(70n, response => {
 			const result = response._initCompleted();
 			result.exitCode = 126;
 			result._initStdout(0);
@@ -207,23 +230,31 @@ describe("embedded runtime protocol codec", () => {
 	});
 
 	test("rejects incompatible protocol versions", () => {
-		const bytes = serializeResponse(0n, (response) => (response.opened = true), ProtocolVersion.V1);
+		const bytes = serializeResponse(0n, response => (response.opened = true), ProtocolVersion.V1);
 		expectInternalError(() => decodeEmbeddedResponse(bytes, 0n), "protocol version");
 	});
 
 	test("requires zero request ids for open and close responses", () => {
 		expectInternalError(
-			() => decodeEmbeddedResponse(serializeResponse(1n, (response) => (response.opened = true)), 1n),
+			() =>
+				decodeEmbeddedResponse(
+					serializeResponse(1n, response => (response.opened = true)),
+					1n,
+				),
 			"request id 0",
 		);
 		expectInternalError(
-			() => decodeEmbeddedResponse(serializeResponse(2n, (response) => (response.closed = true)), 2n),
+			() =>
+				decodeEmbeddedResponse(
+					serializeResponse(2n, response => (response.closed = true)),
+					2n,
+				),
 			"request id 0",
 		);
 	});
 
 	test("rejects call and cancellation responses whose ids do not match the submitted request", () => {
-		const completed = serializeResponse(12n, (response) => {
+		const completed = serializeResponse(12n, response => {
 			const result = response._initCompleted();
 			result.exitCode = 0;
 			result._initStdout(0);
@@ -231,13 +262,17 @@ describe("embedded runtime protocol codec", () => {
 		});
 		expectInternalError(() => decodeEmbeddedResponse(completed, 11n), "request id");
 		expectInternalError(
-			() => decodeEmbeddedResponse(serializeResponse(13n, (response) => (response.cancelled = true)), 14n),
+			() =>
+				decodeEmbeddedResponse(
+					serializeResponse(13n, response => (response.cancelled = true)),
+					14n,
+				),
 			"request id",
 		);
 	});
 
 	test("requires positive request ids for completed and cancelled responses", () => {
-		const completed = serializeResponse(0n, (response) => {
+		const completed = serializeResponse(0n, response => {
 			const result = response._initCompleted();
 			result.exitCode = 0;
 			result._initStdout(0);
@@ -245,13 +280,17 @@ describe("embedded runtime protocol codec", () => {
 		});
 		expectInternalError(() => decodeEmbeddedResponse(completed, 0n), "positive request id");
 		expectInternalError(
-			() => decodeEmbeddedResponse(serializeResponse(0n, (response) => (response.cancelled = true)), 0n),
+			() =>
+				decodeEmbeddedResponse(
+					serializeResponse(0n, response => (response.cancelled = true)),
+					0n,
+				),
 			"positive request id",
 		);
 	});
 
 	test("rejects failure responses whose ids do not match the submitted request", () => {
-		const failure = serializeResponse(30n, (response) => {
+		const failure = serializeResponse(30n, response => {
 			const detail = response._initFailure();
 			detail.code = WireFailureCode.INTERNAL;
 			detail.message = "dispatch failed";
@@ -261,12 +300,12 @@ describe("embedded runtime protocol codec", () => {
 
 	test("rejects malformed and truncated messages as internal RPC errors", () => {
 		expectInternalError(() => decodeEmbeddedResponse(Uint8Array.of(0, 1, 2), 0n), "Cap'n Proto");
-		const valid = serializeResponse(0n, (response) => (response.opened = true));
+		const valid = serializeResponse(0n, response => (response.opened = true));
 		expectInternalError(() => decodeEmbeddedResponse(valid.subarray(0, valid.length - 3), 0n), "Cap'n Proto");
 	});
 
 	test("rejects unknown response unions", () => {
-		const bytes = serializeResponse(22n, (response) => {
+		const bytes = serializeResponse(22n, response => {
 			utils.setUint16(2, 99, response);
 		});
 		expectInternalError(() => decodeEmbeddedResponse(bytes, 22n), "response union");
@@ -274,7 +313,7 @@ describe("embedded runtime protocol codec", () => {
 
 	test("rejects exit codes outside the process-compatible byte range", () => {
 		for (const exitCode of [-1, 256]) {
-			const bytes = serializeResponse(23n, (response) => {
+			const bytes = serializeResponse(23n, response => {
 				const result = response._initCompleted();
 				result.exitCode = exitCode;
 				result._initStdout(0);
@@ -285,7 +324,7 @@ describe("embedded runtime protocol codec", () => {
 	});
 
 	test("rejects invalid UTF-8 in captured output", () => {
-		const bytes = serializeResponse(24n, (response) => {
+		const bytes = serializeResponse(24n, response => {
 			const result = response._initCompleted();
 			result.exitCode = 0;
 			result._initStdout(2).copyBuffer(Uint8Array.of(0xc3, 0x28));

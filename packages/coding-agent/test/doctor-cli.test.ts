@@ -8,12 +8,15 @@ import {
 	type DoctorReport,
 	formatCheckLine,
 	formatDoctorReport,
+	gatherDoctorInput,
 	resolveToolGating,
 	runDoctorCommand,
 	SESSION_GATED_TOOL_NAMES,
 	SETTINGS_GATED_TOOL_NAMES,
 	type ToolGateSettings,
 } from "../src/cli/doctor-cli";
+import { RuntimeService } from "../src/runtime";
+import { okResponse, RUNTIME_PROTOCOL_VERSION, RuntimeRpcError } from "../src/runtime/protocol";
 import { BUILTIN_TOOL_NAMES } from "../src/tools/builtin-names";
 
 /**
@@ -70,6 +73,60 @@ function section(report: DoctorReport, name: string) {
 	if (!found) throw new Error(`missing section ${name}: ${report.sections.map(s => s.name).join(", ")}`);
 	return found;
 }
+
+describe("gatherDoctorInput runtime lifecycle", () => {
+	const runtimeSettings = {
+		enabled: true,
+		autoDownload: false,
+		path: "/runtime/bin/elide",
+		adapter: "process",
+		embeddedPath: "",
+	} as const;
+
+	test("closes the status-only runtime service after a successful probe", async () => {
+		let closeCount = 0;
+		const service = new RuntimeService({
+			request: async request =>
+				okResponse(request.id, {
+					available: true,
+					version: "1.4.2",
+					protocolVersion: RUNTIME_PROTOCOL_VERSION,
+				}),
+			close: async () => {
+				closeCount += 1;
+			},
+		});
+
+		const input = await gatherDoctorInput({
+			createStatusRuntime: () => service,
+			readRuntimeSettings: () => runtimeSettings,
+		});
+
+		expect(input.runtime.status).toMatchObject({ available: true, version: "1.4.2" });
+		expect(closeCount).toBe(1);
+	});
+
+	test("keeps a status failure primary when cleanup also fails", async () => {
+		let closeCount = 0;
+		const service = new RuntimeService({
+			request: async () => {
+				throw new RuntimeRpcError("internal", "status probe failed");
+			},
+			close: async () => {
+				closeCount += 1;
+				throw new Error("status cleanup failed");
+			},
+		});
+
+		const input = await gatherDoctorInput({
+			createStatusRuntime: () => service,
+			readRuntimeSettings: () => runtimeSettings,
+		});
+
+		expect(input.runtime.error).toBe("status probe failed");
+		expect(closeCount).toBe(1);
+	});
+});
 
 describe("buildDoctorReport", () => {
 	test("healthy input reports every section and exits 0", () => {

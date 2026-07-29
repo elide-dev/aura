@@ -1512,6 +1512,7 @@ export async function runRootCommand(
 				authStorage,
 				modelRegistry,
 				settings: settingsInstance,
+				runtimeServiceScope: session.runtimeServiceScope,
 				enableLsp: sessionOptions.enableLsp ?? true,
 			}),
 			Math.trunc(Number(settingsInstance.get("task.agentIdleTtlMs") ?? 420_000) || 0),

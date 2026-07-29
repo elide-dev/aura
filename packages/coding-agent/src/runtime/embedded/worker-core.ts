@@ -1,14 +1,16 @@
+import * as path from "node:path";
 import { logger, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { formatDisplayPath } from "../../utils/display-path";
 import { RuntimeRpcError } from "../protocol";
-import { openEmbeddedNativeLibrary, type EmbeddedNativeLibrary } from "./abi";
-import { decodeEmbeddedResponse } from "./codec";
+import { type EmbeddedNativeLibrary, openEmbeddedNativeLibrary } from "./abi";
+import { decodeEmbeddedResponse, EmbeddedFailureCode } from "./codec";
 import {
-	EMBEDDED_DIRECT_CONTROL_WORKER_ARG,
-	EMBEDDED_DIRECT_EXECUTION_WORKER_ARG,
-	EMBEDDED_CONTROL_WORKER_ARG,
-	EMBEDDED_EXECUTION_WORKER_ARG,
 	type ControlWorkerRequest,
 	type ControlWorkerResponse,
+	EMBEDDED_CONTROL_WORKER_ARG,
+	EMBEDDED_DIRECT_CONTROL_WORKER_ARG,
+	EMBEDDED_DIRECT_EXECUTION_WORKER_ARG,
+	EMBEDDED_EXECUTION_WORKER_ARG,
 	type EmbeddedWorkerError,
 	type EmbeddedWorkerTransport,
 	type ExecutionWorkerRequest,
@@ -16,6 +18,55 @@ import {
 } from "./worker-protocol";
 
 const MAX_UINT64 = (1n << 64n) - 1n;
+
+function validRuntimeHandle(handle: bigint): boolean {
+	return handle > 0n && handle <= MAX_UINT64;
+}
+
+function validateOpenResponse(handle: bigint, bytes: Uint8Array): void {
+	const response = decodeEmbeddedResponse(bytes, 0n);
+	if (response.type === "failure") {
+		throw new RuntimeRpcError("internal", response.message || "Embedded runtime open failed.", {
+			failureCode: response.code,
+		});
+	}
+	if (response.type !== "opened") {
+		throw new RuntimeRpcError("internal", "Embedded runtime returned an invalid open response.", {
+			responseType: response.type,
+		});
+	}
+	if (!validRuntimeHandle(handle)) {
+		throw new RuntimeRpcError(
+			"internal",
+			"Embedded runtime opened response requires a valid nonzero runtime handle.",
+			{
+				handle: handle.toString(),
+			},
+		);
+	}
+}
+
+function resolvedLibraryDisplayPath(libraryPath: string): string {
+	return formatDisplayPath(path.resolve(libraryPath));
+}
+
+function loadEmbeddedNativeLibrary(
+	openLibrary: EmbeddedNativeLibraryFactory,
+	libraryPath: string,
+): EmbeddedNativeLibrary {
+	try {
+		return openLibrary(libraryPath);
+	} catch (error) {
+		if (error instanceof RuntimeRpcError) throw error;
+		logger.error("Failed to load embedded runtime library", { error, libraryPath });
+		const displayPath = resolvedLibraryDisplayPath(libraryPath);
+		throw new RuntimeRpcError(
+			"runtime-missing",
+			`Failed to load the embedded runtime library at ${displayPath}. Install a compatible Aura runtime or point runtime.embeddedPath or AURA_RUNTIME_EMBEDDED_LIB at a compatible library.`,
+			{ path: displayPath },
+		);
+	}
+}
 
 export type EmbeddedNativeLibraryFactory = (path: string) => EmbeddedNativeLibrary;
 export type EmbeddedResponseValidator = (bytes: Uint8Array, expectedRequestId: bigint) => void;
@@ -131,7 +182,7 @@ export class ExecutionWorkerCore {
 			});
 			return;
 		}
-		const library = this.#openLibrary(message.libraryPath);
+		const library = loadEmbeddedNativeLibrary(this.#openLibrary, message.libraryPath);
 		try {
 			this.#transport.send({
 				type: "loaded",
@@ -159,13 +210,17 @@ export class ExecutionWorkerCore {
 		}
 		let library = this.#library;
 		if (library && library.path !== message.libraryPath) {
-			throw new RuntimeRpcError("internal", "Embedded runtime execution worker cannot open a different loaded library.");
+			throw new RuntimeRpcError(
+				"internal",
+				"Embedded runtime execution worker cannot open a different loaded library.",
+			);
 		}
 		let openedHandle: bigint | undefined;
 		try {
-			library ??= this.#openLibrary(message.libraryPath);
+			library ??= loadEmbeddedNativeLibrary(this.#openLibrary, message.libraryPath);
 			const opened = library.open(message.request);
 			openedHandle = opened.handle;
+			validateOpenResponse(opened.handle, opened.response);
 			const response = transferBytes(opened.response);
 			this.#transport.send(
 				{
@@ -182,7 +237,7 @@ export class ExecutionWorkerCore {
 		} catch (error) {
 			this.#library = undefined;
 			this.#handle = undefined;
-			if (library && openedHandle !== undefined) {
+			if (library && openedHandle !== undefined && validRuntimeHandle(openedHandle)) {
 				try {
 					library.closeRuntime(openedHandle);
 				} catch (closeRuntimeError) {
@@ -235,7 +290,8 @@ export class ExecutionWorkerCore {
 		this.#library = undefined;
 		this.#handle = undefined;
 		if (failure !== undefined) throw failure;
-		if (!response) throw new RuntimeRpcError("internal", "Embedded runtime execution worker close returned no response.");
+		if (!response)
+			throw new RuntimeRpcError("internal", "Embedded runtime execution worker close returned no response.");
 		const transferable = transferBytes(response);
 		this.#transport.send({ type: "closed", id: message.id, response: transferable.bytes }, transferable.transfer);
 	}
@@ -249,7 +305,6 @@ export class ExecutionWorkerCore {
 		library?.closeLibrary();
 		this.#transport.send({ type: "unloaded", id: message.id });
 	}
-
 }
 
 export class ControlWorkerCore {
@@ -300,7 +355,7 @@ export class ControlWorkerCore {
 		}
 		let library: EmbeddedNativeLibrary | undefined;
 		try {
-			library = this.#openLibrary(message.libraryPath);
+			library = loadEmbeddedNativeLibrary(this.#openLibrary, message.libraryPath);
 			this.#library = library;
 			this.#handle = message.handle;
 			this.#transport.send({ type: "initialized", id: message.id, libraryPath: library.path });
@@ -392,6 +447,44 @@ export function spawnEmbeddedControlWorker(): EmbeddedWorkerHandle<ControlWorker
 	return wrapWorker(worker);
 }
 
+export type EmbeddedCancellationOutcome = { kind: "matched" } | { kind: "late" };
+
+/**
+ * Cancel across the dispatch window where the execution Worker has accepted a
+ * call but the native runtime has not registered it yet.
+ */
+export async function cancelEmbeddedRequestUntilSettled(
+	requestId: bigint,
+	cancel: () => Promise<Uint8Array>,
+	isCallSettled: () => boolean,
+	callSettlement: Promise<void>,
+): Promise<EmbeddedCancellationOutcome> {
+	while (true) {
+		if (isCallSettled()) return { kind: "late" };
+		const response = decodeEmbeddedResponse(await cancel(), requestId);
+		if (response.type === "cancelled") return { kind: "matched" };
+		if (response.type === "failure" && response.code === EmbeddedFailureCode.REQUEST_NOT_ACTIVE) {
+			if (isCallSettled()) return { kind: "late" };
+			await Promise.race([callSettlement, yieldCancellationRetry()]);
+			continue;
+		}
+		if (response.type === "failure") {
+			throw new RuntimeRpcError("internal", response.message || "Embedded runtime cancellation failed.", {
+				failureCode: response.code,
+			});
+		}
+		throw new RuntimeRpcError("internal", "Embedded runtime returned an invalid cancellation response.", {
+			responseType: response.type,
+		});
+	}
+}
+
+function yieldCancellationRetry(): Promise<void> {
+	const yielded = Promise.withResolvers<void>();
+	setTimeout(yielded.resolve, 1);
+	return yielded.promise;
+}
+
 const DEFAULT_WORKER_FACTORIES: EmbeddedWorkerFactories = {
 	createExecutionWorker: spawnEmbeddedExecutionWorker,
 	createControlWorker: spawnEmbeddedControlWorker,
@@ -456,9 +549,7 @@ export class EmbeddedWorkerHost {
 		}
 	}
 
-	async load(
-		libraryPath: string,
-	): Promise<{ libraryPath: string; abiVersion: number; schemaHash: string }> {
+	async load(libraryPath: string): Promise<{ libraryPath: string; abiVersion: number; schemaHash: string }> {
 		this.#assertAccepting();
 		const finish = this.#beginLifecycleOperation();
 		try {
@@ -495,7 +586,10 @@ export class EmbeddedWorkerHost {
 				throw new RuntimeRpcError("internal", "Embedded runtime worker host is already open.");
 			}
 			if (this.#loadedLibraryPath !== undefined && this.#loadedLibraryPath !== libraryPath) {
-				throw new RuntimeRpcError("internal", "Embedded runtime worker host cannot open a different loaded library.");
+				throw new RuntimeRpcError(
+					"internal",
+					"Embedded runtime worker host cannot open a different loaded library.",
+				);
 			}
 			const transferred = transferBytes(request);
 			const id = this.#requestId();
@@ -507,7 +601,25 @@ export class EmbeddedWorkerHost {
 				throw this.#protocolFailure("Embedded runtime execution worker returned an invalid open response.");
 			}
 			if (this.#loadedLibraryPath !== undefined && response.libraryPath !== this.#loadedLibraryPath) {
-				throw this.#protocolFailure("Embedded runtime execution worker changed the loaded library path during open.");
+				throw this.#protocolFailure(
+					"Embedded runtime execution worker changed the loaded library path during open.",
+				);
+			}
+			try {
+				validateOpenResponse(response.handle, response.response);
+			} catch (error) {
+				if (validRuntimeHandle(response.handle)) {
+					this.#loadedLibraryPath = response.libraryPath;
+					this.#handle = response.handle;
+					try {
+						await this.#closeExecutionRuntime();
+					} catch (closeError) {
+						logger.error("Failed to close embedded runtime after invalid worker open response", {
+							error: closeError,
+						});
+					}
+				}
+				throw error;
 			}
 			this.#loadedLibraryPath = response.libraryPath;
 			this.#handle = response.handle;
@@ -550,7 +662,10 @@ export class EmbeddedWorkerHost {
 		}
 		if (requestId <= 0n || requestId > MAX_UINT64) {
 			return Promise.reject(
-				new RuntimeRpcError("internal", "Embedded runtime worker call request id is outside the supported uint64 range."),
+				new RuntimeRpcError(
+					"internal",
+					"Embedded runtime worker call request id is outside the supported uint64 range.",
+				),
 			);
 		}
 		const run = (): Promise<Uint8Array> => this.#executeCall(requestId, request);
@@ -603,9 +718,13 @@ export class EmbeddedWorkerHost {
 
 	async #cancel(requestId: bigint): Promise<Uint8Array> {
 		if (requestId <= 0n || requestId > MAX_UINT64) {
-			throw new RuntimeRpcError("internal", "Embedded runtime cancellation request id is outside the supported uint64 range.");
+			throw new RuntimeRpcError(
+				"internal",
+				"Embedded runtime cancellation request id is outside the supported uint64 range.",
+			);
 		}
-		if (this.#handle === undefined) throw new RuntimeRpcError("internal", "Embedded runtime worker host is not open.");
+		if (this.#handle === undefined)
+			throw new RuntimeRpcError("internal", "Embedded runtime worker host is not open.");
 		const id = this.#requestId();
 		const response = await this.#sendControl({ type: "cancel", id, requestId });
 		if (response.type !== "cancelled") {
@@ -619,9 +738,15 @@ export class EmbeddedWorkerHost {
 		const activeRequestId = this.#activeRequestId;
 		if (activeRequestId !== undefined && !this.#failure) {
 			try {
-				await this.#cancel(activeRequestId);
+				await cancelEmbeddedRequestUntilSettled(
+					activeRequestId,
+					() => this.#cancel(activeRequestId),
+					() => this.#activeRequestId !== activeRequestId,
+					this.#callTail,
+				);
 			} catch (error) {
 				failure = error;
+				this.#workerFailed("shutdown cancellation failed", error);
 			}
 		}
 		await Promise.allSettled(this.#lifecycleOperations);
@@ -666,6 +791,15 @@ export class EmbeddedWorkerHost {
 			const response = await this.#sendExecution({ type: "close", id, handle });
 			if (response.type !== "closed") {
 				throw this.#protocolFailure("Embedded runtime execution worker returned an invalid close response.");
+			}
+			const decoded = decodeEmbeddedResponse(response.response, 0n);
+			if (decoded.type === "failure") {
+				throw new RuntimeRpcError("internal", decoded.message || "Embedded runtime close failed.", {
+					failureCode: decoded.code,
+				});
+			}
+			if (decoded.type !== "closed") {
+				throw this.#protocolFailure("Embedded runtime returned an invalid close response.");
 			}
 		} finally {
 			this.#handle = undefined;

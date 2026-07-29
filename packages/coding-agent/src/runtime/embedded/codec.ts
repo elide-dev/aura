@@ -1,19 +1,19 @@
 import { Data, Message, utils } from "capnp-es";
+import { RuntimeRpcError } from "../protocol";
 import { ProtocolVersion } from "./generated/base";
 import { CliCommand } from "./generated/cli";
 import {
 	EmbeddedCallRequest,
-	EmbeddedFailureCode as WireFailureCode,
 	EmbeddedOpenRequest,
 	EmbeddedResponse,
 	EmbeddedResponse_Which,
+	EmbeddedFailureCode as WireFailureCode,
 } from "./generated/embed";
 import { Language } from "./generated/engine";
 import {
 	EngineInvocation_CliInvocation_RunMode,
 	EngineInvocation_CliInvocation_SourceLanguage,
 } from "./generated/invocation";
-import { RuntimeRpcError } from "../protocol";
 
 export interface EmbeddedOpenConfig {
 	languages: Array<"js" | "ts" | "python">;
@@ -114,7 +114,10 @@ export function encodeRunRequest(requestId: bigint, invocation: EmbeddedRunInvoc
 	request._initStdin(invocation.stdin.byteLength).copyBuffer(invocation.stdin);
 
 	const wireInvocation = request._initInvocation();
-	const argumentsList = wireInvocation._initArgs()._initArgs()._initList(invocation.args.length + ARGUMENT_SLICE_OFFSET);
+	const argumentsList = wireInvocation
+		._initArgs()
+		._initArgs()
+		._initList(invocation.args.length + ARGUMENT_SLICE_OFFSET);
 	const delimiter = argumentsList.get(0);
 	delimiter.key = "--";
 	delimiter.value.noValue = true;
@@ -235,7 +238,10 @@ export function decodeEmbeddedResponse(bytes: Uint8Array, expectedRequestId: big
 				};
 			}
 			default:
-				throw new RuntimeRpcError("internal", `Unknown embedded runtime response union discriminant: ${response.which()}.`);
+				throw new RuntimeRpcError(
+					"internal",
+					`Unknown embedded runtime response union discriminant: ${response.which()}.`,
+				);
 		}
 	} catch (error) {
 		if (error instanceof RuntimeRpcError) throw error;

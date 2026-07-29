@@ -5,6 +5,7 @@ import type { Settings } from "../config/settings";
 import { MCPManager } from "../mcp/manager";
 import type { PersistedSubagentReviverFactory } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { RuntimeServiceScope } from "../runtime";
 import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
@@ -22,6 +23,7 @@ export interface PersistedSubagentReviveContext {
 	authStorage: AuthStorage;
 	modelRegistry: ModelRegistry;
 	settings: Settings;
+	runtimeServiceScope?: RuntimeServiceScope;
 	/** LSP policy of the top-level session; revived subagents inherit it rather than defaulting on. */
 	enableLsp: boolean;
 }
@@ -92,6 +94,7 @@ export function createPersistedSubagentReviverFactory(
 					ctx.settings,
 					init.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
 				),
+				runtimeServiceScope: ctx.runtimeServiceScope,
 				sessionManager: reopened,
 				agentId: ref.id,
 				agentDisplayName: ref.displayName,

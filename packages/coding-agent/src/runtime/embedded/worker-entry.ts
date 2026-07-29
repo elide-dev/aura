@@ -1,12 +1,12 @@
 import { parentPort } from "node:worker_threads";
 import { consumeWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
+import { ExecutionWorkerCore } from "./worker-core";
 import {
 	EMBEDDED_DIRECT_EXECUTION_WORKER_ARG,
 	type EmbeddedWorkerTransport,
 	type ExecutionWorkerRequest,
 	type ExecutionWorkerResponse,
 } from "./worker-protocol";
-import { ExecutionWorkerCore } from "./worker-core";
 
 export function startEmbeddedExecutionWorker(): void {
 	if (!parentPort) throw new Error("embedded-runtime-execution-worker: missing parentPort");

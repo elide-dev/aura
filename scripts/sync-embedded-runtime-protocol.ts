@@ -75,7 +75,7 @@ function importsIn(content: string): string[] {
 	const imports: string[] = [];
 	const uncommented = content
 		.split(/\r?\n/)
-		.map((line) => {
+		.map(line => {
 			const comment = line.indexOf("#");
 			return comment === -1 ? line : line.slice(0, comment);
 		})
@@ -154,12 +154,7 @@ async function findPackageRoot(entryPath: string, packageName: string): Promise<
 		const manifestPath = path.join(candidate, "package.json");
 		if (await Bun.file(manifestPath).exists()) {
 			const manifest: unknown = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-			if (
-				typeof manifest === "object" &&
-				manifest !== null &&
-				"name" in manifest &&
-				manifest.name === packageName
-			) {
+			if (typeof manifest === "object" && manifest !== null && "name" in manifest && manifest.name === packageName) {
 				return candidate;
 			}
 		}
@@ -206,7 +201,11 @@ async function prepareCompilerWorkspace(compilerRoot: string): Promise<void> {
 	]);
 	const binRoot = path.join(nodeModules, ".bin");
 	await fs.mkdir(binRoot, { recursive: true });
-	await fs.symlink(path.join("..", "capnp-es", "dist", "compiler", "capnpc-js.mjs"), path.join(binRoot, "capnp-es"), "file");
+	await fs.symlink(
+		path.join("..", "capnp-es", "dist", "compiler", "capnpc-js.mjs"),
+		path.join(binRoot, "capnp-es"),
+		"file",
+	);
 }
 
 async function collectFiles(root: string): Promise<string[]> {
@@ -252,7 +251,7 @@ async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: s
 		"--bun",
 		"--no-install",
 		"capnp-es",
-		...closure.files.map((file) => file.sourcePath),
+		...closure.files.map(file => file.sourcePath),
 		`-I${path.join(closure.repositoryRoot, "third_party")}`,
 		`-ots:${rawOutputRoot}`,
 		`--src-prefix=${closure.protocolRoot}`,
@@ -270,8 +269,10 @@ async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: s
 	const canonicalRepositoryRoot = await fs.realpath(closure.repositoryRoot);
 	const sourceRoots = [closure.repositoryRoot, canonicalRepositoryRoot];
 	const generatedFiles = await collectFiles(rawOutputRoot);
-	const expectedFiles = closure.files.map((file) => file.path.slice(`${PROTOCOL_ROOT}/`.length).replace(/\.capnp$/, ".ts"));
-	if (generatedFiles.some((path) => !path.endsWith(".ts"))) {
+	const expectedFiles = closure.files.map(file =>
+		file.path.slice(`${PROTOCOL_ROOT}/`.length).replace(/\.capnp$/, ".ts"),
+	);
+	if (generatedFiles.some(path => !path.endsWith(".ts"))) {
 		throw new Error(`capnp-es generated an unexpected non-TypeScript file: ${generatedFiles.join(", ")}`);
 	}
 	if (generatedFiles.join("\n") !== expectedFiles.join("\n")) {
@@ -315,7 +316,9 @@ async function checkGeneratedFiles(files: ReadonlyMap<string, string>, schema: s
 	const generatedFiles = [...files.keys()];
 	const drift: string[] = [];
 	if (checkedInFiles.join("\n") !== generatedFiles.join("\n")) {
-		drift.push(`file set differs (checked in: ${checkedInFiles.join(", ") || "none"}; generated: ${generatedFiles.join(", ")})`);
+		drift.push(
+			`file set differs (checked in: ${checkedInFiles.join(", ") || "none"}; generated: ${generatedFiles.join(", ")})`,
+		);
 	}
 	for (const [relativePath, content] of files) {
 		const checkedInPath = path.join(GENERATED_ROOT, relativePath);

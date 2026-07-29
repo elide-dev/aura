@@ -113,10 +113,12 @@ import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
-	disposeCachedRuntimeService,
+	acquireRuntimeServiceLease,
+	disableCachedRuntimeService,
 	getOrCreateRuntimeService,
+	type RuntimeServiceScope,
+	type RuntimeSettingsValues,
 	resolveRuntimeEndpointOptions,
-	type RuntimeService,
 } from "./runtime";
 import {
 	collectEnvSecrets,
@@ -524,6 +526,11 @@ export interface CreateAgentSessionOptions {
 	 * through this field; accept it so their SDK calls keep the configured settings.
 	 */
 	settingsManager?: Settings | Promise<Settings>;
+	/**
+	 * Root-owned runtime cache/config scope inherited by every descendant.
+	 * @internal
+	 */
+	runtimeServiceScope?: RuntimeServiceScope;
 
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
@@ -874,9 +881,7 @@ export interface StartupFailureCleanupStep {
 }
 
 /** Run every independent pre-session cleanup step without letting one failure suppress the rest. */
-export async function runStartupFailureCleanupSteps(
-	steps: readonly StartupFailureCleanupStep[],
-): Promise<void> {
+export async function runStartupFailureCleanupSteps(steps: readonly StartupFailureCleanupStep[]): Promise<void> {
 	for (const step of steps) {
 		try {
 			await step.cleanup();
@@ -888,7 +893,6 @@ export async function runStartupFailureCleanupSteps(
 		}
 	}
 }
-
 
 function registerSshCleanup(): void {
 	if (sshCleanupRegistered) return;
@@ -1234,6 +1238,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const settings = await (options.settings ??
 		options.settingsManager ??
 		logger.time("settings", Settings.init, { cwd, agentDir }));
+	const runtimeServiceScope: RuntimeServiceScope = options.runtimeServiceScope ?? {
+		readSettings: () => readRuntimeSettingsValues(settings),
+	};
 	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
@@ -1580,7 +1587,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let session!: AgentSession;
 	let hasSession = false;
 	let hasRegistered = false;
-	let startupRuntimeService: RuntimeService | undefined;
 	const restrictToolNames = options.restrictToolNames === true;
 	const enableLsp = !restrictToolNames && (options.enableLsp ?? true);
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
@@ -1603,11 +1609,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
 
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
-	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
+	const ownsProcessSingletons = asyncJobManager !== undefined;
+	// Runtime ownership is scoped to the Settings instance rather than the
+	// process singleton. Every top-level session leases that scope; subagents
+	// share their parent's service without acquiring or releasing a lease.
+	const ownsRuntimeLease = !options.parentTaskPrefix && (options.taskDepth ?? 0) === 0;
+	const releaseRuntimeServiceLease = ownsRuntimeLease ? acquireRuntimeServiceLease(runtimeServiceScope) : undefined;
+	// An anonymous top-level helper created while the root session is live (for example,
+	// the agent-creation architect) must neither replace Main in the registry nor own
+	// process-global AsyncJobManager teardown.
+	const resolvedAgentId =
+		options.agentId ??
+		options.parentTaskPrefix ??
+		(ownsProcessSingletons ? MAIN_AGENT_ID : `Auxiliary-${Snowflake.next()}`);
 	const resolvedAgentDisplayName =
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const agentKind = (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? ("sub" as const) : ("main" as const);
-	const ownsRuntimeService = agentKind === "main" && resolvedAgentId === MAIN_AGENT_ID;
 	let registeredAgentRef: AgentRef | undefined;
 	/**
 	 * Forget the agent ref on teardown — unless the agent is being parked (or is
@@ -1685,28 +1702,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
-			// Settings are read per call and the service is memoized on them, so an edit
-			// to runtime.* yields a fresh service on the next call; an explicit
-			// runtime.path suppresses auto-download downstream.
+			// Settings are read per call and the service is memoized within this
+			// Settings identity. Edits replace only this scope; disabling evicts
+			// its current service before asynchronously retiring it.
 			getRuntimeService: () => {
-				const opts = resolveRuntimeEndpointOptions({
-					enabled: settings.get("runtime.enabled"),
-					autoDownload: settings.get("runtime.autoDownload"),
-					path: settings.get("runtime.path") ?? "",
-					adapter: settings.get("runtime.adapter"),
-					embeddedPath: settings.get("runtime.embeddedPath") ?? "",
-				});
-				return opts
-					? getOrCreateRuntimeService(
-							opts,
-							ownsRuntimeService && !hasSession
-								? created => {
-										startupRuntimeService = created;
-									}
-								: undefined,
-						)
-					: undefined;
+				const opts = resolveRuntimeEndpointOptions(runtimeServiceScope.readSettings());
+				if (!opts) {
+					void disableCachedRuntimeService(runtimeServiceScope);
+					return undefined;
+				}
+				return getOrCreateRuntimeService(opts, undefined, runtimeServiceScope);
 			},
+			runtimeServiceScope,
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -3219,7 +3226,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					}
 				: undefined,
 			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
-			disposeRuntimeService: ownsRuntimeService ? () => disposeCachedRuntimeService() : undefined,
+			disposeRuntimeService: releaseRuntimeServiceLease,
+			runtimeServiceScope,
 			ttsrManager,
 			obfuscator,
 			agentId: resolvedAgentId,
@@ -3525,10 +3533,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
 				const cleanupSteps: StartupFailureCleanupStep[] = [];
-				if (startupRuntimeService) {
+				if (releaseRuntimeServiceLease) {
 					cleanupSteps.push({
 						label: "runtime",
-						cleanup: () => disposeCachedRuntimeService(startupRuntimeService),
+						cleanup: releaseRuntimeServiceLease,
 					});
 				}
 				if (asyncJobManager) {
@@ -3587,4 +3595,14 @@ function preconnectModelHost(baseUrl: string | undefined): void {
 	} catch {
 		// Best effort.
 	}
+}
+
+export function readRuntimeSettingsValues(settings: Settings): RuntimeSettingsValues {
+	return {
+		enabled: settings.get("runtime.enabled"),
+		autoDownload: settings.get("runtime.autoDownload"),
+		path: settings.get("runtime.path") ?? "",
+		adapter: settings.get("runtime.adapter"),
+		embeddedPath: settings.get("runtime.embeddedPath") ?? "",
+	};
 }

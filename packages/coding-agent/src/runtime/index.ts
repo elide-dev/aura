@@ -1,30 +1,39 @@
 export { ELIDE_VERSION, MINIMUM_RUNTIME_VERSION } from "./dist";
 export {
 	embeddedRuntimeLibraryName,
-	resolveEmbeddedRuntimeLibrary,
 	type ResolvedEmbeddedRuntimeLibrary,
 	type ResolveEmbeddedRuntimeLibraryOptions,
+	resolveEmbeddedRuntimeLibrary,
 } from "./embedded/resolve";
 export { deriveJvmMainClass, JVM_BYTECODE_RELEASE } from "./jvm";
 export * from "./protocol";
 export { provisionRuntime } from "./provision";
 export { managedRuntimeRoot, managedVersionDir, resolveRuntimeBinary } from "./resolve";
 export * from "./service";
-export { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
 export * from "./transport/embedded";
+export { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./transport/local";
 export * from "./transport/selected";
 
 import { logger } from "@oh-my-pi/pi-utils";
-import type { RuntimeAdapter } from "./protocol";
+import { type RuntimeAdapter, RuntimeRpcError } from "./protocol";
 import { RuntimeService } from "./service";
-import { SelectedRuntimeEndpoint, type SelectedEndpointOptions } from "./transport/selected";
+import { type SelectedEndpointOptions, SelectedRuntimeEndpoint } from "./transport/selected";
 
 interface CachedRuntimeService {
 	key: string;
 	service: RuntimeService;
 }
 
-let cached: CachedRuntimeService | undefined;
+interface RuntimeServiceScopeState {
+	cached: CachedRuntimeService | undefined;
+	leases: number;
+	retirements: Map<RuntimeService, Promise<void>>;
+	accepting: boolean;
+}
+
+const DEFAULT_RUNTIME_SERVICE_SCOPE = {};
+const runtimeServiceScopes = new WeakMap<object, RuntimeServiceScopeState>();
+const liveRuntimeServiceScopes = new Set<object>();
 
 /** Stable cache key over every setting that changes endpoint selection or resolution. */
 function serviceCacheKey(options: SelectedEndpointOptions = {}): string {
@@ -40,33 +49,153 @@ function serviceCacheKey(options: SelectedEndpointOptions = {}): string {
  * Lazily build the selected runtime service. A settings change publishes the
  * replacement first, then retires the old endpoint without blocking its caller.
  */
+/** Root-owned runtime cache identity and live configuration source shared by its descendants. */
+export interface RuntimeServiceScope {
+	readSettings(): RuntimeSettingsValues;
+}
+
 export function getOrCreateRuntimeService(
 	options: SelectedEndpointOptions = {},
 	onCreate?: (service: RuntimeService) => void,
+	scope: object = DEFAULT_RUNTIME_SERVICE_SCOPE,
 ): RuntimeService {
+	const state = runtimeServiceScopeState(scope);
+	assertRuntimeServiceScopeActive(scope, state);
 	const key = serviceCacheKey(options);
-	if (cached?.key === key) return cached.service;
-	const retired = cached?.service;
+	if (state.cached?.key === key) return state.cached.service;
+	const retired = state.cached?.service;
 	const service = new RuntimeService(new SelectedRuntimeEndpoint(options));
-	cached = { key, service };
+	state.cached = { key, service };
 	onCreate?.(service);
-	if (retired) {
-		void retired.close().catch(error => {
-			logger.warn("Failed to close retired runtime service after settings change", { error: String(error) });
-		});
-	}
+	if (retired) void retireRuntimeService(scope, state, retired, "after settings change");
 	return service;
+}
+
+/**
+ * Register one top-level session against a settings scope. The returned release
+ * is idempotent and closes that scope only after its final lease is released.
+ */
+export function acquireRuntimeServiceLease(scope: object = DEFAULT_RUNTIME_SERVICE_SCOPE): () => Promise<void> {
+	const state = runtimeServiceScopeState(scope);
+	if (!state.accepting) throw new RuntimeRpcError("internal", "Runtime service scope is closed.");
+	state.leases += 1;
+	let released = false;
+	return async () => {
+		if (released) return;
+		released = true;
+		state.leases -= 1;
+		if (state.leases !== 0) return;
+		state.accepting = false;
+		await drainRuntimeServiceScope(scope, state, false);
+	};
+}
+
+/** Atomically evict and asynchronously retire the service for one settings scope. */
+export function disableCachedRuntimeService(scope: object = DEFAULT_RUNTIME_SERVICE_SCOPE): Promise<void> {
+	const state = runtimeServiceScopes.get(scope);
+	if (state) assertRuntimeServiceScopeActive(scope, state);
+	const target = state?.cached?.service;
+	if (!state || !target) return Promise.resolve();
+	state.cached = undefined;
+	return retireRuntimeService(scope, state, target, "after runtime was disabled");
 }
 
 /**
  * Atomically evict and then close a cached service. Supplying a retired service
  * closes only that instance and cannot evict a newer replacement.
  */
-export async function disposeCachedRuntimeService(service?: RuntimeService): Promise<void> {
-	const target = service ?? cached?.service;
-	if (!target) return;
-	if (cached?.service === target) cached = undefined;
-	await target.close();
+export async function disposeCachedRuntimeService(
+	service?: RuntimeService,
+	scope: object = DEFAULT_RUNTIME_SERVICE_SCOPE,
+): Promise<void> {
+	if (service) {
+		for (const candidateScope of liveRuntimeServiceScopes) {
+			const state = runtimeServiceScopes.get(candidateScope);
+			if (!state) continue;
+			const pending = state.retirements.get(service);
+			if (pending) {
+				await pending;
+				return;
+			}
+			if (state.cached?.service !== service) continue;
+			state.cached = undefined;
+			await retireRuntimeService(candidateScope, state, service, "during explicit disposal");
+			return;
+		}
+		await service.close();
+		return;
+	}
+
+	const state = runtimeServiceScopes.get(scope);
+	if (!state) return;
+	await drainRuntimeServiceScope(scope, state, true);
+}
+
+function assertRuntimeServiceScopeActive(scope: object, state: RuntimeServiceScopeState): void {
+	if (!state.accepting || (scope !== DEFAULT_RUNTIME_SERVICE_SCOPE && state.leases === 0)) {
+		throw new RuntimeRpcError("internal", "Runtime service scope is closed.");
+	}
+}
+
+function runtimeServiceScopeState(scope: object): RuntimeServiceScopeState {
+	const existing = runtimeServiceScopes.get(scope);
+	if (existing) return existing;
+	const created: RuntimeServiceScopeState = {
+		cached: undefined,
+		leases: 0,
+		retirements: new Map(),
+		accepting: true,
+	};
+	runtimeServiceScopes.set(scope, created);
+	liveRuntimeServiceScopes.add(scope);
+	return created;
+}
+
+function forgetRuntimeServiceScope(scope: object, state: RuntimeServiceScopeState): void {
+	if (state.cached || state.leases !== 0 || state.retirements.size !== 0) return;
+	if (runtimeServiceScopes.get(scope) !== state) return;
+	if (state.accepting) runtimeServiceScopes.delete(scope);
+	liveRuntimeServiceScopes.delete(scope);
+}
+
+function retireRuntimeService(
+	scope: object,
+	state: RuntimeServiceScopeState,
+	service: RuntimeService,
+	context: string,
+): Promise<void> {
+	const existing = state.retirements.get(service);
+	if (existing) return existing;
+	const closing = service.close();
+	state.retirements.set(service, closing);
+	void closing.catch(error => {
+		logger.warn(`Failed to close retired runtime service ${context}`, { error: String(error) });
+	});
+	void closing
+		.finally(() => {
+			if (state.retirements.get(service) === closing) state.retirements.delete(service);
+			forgetRuntimeServiceScope(scope, state);
+		})
+		.catch(() => undefined);
+	return closing;
+}
+
+async function drainRuntimeServiceScope(scope: object, state: RuntimeServiceScopeState, force: boolean): Promise<void> {
+	const failures: unknown[] = [];
+	while (force || state.leases === 0) {
+		const current = state.cached?.service;
+		state.cached = undefined;
+		if (current) retireRuntimeService(scope, state, current, "during scope disposal");
+		const pending = [...state.retirements.values()];
+		if (pending.length === 0) break;
+		const results = await Promise.allSettled(pending);
+		for (const result of results) {
+			if (result.status === "rejected") failures.push(result.reason);
+		}
+		if (!force && state.leases !== 0) break;
+	}
+	forgetRuntimeServiceScope(scope, state);
+	if (failures.length !== 0) throw new AggregateError(failures, "Failed to close runtime service scope.");
 }
 
 /** Runtime settings as read from the `runtime.*` settings group. */
@@ -97,7 +226,16 @@ export function resolveRuntimeEndpointOptions(values: RuntimeSettingsValues): Se
 	};
 }
 
-/** Drop the memoized test singleton without waiting for endpoint teardown. */
+/** Drop every memoized test scope and begin all endpoint teardown without waiting. */
 export function resetRuntimeServiceForTests(): void {
-	cached = undefined;
+	for (const scope of liveRuntimeServiceScopes) {
+		const state = runtimeServiceScopes.get(scope);
+		if (!state) continue;
+		const service = state.cached?.service;
+		state.cached = undefined;
+		if (service) void retireRuntimeService(scope, state, service, "during test reset");
+		runtimeServiceScopes.delete(scope);
+	}
+	liveRuntimeServiceScopes.clear();
+	runtimeServiceScopes.delete(DEFAULT_RUNTIME_SERVICE_SCOPE);
 }

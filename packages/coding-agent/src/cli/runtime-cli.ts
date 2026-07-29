@@ -7,12 +7,12 @@ import {
 	RUNTIME_PROTOCOL_VERSION,
 	RuntimeService,
 	type RuntimeSettingsValues,
+	resolveRuntimeEndpointOptions,
 	type SelectedEndpointOptions,
 	SelectedRuntimeEndpoint,
-	resolveRuntimeEndpointOptions,
 } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
-import { formatDisplayPath } from "../tools/render-utils";
+import { formatDisplayPath } from "../utils/display-path";
 
 export interface RuntimeCommandArgs {
 	action: "status";
@@ -58,12 +58,13 @@ export function resolveStatusEndpointOptions(values: RuntimeSettingsValues): Sel
  * probing with `autoDownload: false` would evict the entry the innate tools are
  * using and make them rebuild. Constructing directly keeps the probe invisible.
  */
-export function createStatusRuntime(values: RuntimeSettingsValues = readRuntimeSettings()): StatusRuntime {
+export function createStatusRuntime(
+	values: RuntimeSettingsValues = readRuntimeSettings(),
+): RuntimeService | typeof RUNTIME_DISABLED {
 	const opts = resolveStatusEndpointOptions(values);
 	if (opts === undefined) return RUNTIME_DISABLED;
 	return new RuntimeService(new SelectedRuntimeEndpoint(opts));
 }
-
 
 function formatRuntimeSelection(status: RuntimeStatusResult): string[] {
 	const lines: string[] = [];
@@ -87,11 +88,7 @@ function formatRuntimeSelection(status: RuntimeStatusResult): string[] {
 export function formatRuntimeStatus(status: RuntimeStatusResult): string {
 	const selection = formatRuntimeSelection(status);
 	if (!status.available) {
-		return [
-			"runtime: unavailable",
-			...selection,
-			status.guidance ? `  ${status.guidance}` : undefined,
-		]
+		return ["runtime: unavailable", ...selection, status.guidance ? `  ${status.guidance}` : undefined]
 			.filter((line): line is string => line !== undefined)
 			.join("\n");
 	}

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Message } from "capnp-es";
 import {
 	createEmbeddedNativeLibrary,
 	type EmbeddedNativeBindings,
@@ -6,6 +7,8 @@ import {
 	type EmbeddedNativeCallResult,
 	MAX_EMBEDDED_RESPONSE_BYTES,
 } from "../src/runtime/embedded/abi";
+import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
+import { EmbeddedResponse, EmbeddedFailureCode as WireFailureCode } from "../src/runtime/embedded/generated/embed";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 
@@ -101,6 +104,17 @@ function expectInternalError(action: () => unknown, message: string): void {
 	expect(thrown.message).toContain(message);
 }
 
+function serializedOpenFailure(message: string): Uint8Array {
+	const envelope = new Message();
+	const response = envelope.initRoot(EmbeddedResponse);
+	response.protocolVersion = ProtocolVersion.V2;
+	response.requestId = 0n;
+	const failure = response._initFailure();
+	failure.code = WireFailureCode.UNSUPPORTED_LANGUAGE;
+	failure.message = message;
+	return new Uint8Array(envelope.toArrayBuffer());
+}
+
 describe("embedded native ABI ownership", () => {
 	test("rejects ABI and schema mismatches before a runtime can open", () => {
 		for (const mismatch of ["abi", "schema"] as const) {
@@ -142,6 +156,22 @@ describe("embedded native ABI ownership", () => {
 			"close:copy",
 			"close:free",
 		]);
+	});
+
+	test("copies and frees a status-zero serialized open failure with a zero handle", () => {
+		const bindings = new FakeBindings();
+		const response = serializedOpenFailure("configured languages are unavailable");
+		bindings.openResult = {
+			status: 0,
+			handle: 0n,
+			response: bindings.buffer("open-failure", [...response]),
+		};
+		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);
+
+		const opened = library.open(new Uint8Array([1]));
+
+		expect(opened).toEqual({ handle: 0n, response });
+		expect(bindings.events).toEqual(["native:open", "open-failure:copy", "open-failure:free"]);
 	});
 
 	test("frees failed and oversized responses without copying or retrying", () => {

@@ -277,6 +277,12 @@ export class RuntimeRpcError extends Error {
 	}
 }
 
+/** Preserve protocol errors and normalize unknown transport failures at the endpoint boundary. */
+export function toRuntimeRpcError(error: unknown): RuntimeRpcError {
+	if (error instanceof RuntimeRpcError) return error;
+	return new RuntimeRpcError("internal", error instanceof Error ? error.message : String(error));
+}
+
 export interface RuntimeRpcRequest {
 	jsonrpc: "2.0";
 	id: number;

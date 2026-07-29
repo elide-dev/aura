@@ -1,19 +1,17 @@
 import { describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Message } from "capnp-es";
-import {
-	type EmbeddedNativeLibrary,
-} from "../src/runtime/embedded/abi";
-import {
-	type EmbeddedExecutionResult,
-} from "../src/runtime/embedded/codec";
+import type { EmbeddedNativeLibrary } from "../src/runtime/embedded/abi";
+import type { EmbeddedExecutionResult } from "../src/runtime/embedded/codec";
 import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
 import {
 	EmbeddedCallRequest,
-	EmbeddedFailureCode as WireFailureCode,
 	EmbeddedResponse,
+	EmbeddedFailureCode as WireFailureCode,
 } from "../src/runtime/embedded/generated/embed";
+import { EngineInvocation_CliInvocation_SourceLanguage } from "../src/runtime/embedded/generated/invocation";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import { ExecutionWorkerCore } from "../src/runtime/embedded/worker-core";
 import type {
@@ -31,10 +29,7 @@ import {
 	unwrapResponse,
 } from "../src/runtime/protocol";
 import type { RuntimeEndpoint } from "../src/runtime/service";
-import {
-	EmbeddedRuntimeEndpoint,
-	type EmbeddedRuntimeWorkerHost,
-} from "../src/runtime/transport/embedded";
+import { EmbeddedRuntimeEndpoint, type EmbeddedRuntimeWorkerHost } from "../src/runtime/transport/embedded";
 import { SelectedRuntimeEndpoint } from "../src/runtime/transport/selected";
 
 const encoder = new TextEncoder();
@@ -58,10 +53,7 @@ function openedResponse(): Uint8Array {
 	});
 }
 
-function completedResponse(
-	requestId: bigint,
-	result: Partial<EmbeddedExecutionResult> = {},
-): Uint8Array {
+function completedResponse(requestId: bigint, result: Partial<EmbeddedExecutionResult> = {}): Uint8Array {
 	return serializeResponse(requestId, response => {
 		const completed = response._initCompleted();
 		completed.exitCode = result.exitCode ?? 0;
@@ -87,7 +79,9 @@ function failureResponse(requestId: bigint, code: WireFailureCode, message: stri
 	});
 }
 
-function responseError(response: RuntimeRpcResponse): RuntimeRpcResponse & { error: { code: string; message: string } } {
+function responseError(
+	response: RuntimeRpcResponse,
+): RuntimeRpcResponse & { error: { code: string; message: string } } {
 	if (!("error" in response)) throw new Error("expected runtime RPC error response");
 	return response;
 }
@@ -105,6 +99,7 @@ class FakeEmbeddedHost implements EmbeddedRuntimeWorkerHost {
 	readonly callRequests: Uint8Array[] = [];
 	readonly cancelIds: bigint[] = [];
 	readonly #callWaiters: Array<{ count: number; resolve: () => void }> = [];
+	readonly #cancelWaiters: Array<{ count: number; resolve: () => void }> = [];
 	loadCount = 0;
 	openCount = 0;
 	abiVersion = EMBEDDED_RUNTIME_ABI_VERSION;
@@ -147,6 +142,13 @@ class FakeEmbeddedHost implements EmbeddedRuntimeWorkerHost {
 		return waiter.promise;
 	}
 
+	waitForCancels(count: number): Promise<void> {
+		if (this.cancelIds.length >= count) return Promise.resolve();
+		const waiter = Promise.withResolvers<void>();
+		this.#cancelWaiters.push({ count, resolve: waiter.resolve });
+		return waiter.promise;
+	}
+
 	call(requestId: bigint, request: Uint8Array): Promise<Uint8Array> {
 		this.events.push(`call:${requestId}`);
 		this.callIds.push(requestId);
@@ -161,6 +163,10 @@ class FakeEmbeddedHost implements EmbeddedRuntimeWorkerHost {
 	cancel(requestId: bigint): Promise<Uint8Array> {
 		this.events.push(`cancel:${requestId}`);
 		this.cancelIds.push(requestId);
+		for (const waiter of this.#cancelWaiters.splice(0)) {
+			if (this.cancelIds.length >= waiter.count) waiter.resolve();
+			else this.#cancelWaiters.push(waiter);
+		}
 		return this.cancelImpl(requestId);
 	}
 
@@ -198,7 +204,9 @@ class StubEndpoint implements RuntimeEndpoint {
 	async request(request: RuntimeRpcRequest): Promise<RuntimeRpcResponse> {
 		this.requests.push(request);
 		if (request.method === "runtime/status") {
-			return this.statusError ? errorResponse(request.id, this.statusError) : okResponse(request.id, this.statusResult);
+			return this.statusError
+				? errorResponse(request.id, this.statusError)
+				: okResponse(request.id, this.statusResult);
 		}
 		if (this.runError) return errorResponse(request.id, this.runError);
 		return okResponse(request.id, {
@@ -265,17 +273,83 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			params: unknown;
 			expected: "process" | "embedded";
 		}> = [
-			{ name: "process JavaScript", adapter: "process", embeddedStatus: validEmbeddedStatus, params: { code: "1", language: "js" }, expected: "process" },
-			{ name: "process JVM", adapter: "process", embeddedStatus: validEmbeddedStatus, params: { code: "class A {}", language: "java" }, expected: "process" },
-			{ name: "embedded TypeScript", adapter: "embedded", embeddedStatus: validEmbeddedStatus, params: { code: "1", language: "ts" }, expected: "embedded" },
-			{ name: "embedded Python", adapter: "embedded", embeddedStatus: validEmbeddedStatus, params: { code: "print(1)", language: "python" }, expected: "embedded" },
-			{ name: "embedded JVM", adapter: "embedded", embeddedStatus: validEmbeddedStatus, params: { code: "fun main() {}", language: "kotlin" }, expected: "process" },
-			{ name: "auto without library", adapter: "auto", embeddedStatus: noEmbeddedStatus, params: { code: "1", language: "js" }, expected: "process" },
-			{ name: "auto valid library", adapter: "auto", embeddedStatus: validEmbeddedStatus, params: { code: "1", language: "js" }, expected: "embedded" },
-			{ name: "auto JVM with valid library", adapter: "auto", embeddedStatus: validEmbeddedStatus, params: { code: "class A {}", language: "java" }, expected: "process" },
-			{ name: "embedded inferred Java file", adapter: "embedded", embeddedStatus: validEmbeddedStatus, params: { path: "Main.java" }, expected: "process" },
-			{ name: "explicit embedded language overrides JVM-looking path", adapter: "embedded", embeddedStatus: validEmbeddedStatus, params: { path: "Main.java", language: "js" }, expected: "embedded" },
-			{ name: "auto inferred Kotlin file", adapter: "auto", embeddedStatus: validEmbeddedStatus, params: { path: "Main.kt" }, expected: "process" },
+			{
+				name: "process JavaScript",
+				adapter: "process",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "1", language: "js" },
+				expected: "process",
+			},
+			{
+				name: "process JVM",
+				adapter: "process",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "class A {}", language: "java" },
+				expected: "process",
+			},
+			{
+				name: "embedded TypeScript",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "1", language: "ts" },
+				expected: "embedded",
+			},
+			{
+				name: "embedded Python",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "print(1)", language: "python" },
+				expected: "embedded",
+			},
+			{
+				name: "embedded JVM",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "fun main() {}", language: "kotlin" },
+				expected: "process",
+			},
+			{
+				name: "auto without library",
+				adapter: "auto",
+				embeddedStatus: noEmbeddedStatus,
+				params: { code: "1", language: "js" },
+				expected: "process",
+			},
+			{
+				name: "auto valid library",
+				adapter: "auto",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "1", language: "js" },
+				expected: "embedded",
+			},
+			{
+				name: "auto JVM with valid library",
+				adapter: "auto",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "class A {}", language: "java" },
+				expected: "process",
+			},
+			{
+				name: "embedded inferred Java file",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { path: "Main.java" },
+				expected: "process",
+			},
+			{
+				name: "explicit embedded language overrides JVM-looking path",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { path: "Main.java", language: "js" },
+				expected: "embedded",
+			},
+			{
+				name: "auto inferred Kotlin file",
+				adapter: "auto",
+				embeddedStatus: validEmbeddedStatus,
+				params: { path: "Main.kt" },
+				expected: "process",
+			},
 		];
 
 		for (const item of cases) {
@@ -303,10 +377,373 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		}
 	});
 
+	test("auto falls back for missing or non-file configured paths while explicit embedded returns guidance", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aura-selected-missing-"));
+		try {
+			const configuredPaths = [path.join(directory, "missing.so"), directory];
+			for (const embeddedPath of configuredPaths) {
+				const autoProcess = new StubEndpoint("process", processStatus);
+				const autoEmbedded = new EmbeddedRuntimeEndpoint({
+					embeddedPath,
+					env: {},
+					resolveRuntime: async () => ({ binaryPath: "/runtime/bin/elide", source: "path" }),
+				});
+				const auto = new SelectedRuntimeEndpoint({
+					adapter: "auto",
+					processEndpoint: autoProcess,
+					embeddedEndpoint: autoEmbedded,
+				});
+				expect(
+					unwrapResponse<{ stdout: string }>(
+						await auto.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+					).stdout,
+				).toBe("process");
+				expect(autoProcess.requests.map(request => request.method)).toEqual(["runtime/run"]);
+				await auto.close();
+
+				const explicitProcess = new StubEndpoint("process", processStatus);
+				const explicitEmbedded = new EmbeddedRuntimeEndpoint({
+					embeddedPath,
+					env: {},
+					resolveRuntime: async () => ({ binaryPath: "/runtime/bin/elide", source: "path" }),
+				});
+				const explicit = new SelectedRuntimeEndpoint({
+					adapter: "embedded",
+					processEndpoint: explicitProcess,
+					embeddedEndpoint: explicitEmbedded,
+				});
+				const response = responseError(
+					await explicit.request(rpcRequest(2, "runtime/run", { code: "1", language: "js" })),
+				);
+				expect(response.error.code).toBe("runtime-missing");
+				expect(response.error.message).toContain("embedded runtime library is unavailable");
+				expect(explicitProcess.requests).toHaveLength(0);
+				await explicit.close();
+			}
+		} finally {
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("auto falls back when an inferred adjacent library is absent while explicit embedded hard-fails", async () => {
+		const autoProcess = new StubEndpoint("process", processStatus);
+		const autoEmbedded = new EmbeddedRuntimeEndpoint({
+			env: {},
+			resolveRuntime: async () => ({ binaryPath: "/process-only/bin/elide", source: "path" }),
+			resolveLibrary: async () => null,
+		});
+		const auto = new SelectedRuntimeEndpoint({
+			adapter: "auto",
+			processEndpoint: autoProcess,
+			embeddedEndpoint: autoEmbedded,
+		});
+
+		const autoRun = unwrapResponse<{ stdout: string }>(
+			await auto.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+		);
+		expect(autoRun.stdout).toBe("process");
+		const autoStatus = unwrapResponse<RuntimeStatusResult>(
+			await auto.request(rpcRequest(3, "runtime/status", undefined)),
+		);
+		expect(autoStatus).toMatchObject({
+			available: true,
+			adapter: "auto",
+			effectiveAdapter: "process",
+		});
+		expect(autoProcess.requests.map(request => request.method)).toEqual(["runtime/run", "runtime/status"]);
+		await auto.close();
+
+		const explicitProcess = new StubEndpoint("process", processStatus);
+		const explicitEmbedded = new EmbeddedRuntimeEndpoint({
+			env: {},
+			resolveRuntime: async () => ({ binaryPath: "/process-only/bin/elide", source: "path" }),
+			resolveLibrary: async () => null,
+		});
+		const explicit = new SelectedRuntimeEndpoint({
+			adapter: "embedded",
+			processEndpoint: explicitProcess,
+			embeddedEndpoint: explicitEmbedded,
+		});
+		const explicitRun = responseError(
+			await explicit.request(rpcRequest(2, "runtime/run", { code: "1", language: "js" })),
+		);
+		expect(explicitRun.error.code).toBe("runtime-missing");
+		expect(explicitRun.error.message).toContain("missing its embedded library");
+		expect(explicitProcess.requests).toHaveLength(0);
+		await explicit.close();
+	});
+
+	test("auto never falls back from existing candidates with ABI, schema, or loader failures", async () => {
+		const cases: Array<{ name: string; configure: (host: FakeEmbeddedHost) => void; message: string }> = [
+			{
+				name: "ABI",
+				configure: host => {
+					host.abiVersion = EMBEDDED_RUNTIME_ABI_VERSION + 1;
+				},
+				message: "ABI",
+			},
+			{
+				name: "schema",
+				configure: host => {
+					host.schemaHash = "incompatible-schema";
+				},
+				message: "schema",
+			},
+			{
+				name: "loader",
+				configure: host => {
+					host.loadError = new Error("dlopen failed");
+				},
+				message: "dlopen failed",
+			},
+		];
+		for (const item of cases) {
+			const host = new FakeEmbeddedHost();
+			item.configure(host);
+			const processEndpoint = new StubEndpoint("process", processStatus);
+			const endpoint = new SelectedRuntimeEndpoint({
+				adapter: "auto",
+				processEndpoint,
+				embeddedEndpoint: embeddedEndpoint(host),
+			});
+			const response = responseError(
+				await endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+			);
+			expect(response.error.message, item.name).toContain(item.message);
+			expect(processEndpoint.requests, item.name).toHaveLength(0);
+			await endpoint.close();
+		}
+	});
+	test("auto snapshots eligible run inputs before awaiting embedded status", async () => {
+		const savedCwd = process.cwd();
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aura-auto-snapshot-"));
+		const originalCwd = path.join(directory, "original");
+		const mutatedCwd = path.join(directory, "mutated");
+		await Promise.all([fs.mkdir(originalCwd), fs.mkdir(mutatedCwd)]);
+		const host = new FakeEmbeddedHost();
+		const statusGate = Promise.withResolvers<void>();
+		const environment: NodeJS.ProcessEnv = { AUTO_SNAPSHOT: "original-env" };
+		const args = ["original-arg"];
+		const params: Record<string, unknown> = {
+			code: "print('original-source')",
+			language: "python",
+			args,
+			stdin: "original-stdin",
+			timeoutMs: 10_000,
+		};
+		const embedded = embeddedEndpoint(host, {
+			env: environment,
+			resolveLibrary: async () => {
+				await statusGate.promise;
+				return { libraryPath: "/candidate/libelide_embed.so", source: "setting" };
+			},
+		});
+		const endpoint = new SelectedRuntimeEndpoint({
+			adapter: "auto",
+			processEndpoint: new StubEndpoint("process", processStatus),
+			embeddedEndpoint: embedded,
+		});
+
+		try {
+			process.chdir(originalCwd);
+			const pending = endpoint.request(rpcRequest(4, "runtime/run", params));
+			params.code = "class Mutated {}";
+			params.language = "java";
+			args[0] = "mutated-arg";
+			args.push("late-arg");
+			params.args = ["replacement-arg"];
+			params.stdin = "mutated-stdin";
+			params.timeoutMs = 0;
+			environment.AUTO_SNAPSHOT = "mutated-env";
+			process.chdir(mutatedCwd);
+			statusGate.resolve();
+
+			expect(unwrapResponse<{ exitCode: number }>(await pending).exitCode).toBe(0);
+			const call = new Message(host.callRequests[0], false).getRoot(EmbeddedCallRequest);
+			const run = call.invocation.invocation.cli.command.run;
+			expect(run.sourceLanguage).toBe(EngineInvocation_CliInvocation_SourceLanguage.PYTHON);
+			expect(run.sourceCode.code).toBe("print('original-source')");
+			expect(run.scriptArgs.count).toBe(1);
+			expect(call.invocation.args.args.list.get(1).key).toBe("original-arg");
+			expect(call.invocation.meta.engineConfig.directories.workingDir.path.pathString.path).toBe(originalCwd);
+			expect(call.invocation.env.vars.get(0).key).toBe("AUTO_SNAPSHOT");
+			expect(call.invocation.env.vars.get(0).value).toBe("original-env");
+			expect(new TextDecoder().decode(call.stdin.toUint8Array())).toBe("original-stdin");
+		} finally {
+			statusGate.resolve();
+			process.chdir(savedCwd);
+			await endpoint.close();
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+	test("auto rejects malformed runs before probing a broken embedded candidate", async () => {
+		const missingSource = path.join(process.cwd(), `missing-${crypto.randomUUID()}.js`);
+		const invalidCases: Array<{
+			name: string;
+			params: unknown;
+			overrides?: Partial<ConstructorParameters<typeof EmbeddedRuntimeEndpoint>[0]>;
+		}> = [
+			{ name: "language", params: { code: "1", language: "ruby" } },
+			{ name: "both sources", params: { code: "1", path: "guest.js", language: "js" } },
+			{ name: "arguments", params: { code: "1", language: "js", args: ["ok", 2] } },
+			{
+				name: "environment",
+				params: { code: "1", language: "js" },
+				overrides: { env: { INVALID: 4 } as unknown as NodeJS.ProcessEnv },
+			},
+			{ name: "stdin", params: { code: "1", language: "js", stdin: 3 } },
+			{ name: "timeout", params: { code: "1", language: "js", timeoutMs: 0 } },
+			{
+				name: "cwd",
+				params: { code: "1", language: "js", cwd: path.join(process.cwd(), `missing-${crypto.randomUUID()}`) },
+			},
+			{ name: "missing file", params: { path: missingSource, language: "js" } },
+		];
+
+		for (const item of invalidCases) {
+			const host = new FakeEmbeddedHost();
+			host.abiVersion = EMBEDDED_RUNTIME_ABI_VERSION + 1;
+			const processEndpoint = new StubEndpoint("process", processStatus);
+			const endpoint = new SelectedRuntimeEndpoint({
+				adapter: "auto",
+				processEndpoint,
+				embeddedEndpoint: embeddedEndpoint(host, item.overrides),
+			});
+			const response = responseError(await endpoint.request(rpcRequest(1, "runtime/run", item.params)));
+			expect(response.error.code, item.name).toBe("invalid-params");
+			expect(host.events, item.name).toEqual([]);
+			expect(processEndpoint.requests, item.name).toHaveLength(0);
+			await endpoint.close();
+		}
+	});
+	test("auto preserves request order while asynchronous preflight completes", async () => {
+		const host = new FakeEmbeddedHost();
+		const directory = await fs.stat(process.cwd());
+		const firstPreparation = Promise.withResolvers<void>();
+		const embedded = embeddedEndpoint(host, {
+			stat: async cwd => {
+				if (cwd.endsWith("/slow")) await firstPreparation.promise;
+				return directory;
+			},
+		});
+		const endpoint = new SelectedRuntimeEndpoint({
+			adapter: "auto",
+			processEndpoint: new StubEndpoint("process", processStatus),
+			embeddedEndpoint: embedded,
+		});
+		const first = endpoint.request(rpcRequest(1, "runtime/run", { code: "first", language: "js", cwd: "/slow" }));
+		const second = endpoint.request(rpcRequest(2, "runtime/run", { code: "second", language: "js", cwd: "/fast" }));
+		await flushMicrotasks();
+		expect(host.callIds).toEqual([]);
+		firstPreparation.resolve();
+		await Promise.all([first, second]);
+		expect(host.callIds).toEqual([1n, 2n]);
+		const firstCall = new Message(host.callRequests[0], false).getRoot(EmbeddedCallRequest);
+		const secondCall = new Message(host.callRequests[1], false).getRoot(EmbeddedCallRequest);
+		expect(firstCall.invocation.invocation.cli.command.run.sourceCode.code).toBe("first");
+		expect(secondCall.invocation.invocation.cli.command.run.sourceCode.code).toBe("second");
+		await endpoint.close();
+	});
+	test("auto abort at queue head stops after preflight without probing the worker", async () => {
+		const host = new FakeEmbeddedHost();
+		const directory = await fs.stat(process.cwd());
+		const statStarted = Promise.withResolvers<void>();
+		const statGate = Promise.withResolvers<void>();
+		const embedded = embeddedEndpoint(host, {
+			stat: async () => {
+				statStarted.resolve();
+				await statGate.promise;
+				return directory;
+			},
+		});
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const endpoint = new SelectedRuntimeEndpoint({
+			adapter: "auto",
+			processEndpoint,
+			embeddedEndpoint: embedded,
+		});
+		const controller = new AbortController();
+		const pending = endpoint.request(
+			rpcRequest(1, "runtime/run", { code: "1", language: "js", cwd: "/slow" }),
+			controller.signal,
+		);
+		await statStarted.promise;
+		controller.abort();
+		statGate.resolve();
+
+		expect(responseError(await pending).error.code).toBe("cancelled");
+		expect(host.events).toEqual([]);
+		expect(processEndpoint.requests).toHaveLength(0);
+		await endpoint.close();
+	});
+	test("auto observes queued preflight rejection across retention, abort, and close", async () => {
+		for (const removal of ["retained", "aborted", "closed"] as const) {
+			const host = new FakeEmbeddedHost();
+			const directory = await fs.stat(process.cwd());
+			const firstPreparation = Promise.withResolvers<void>();
+			const firstPreparationStarted = Promise.withResolvers<void>();
+			const embedded = embeddedEndpoint(host, {
+				stat: async () => {
+					firstPreparationStarted.resolve();
+					await firstPreparation.promise;
+					return directory;
+				},
+			});
+			const endpoint = new SelectedRuntimeEndpoint({
+				adapter: "auto",
+				processEndpoint: new StubEndpoint("process", processStatus),
+				embeddedEndpoint: embedded,
+			});
+			const controller = new AbortController();
+			const unhandled: unknown[] = [];
+			const onUnhandled = (reason: unknown): void => {
+				unhandled.push(reason);
+			};
+			process.on("unhandledRejection", onUnhandled);
+			let closing: Promise<void> | undefined;
+			try {
+				const first = endpoint.request(
+					rpcRequest(1, "runtime/run", { code: "first", language: "js", cwd: "/slow" }),
+				);
+				await firstPreparationStarted.promise;
+				const invalid = endpoint.request(
+					rpcRequest(2, "runtime/run", { code: "bad", path: "bad.js", language: "js" }),
+					controller.signal,
+				);
+				if (removal === "aborted") controller.abort();
+				if (removal === "closed") closing = endpoint.close();
+				await Bun.sleep(0);
+				firstPreparation.resolve();
+
+				const firstResponse = await first;
+				const invalidResponse = responseError(await invalid);
+				if (removal === "closed") {
+					expect(responseError(firstResponse).error.code, removal).toBe("internal");
+					expect(invalidResponse.error.code, removal).toBe("internal");
+					expect(host.events, removal).toEqual([]);
+				} else {
+					expect(unwrapResponse<{ stdout: string }>(firstResponse).stdout, removal).toBe("ok");
+					expect(invalidResponse.error.code, removal).toBe(removal === "aborted" ? "cancelled" : "invalid-params");
+					expect(host.callIds, removal).toEqual([1n]);
+				}
+				await closing;
+				expect(unhandled, removal).toEqual([]);
+			} finally {
+				firstPreparation.resolve();
+				process.removeListener("unhandledRejection", onUnhandled);
+				await endpoint.close();
+			}
+		}
+	});
+
 	test("routes every non-run method through the process endpoint", async () => {
 		const processEndpoint = new StubEndpoint("process", processStatus);
 		const embedded = new StubEndpoint("embedded", validEmbeddedStatus);
-		const endpoint = new SelectedRuntimeEndpoint({ adapter: "embedded", processEndpoint, embeddedEndpoint: embedded });
+		const endpoint = new SelectedRuntimeEndpoint({
+			adapter: "embedded",
+			processEndpoint,
+			embeddedEndpoint: embedded,
+		});
 		await endpoint.request(rpcRequest(1, "runtime/check", {}));
 		await endpoint.request(rpcRequest(2, "runtime/build", {}));
 		await endpoint.request(rpcRequest(3, "runtime/advice", {}));
@@ -346,7 +783,11 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			protocolVersion: 2,
 		});
 		const embedded = new StubEndpoint("embedded", validEmbeddedStatus);
-		const endpoint = new SelectedRuntimeEndpoint({ adapter: "embedded", processEndpoint, embeddedEndpoint: embedded });
+		const endpoint = new SelectedRuntimeEndpoint({
+			adapter: "embedded",
+			processEndpoint,
+			embeddedEndpoint: embedded,
+		});
 		const status = unwrapResponse<RuntimeStatusResult>(
 			await endpoint.request(rpcRequest(1, "runtime/status", undefined)),
 		);
@@ -377,11 +818,10 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		const processEndpoint = new StubEndpoint("process", processStatus, undefined, processFailure);
 		const embedded = new StubEndpoint("embedded", noEmbeddedStatus);
 		const endpoint = new SelectedRuntimeEndpoint({ adapter: "auto", processEndpoint, embeddedEndpoint: embedded });
-		expect(
-			responseError(await endpoint.request(rpcRequest(2, "runtime/status", undefined))).error.message,
-		).toContain("corrupt");
+		expect(responseError(await endpoint.request(rpcRequest(2, "runtime/status", undefined))).error.message).toContain(
+			"corrupt",
+		);
 	});
-
 });
 
 describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
@@ -421,9 +861,7 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 			embeddedSchemaHash: EMBEDDED_RUNTIME_SCHEMA_SHA256,
 		});
 		expect(
-			responseError(
-				await endpoint.request(rpcRequest(2, "runtime/run", { code: "1", language: "js" })),
-			).error.code,
+			responseError(await endpoint.request(rpcRequest(2, "runtime/run", { code: "1", language: "js" }))).error.code,
 		).toBe("internal");
 		expect(host.loadCount).toBe(1);
 		expect(host.openCount).toBe(0);
@@ -437,7 +875,10 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 			{ name: "language", params: { code: "1", language: "ruby" } },
 			{ name: "arguments", params: { code: "1", language: "js", args: ["ok", 2] } },
 			{ name: "stdin", params: { code: "1", language: "js", stdin: 3 } },
-			{ name: "argument count", params: { code: "1", language: "js", args: Array.from({ length: 0x1_0000 }, () => "x") } },
+			{
+				name: "argument count",
+				params: { code: "1", language: "js", args: Array.from({ length: 0x1_0000 }, () => "x") },
+			},
 			{ name: "timeout", params: { code: "1", language: "js", timeoutMs: 0 } },
 			{ name: "cwd", params: { code: "1", language: "js", cwd: path.join(process.cwd(), "does-not-exist") } },
 		];
@@ -490,11 +931,58 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		expect(new TextDecoder().decode(call.stdin.toUint8Array())).toBe("input");
 		await endpoint.close();
 	});
+	test("snapshots every mutable request field before asynchronous validation", async () => {
+		const host = new FakeEmbeddedHost();
+		const statGate = Promise.withResolvers<void>();
+		const directory = await fs.stat(process.cwd());
+		const environment: NodeJS.ProcessEnv = { REQUEST_SNAPSHOT: "original-env" };
+		const args = ["original-arg"];
+		const params: Record<string, unknown> = {
+			code: "print('original-source')",
+			language: "python",
+			args,
+			stdin: "original-stdin",
+			timeoutMs: 10_000,
+			cwd: process.cwd(),
+		};
+		const endpoint = embeddedEndpoint(host, {
+			env: environment,
+			stat: async () => {
+				await statGate.promise;
+				return directory;
+			},
+		});
+
+		const pending = endpoint.request(rpcRequest(1, "runtime/run", params));
+		params.code = "console.log('mutated-source')";
+		params.language = "js";
+		args[0] = "mutated-arg";
+		args.push("late-arg");
+		params.args = ["replacement-arg"];
+		params.stdin = "mutated-stdin";
+		params.timeoutMs = 0;
+		params.cwd = "/mutated-cwd";
+		environment.REQUEST_SNAPSHOT = "mutated-env";
+		statGate.resolve();
+
+		expect(unwrapResponse<{ exitCode: number }>(await pending).exitCode).toBe(0);
+		const call = new Message(host.callRequests[0], false).getRoot(EmbeddedCallRequest);
+		const run = call.invocation.invocation.cli.command.run;
+		expect(run.sourceLanguage).toBe(EngineInvocation_CliInvocation_SourceLanguage.PYTHON);
+		expect(run.sourceCode.code).toBe("print('original-source')");
+		expect(run.scriptArgs.count).toBe(1);
+		expect(call.invocation.args.args.list.get(1).key).toBe("original-arg");
+		expect(call.invocation.meta.engineConfig.directories.workingDir.path.pathString.path).toBe(process.cwd());
+		expect(call.invocation.env.vars.get(0).key).toBe("REQUEST_SNAPSHOT");
+		expect(call.invocation.env.vars.get(0).value).toBe("original-env");
+		expect(new TextDecoder().decode(call.stdin.toUint8Array())).toBe("original-stdin");
+		await endpoint.close();
+	});
 
 	test("serializes runs in order and removes an aborted queued request without native entry", async () => {
 		const host = new FakeEmbeddedHost();
 		const callGates: Array<PromiseWithResolvers<Uint8Array>> = [];
-		host.callImpl = async requestId => {
+		host.callImpl = async () => {
 			const gate = Promise.withResolvers<Uint8Array>();
 			callGates.push(gate);
 			return gate.promise;
@@ -502,10 +990,7 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		const endpoint = embeddedEndpoint(host);
 		const first = endpoint.request(rpcRequest(10, "runtime/run", { code: "1", language: "js" }));
 		const queuedAbort = new AbortController();
-		const second = endpoint.request(
-			rpcRequest(11, "runtime/run", { code: "2", language: "js" }),
-			queuedAbort.signal,
-		);
+		const second = endpoint.request(rpcRequest(11, "runtime/run", { code: "2", language: "js" }), queuedAbort.signal);
 		const third = endpoint.request(rpcRequest(12, "runtime/run", { code: "3", language: "js" }));
 		await host.waitForCalls(1);
 		expect(host.callIds).toEqual([1n]);
@@ -549,7 +1034,7 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		try {
 			const host = new FakeEmbeddedHost();
 			const callGates: Array<PromiseWithResolvers<Uint8Array>> = [];
-			host.callImpl = async requestId => {
+			host.callImpl = async () => {
 				const gate = Promise.withResolvers<Uint8Array>();
 				callGates.push(gate);
 				return gate.promise;
@@ -560,9 +1045,7 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 			};
 			const endpoint = embeddedEndpoint(host);
 			const first = endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" }));
-			const second = endpoint.request(
-				rpcRequest(2, "runtime/run", { code: "2", language: "js", timeoutMs: 20 }),
-			);
+			const second = endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js", timeoutMs: 20 }));
 			await host.waitForCalls(1);
 			vi.advanceTimersByTime(100);
 			expect(host.cancelIds).toEqual([]);
@@ -597,9 +1080,7 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 					return clockReads === 1 ? 0 : cancelSettled ? 1_000 : 10;
 				},
 			});
-			const pending = endpoint.request(
-				rpcRequest(1, "runtime/run", { code: "1", language: "js", timeoutMs: 10 }),
-			);
+			const pending = endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js", timeoutMs: 10 }));
 			await host.waitForCalls(1);
 			vi.advanceTimersByTime(10);
 			callGate.resolve(completedResponse(1n, { stdout: "won", killed: false }));
@@ -624,18 +1105,15 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 				throw new RuntimeRpcError("internal", "control worker died");
 			};
 			const endpoint = embeddedEndpoint(host);
-			const pending = endpoint.request(
-				rpcRequest(1, "runtime/run", { code: "1", language: "js", timeoutMs: 10 }),
-			);
+			const pending = endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js", timeoutMs: 10 }));
 			await host.waitForCalls(1);
 			vi.advanceTimersByTime(10);
 			await flushMicrotasks();
 			callGate.resolve(completedResponse(1n, { stdout: "must not escape" }));
 			expect(responseError(await pending).error.message).toContain("control worker died");
 			expect(
-				responseError(
-					await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" })),
-				).error.code,
+				responseError(await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" }))).error
+					.code,
 			).toBe("internal");
 			expect(host.callIds).toEqual([1n]);
 			await endpoint.close();
@@ -649,14 +1127,10 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		host.callImpl = async requestId => cancelledResponse(requestId);
 		const endpoint = embeddedEndpoint(host);
 		expect(
-			responseError(
-				await endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
-			).error.code,
+			responseError(await endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" }))).error.code,
 		).toBe("internal");
 		expect(
-			responseError(
-				await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" })),
-			).error.code,
+			responseError(await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" }))).error.code,
 		).toBe("internal");
 		expect(host.callIds).toEqual([1n]);
 		await endpoint.close();
@@ -692,14 +1166,89 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		await endpoint.close();
 	});
 
+	test("retries request-not-active until a delayed call registers, cancels it, and reuses the endpoint", async () => {
+		vi.useFakeTimers();
+		try {
+			const host = new FakeEmbeddedHost();
+			const blockedCall = Promise.withResolvers<Uint8Array>();
+			let callCount = 0;
+			let cancelCount = 0;
+			host.callImpl = requestId => {
+				callCount += 1;
+				return callCount === 1
+					? blockedCall.promise
+					: Promise.resolve(completedResponse(requestId, { stdout: "reused" }));
+			};
+			host.cancelImpl = async requestId => {
+				cancelCount += 1;
+				if (cancelCount === 1) {
+					return failureResponse(requestId, WireFailureCode.REQUEST_NOT_ACTIVE, "request not active yet");
+				}
+				blockedCall.resolve(completedResponse(requestId, { killed: true }));
+				return cancelledResponse(requestId);
+			};
+			const controller = new AbortController();
+			const endpoint = embeddedEndpoint(host);
+			const first = endpoint.request(
+				rpcRequest(1, "runtime/run", { code: "while (true) {}", language: "js" }),
+				controller.signal,
+			);
+			await host.waitForCalls(1);
+
+			controller.abort();
+			await host.waitForCancels(1);
+			vi.advanceTimersByTime(1);
+			await flushMicrotasks();
+			const retried = host.cancelIds.length === 2;
+			if (!retried) blockedCall.resolve(completedResponse(1n));
+			expect(responseError(await first).error.code).toBe("cancelled");
+			expect(retried).toBe(true);
+			expect(host.cancelIds).toEqual([1n, 1n]);
+
+			const second = await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" }));
+			expect(unwrapResponse<{ stdout: string }>(second).stdout).toBe("reused");
+			await endpoint.close();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("handles an immediate cancellation rejection while the guest call is still blocked", async () => {
+		const host = new FakeEmbeddedHost();
+		const blockedCall = Promise.withResolvers<Uint8Array>();
+		host.callImpl = () => blockedCall.promise;
+		host.cancelImpl = () => Promise.reject(new RuntimeRpcError("internal", "control cancellation failed"));
+		const controller = new AbortController();
+		const endpoint = embeddedEndpoint(host);
+		let settled = false;
+		const first = endpoint
+			.request(rpcRequest(1, "runtime/run", { code: "while (true) {}", language: "js" }), controller.signal)
+			.finally(() => {
+				settled = true;
+			});
+		await host.waitForCalls(1);
+
+		controller.abort();
+		await Bun.sleep(10);
+		expect(settled).toBe(false);
+		blockedCall.resolve(completedResponse(1n));
+		expect(responseError(await first).error.code).toBe("cancelled");
+		expect(
+			responseError(await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" }))).error
+				.message,
+		).toContain("control cancellation failed");
+		await endpoint.close();
+	});
+
 	test("guest failures do not poison the queue, but uncertain worker failures do and are never retried", async () => {
 		const guestHost = new FakeEmbeddedHost();
 		let guestCalls = 0;
 		guestHost.callImpl = async requestId => {
 			guestCalls += 1;
-			return completedResponse(requestId, guestCalls === 1
-				? { exitCode: 1, stderr: "guest error" }
-				: { stdout: "next" });
+			return completedResponse(
+				requestId,
+				guestCalls === 1 ? { exitCode: 1, stderr: "guest error" } : { stdout: "next" },
+			);
 		};
 		const guestEndpoint = embeddedEndpoint(guestHost);
 		const failure = unwrapResponse<{ exitCode: number }>(
@@ -718,14 +1267,12 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		};
 		const uncertainEndpoint = embeddedEndpoint(uncertainHost);
 		expect(
-			responseError(
-				await uncertainEndpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
-			).error.code,
+			responseError(await uncertainEndpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })))
+				.error.code,
 		).toBe("internal");
 		expect(
-			responseError(
-				await uncertainEndpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" })),
-			).error.code,
+			responseError(await uncertainEndpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" })))
+				.error.code,
 		).toBe("internal");
 		expect(uncertainHost.callIds).toEqual([1n]);
 		await uncertainEndpoint.close();
@@ -739,11 +1286,7 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		const second = endpoint.close();
 		expect(second).toBe(first);
 		await first;
-		expect(host.events).toEqual([
-			"probe",
-			"load:/candidate/libelide_embed.so",
-			"shutdown",
-		]);
+		expect(host.events).toEqual(["probe", "load:/candidate/libelide_embed.so", "shutdown"]);
 		expect(host.shutdownCount).toBe(1);
 	});
 });
@@ -779,7 +1322,7 @@ class LoadedNativeLibrary implements EmbeddedNativeLibrary {
 
 	open(_request: Uint8Array): { handle: bigint; response: Uint8Array } {
 		this.openCount += 1;
-		return { handle: 9n, response: new Uint8Array([1]) };
+		return { handle: 9n, response: openedResponse() };
 	}
 
 	call(_handle: bigint, _request: Uint8Array): Uint8Array {

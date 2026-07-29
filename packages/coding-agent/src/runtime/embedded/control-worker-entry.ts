@@ -1,12 +1,12 @@
 import { parentPort } from "node:worker_threads";
 import { consumeWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
+import { ControlWorkerCore } from "./worker-core";
 import {
 	type ControlWorkerRequest,
 	type ControlWorkerResponse,
 	EMBEDDED_DIRECT_CONTROL_WORKER_ARG,
 	type EmbeddedWorkerTransport,
 } from "./worker-protocol";
-import { ControlWorkerCore } from "./worker-core";
 
 export function startEmbeddedControlWorker(): void {
 	if (!parentPort) throw new Error("embedded-runtime-control-worker: missing parentPort");

@@ -29,12 +29,9 @@ import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cl
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 import { startEmbeddedControlWorker } from "./runtime/embedded/control-worker-entry";
-import { startEmbeddedExecutionWorker } from "./runtime/embedded/worker-entry";
 import { smokeTestEmbeddedWorkers } from "./runtime/embedded/worker-core";
-import {
-	EMBEDDED_CONTROL_WORKER_ARG,
-	EMBEDDED_EXECUTION_WORKER_ARG,
-} from "./runtime/embedded/worker-protocol";
+import { startEmbeddedExecutionWorker } from "./runtime/embedded/worker-entry";
+import { EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_EXECUTION_WORKER_ARG } from "./runtime/embedded/worker-protocol";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(

@@ -1,14 +1,6 @@
+import { CString, dlopen, type Library, type Pointer, ptr, read, toArrayBuffer } from "bun:ffi";
 import * as fs from "node:fs";
-import {
-	CString,
-	dlopen,
-	ptr,
-	read,
-	toArrayBuffer,
-	type Library,
-	type Pointer,
-} from "bun:ffi";
-import { MAX_RPC_REASSEMBLED_BYTES } from "../../modes/rpc/rpc-frame";
+import { MAX_RPC_REASSEMBLED_BYTES } from "../../modes/rpc/rpc-limits";
 import { RuntimeRpcError } from "../protocol";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "./schema";
 
@@ -272,11 +264,6 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 			if (ownsRuntime) this.#runtimes.add(result.handle);
 			try {
 				const response = consumeResponse("open", result);
-				if (!validHandle(result.handle)) {
-					throw internalError("Embedded runtime native open returned an invalid runtime handle.", {
-						handle: result.handle.toString(),
-					});
-				}
 				return { handle: result.handle, response };
 			} catch (error) {
 				if (ownsRuntime) this.#discardRuntime(result.handle);

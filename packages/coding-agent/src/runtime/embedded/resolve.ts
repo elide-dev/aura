@@ -57,7 +57,5 @@ export async function resolveEmbeddedRuntimeLibrary(
 	const binaryPath = options.resolvedRuntime?.binaryPath;
 	if (!binaryPath || binaryPath.trim() === "" || !(await isRegularFile(binaryPath))) return null;
 	const adjacentLibrary = path.resolve(path.dirname(binaryPath), "..", "lib", libraryName);
-	return (await isRegularFile(adjacentLibrary))
-		? { libraryPath: adjacentLibrary, source: "binary-adjacent" }
-		: null;
+	return (await isRegularFile(adjacentLibrary)) ? { libraryPath: adjacentLibrary, source: "binary-adjacent" } : null;
 }

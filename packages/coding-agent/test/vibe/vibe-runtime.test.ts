@@ -40,6 +40,7 @@ import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
+import type { RuntimeServiceScope } from "../../src/runtime";
 
 const PERSISTED_WORKER_SYSTEM_PROMPT = "Persisted vibe worker";
 const PERSISTED_WORKER_TOOLS = ["read", "yield"];
@@ -150,6 +151,7 @@ interface TestSessionOptions {
 	sessionManager?: SessionManager;
 	ownerId?: string;
 	parentSessionId?: string;
+	runtimeServiceScope?: RuntimeServiceScope;
 }
 
 function createSession(options: TestSessionOptions = {}): ToolSession {
@@ -164,6 +166,17 @@ function createSession(options: TestSessionOptions = {}): ToolSession {
 		getArtifactsDir: () => sessionManager?.getArtifactsDir() ?? null,
 		getSessionSpawns: () => "*",
 		sessionManager,
+		runtimeServiceScope:
+			options.runtimeServiceScope ??
+			({
+				readSettings: () => ({
+					enabled: false,
+					autoDownload: false,
+					path: "",
+					adapter: "process",
+					embeddedPath: "",
+				}),
+			} satisfies RuntimeServiceScope),
 		asyncJobManager: options.manager,
 	};
 }
@@ -435,6 +448,42 @@ describe("vibe session registry", () => {
 		VibeSessionRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("passes the exact root runtime scope into a vibe worker spawn", async () => {
+		const runtimeServiceScope: RuntimeServiceScope = {
+			readSettings: () => ({
+				enabled: true,
+				autoDownload: false,
+				path: "/root/runtime",
+				adapter: "process",
+				embeddedPath: "",
+			}),
+		};
+		let observedScope: RuntimeServiceScope | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			observedScope = options.runtimeServiceScope;
+			AgentRegistry.global().register({
+				id: options.id,
+				displayName: options.id,
+				kind: "sub",
+				parentId: "Main",
+				session: createFakeWorkerSession().session,
+				status: "idle",
+			});
+			return makeResult(options.id, { output: "scope inherited" });
+		});
+		const manager = createManager();
+		const session = createSession({ manager, runtimeServiceScope });
+
+		const { jobId } = await VibeSessionRegistry.global().spawn(session, {
+			cli: "fast",
+			name: "Scoped",
+			prompt: "Use the root runtime.",
+		});
+		await manager.getJob(jobId)?.promise;
+
+		expect(observedScope).toBe(runtimeServiceScope);
 	});
 
 	it("spawn returns immediately and self-delivers a turn result with activity trace + response", async () => {

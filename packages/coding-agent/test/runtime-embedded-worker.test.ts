@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import * as os from "node:os";
+import { Message } from "capnp-es";
 import type { EmbeddedNativeLibrary } from "../src/runtime/embedded/abi";
+import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
+import { EmbeddedResponse, EmbeddedFailureCode as WireFailureCode } from "../src/runtime/embedded/generated/embed";
+import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import {
 	ControlWorkerCore,
-	EmbeddedWorkerHost,
 	type EmbeddedWorkerFactories,
 	type EmbeddedWorkerHandle,
+	EmbeddedWorkerHost,
 	ExecutionWorkerCore,
 } from "../src/runtime/embedded/worker-core";
 import type {
@@ -14,7 +19,6 @@ import type {
 	ExecutionWorkerRequest,
 	ExecutionWorkerResponse,
 } from "../src/runtime/embedded/worker-protocol";
-import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 
 interface SentMessage<Message> {
@@ -56,6 +60,8 @@ class FakeNativeLibrary implements EmbeddedNativeLibrary {
 	readonly events: string[];
 	closeLibraryCount = 0;
 	closeRuntimeFailure: Error | undefined;
+	openHandle = 88n;
+	openResponse = openedResponse();
 
 	constructor(path: string, events: string[]) {
 		this.path = path;
@@ -64,7 +70,7 @@ class FakeNativeLibrary implements EmbeddedNativeLibrary {
 
 	open(request: Uint8Array): { handle: bigint; response: Uint8Array } {
 		this.events.push(`open:${request[0]}`);
-		return { handle: 88n, response: new Uint8Array([11]) };
+		return { handle: this.openHandle, response: this.openResponse.slice() };
 	}
 
 	call(handle: bigint, request: Uint8Array): Uint8Array {
@@ -93,10 +99,64 @@ async function flushWorkerQueue(): Promise<void> {
 	for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
 }
 
-function responseForId<Response extends { id: number }>(responses: SentMessage<Response>[], id: number): SentMessage<Response> {
+function responseForId<Response extends { id: number }>(
+	responses: SentMessage<Response>[],
+	id: number,
+): SentMessage<Response> {
 	const response = responses.find(candidate => candidate.message.id === id);
 	if (!response) throw new Error(`missing worker response ${id}`);
 	return response;
+}
+
+function serializeResponse(build: (response: EmbeddedResponse) => void, requestId = 0n): Uint8Array {
+	const message = new Message();
+	const response = message.initRoot(EmbeddedResponse);
+	response.protocolVersion = ProtocolVersion.V2;
+	response.requestId = requestId;
+	build(response);
+	return new Uint8Array(message.toArrayBuffer());
+}
+
+function openedResponse(): Uint8Array {
+	return serializeResponse(response => {
+		response.opened = true;
+	});
+}
+
+function openFailureResponse(message: string): Uint8Array {
+	return serializeResponse(response => {
+		const failure = response._initFailure();
+		failure.code = WireFailureCode.UNSUPPORTED_LANGUAGE;
+		failure.message = message;
+	});
+}
+
+function cancelledResponse(requestId: bigint): Uint8Array {
+	return serializeResponse(response => {
+		response.cancelled = true;
+	}, requestId);
+}
+
+function requestNotActiveResponse(requestId: bigint): Uint8Array {
+	return serializeResponse(response => {
+		const failure = response._initFailure();
+		failure.code = WireFailureCode.REQUEST_NOT_ACTIVE;
+		failure.message = "request is not active yet";
+	}, requestId);
+}
+
+function closedResponse(): Uint8Array {
+	return serializeResponse(response => {
+		response.closed = true;
+	});
+}
+
+function closeFailureResponse(message: string): Uint8Array {
+	return serializeResponse(response => {
+		const failure = response._initFailure();
+		failure.code = WireFailureCode.INTERNAL;
+		failure.message = message;
+	});
 }
 
 class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse> {
@@ -104,6 +164,9 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 	terminateCount = 0;
 	respondToProbe = true;
 	respondToOpen = true;
+	closeResponse = closedResponse();
+	openHandle = 88n;
+	openResponse = openedResponse();
 	readonly #events: string[];
 	readonly #messageHandlers = new Set<(message: ExecutionWorkerResponse) => void>();
 	readonly #errorHandlers = new Set<(error: Error) => void>();
@@ -127,8 +190,8 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 						type: "opened",
 						id: message.id,
 						libraryPath: "/real/libelide_embed.so",
-						handle: 88n,
-						response: new Uint8Array([1]),
+						handle: this.openHandle,
+						response: this.openResponse.slice(),
 					}),
 				);
 			}
@@ -139,7 +202,7 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 			return;
 		}
 		this.#events.push("execution:close-runtime");
-		queueMicrotask(() => this.emit({ type: "closed", id: message.id, response: new Uint8Array([3]) }));
+		queueMicrotask(() => this.emit({ type: "closed", id: message.id, response: this.closeResponse }));
 	}
 
 	onMessage(handler: (message: ExecutionWorkerResponse) => void): () => void {
@@ -185,8 +248,8 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 			type: "opened",
 			id: request.message.id,
 			libraryPath: "/real/libelide_embed.so",
-			handle: 88n,
-			response: new Uint8Array([1]),
+			handle: this.openHandle,
+			response: this.openResponse.slice(),
 		});
 	}
 
@@ -211,6 +274,9 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 	terminateCount = 0;
 	respondToProbe = true;
 	exitBeforeShutdownAck = false;
+	cancelResponses: Uint8Array[] = [];
+	onCancel: ((attempt: number) => void) | undefined;
+	#cancelAttempts = 0;
 	readonly #events: string[];
 	readonly #messageHandlers = new Set<(message: ControlWorkerResponse) => void>();
 	readonly #errorHandlers = new Set<(error: Error) => void>();
@@ -235,7 +301,12 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 		}
 		if (message.type === "cancel") {
 			this.#events.push(`control:cancel:${message.requestId}`);
-			queueMicrotask(() => this.emit({ type: "cancelled", id: message.id, response: new Uint8Array([2]) }));
+			this.#cancelAttempts += 1;
+			const response = this.cancelResponses.shift() ?? cancelledResponse(message.requestId);
+			queueMicrotask(() => {
+				this.emit({ type: "cancelled", id: message.id, response });
+				this.onCancel?.(this.#cancelAttempts);
+			});
 			return;
 		}
 		this.#events.push("control:shutdown");
@@ -363,6 +434,100 @@ describe("embedded worker cores", () => {
 		expect(transport.sent.map(entry => entry.message.type)).toEqual(["error"]);
 	});
 
+	test("execution open maps a serialized failure exactly and closes its valid native handle", async () => {
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		const events: string[] = [];
+		const library = new FakeNativeLibrary("/runtime.so", events);
+		library.openResponse = openFailureResponse("configured languages are unavailable");
+		new ExecutionWorkerCore(transport, () => library);
+
+		transport.emit({ type: "open", id: 1, libraryPath: "/runtime.so", request: new Uint8Array([10]) });
+		await flushWorkerQueue();
+
+		expect(events).toEqual(["open:10", "close:88", "dlclose"]);
+		expect(responseForId(transport.sent, 1).message).toEqual({
+			type: "error",
+			id: 1,
+			error: {
+				code: "internal",
+				message: "configured languages are unavailable",
+				data: { failureCode: "unsupported-language" },
+			},
+		});
+	});
+
+	test("converts unknown library load and open failures into stable safe guidance", async () => {
+		const libraryPath = "/deploy/runtime\ncandidate\u001b[31m.so";
+		const safePath = "/deploy/runtime\\ncandidate.so";
+		const message =
+			`Failed to load the embedded runtime library at ${safePath}. ` +
+			"Install a compatible Aura runtime or point runtime.embeddedPath or AURA_RUNTIME_EMBEDDED_LIB at a compatible library.";
+		for (const operation of ["load", "open"] as const) {
+			for (const rawDetail of [
+				"realpath failed: secret canonicalization detail",
+				"dlopen failed: secret linker detail",
+				"missing symbol: secret ABI detail",
+			]) {
+				const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+				new ExecutionWorkerCore(transport, () => {
+					throw new Error(rawDetail);
+				});
+
+				if (operation === "load") {
+					transport.emit({ type: "load", id: 1, libraryPath });
+				} else {
+					transport.emit({ type: "open", id: 1, libraryPath, request: new Uint8Array([1]) });
+				}
+				await flushWorkerQueue();
+
+				const response = responseForId(transport.sent, 1).message;
+				expect(response).toEqual({
+					type: "error",
+					id: 1,
+					error: { code: "runtime-missing", message, data: { path: safePath } },
+				});
+				expect(JSON.stringify(response)).not.toContain(rawDetail);
+			}
+		}
+	});
+
+	test("home-shortens the resolved candidate path in user-visible loader guidance", async () => {
+		const libraryPath = `${os.homedir()}/private/runtime/libelide_embed.so`;
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		new ExecutionWorkerCore(transport, () => {
+			throw new Error("private linker detail");
+		});
+
+		transport.emit({ type: "load", id: 1, libraryPath });
+		await flushWorkerQueue();
+
+		const response = responseForId(transport.sent, 1).message;
+		expect(response.type).toBe("error");
+		if (response.type !== "error") throw new Error("expected worker error");
+		expect(response.error.message).toContain("~/private/runtime/libelide_embed.so");
+		expect(response.error.message).not.toContain(os.homedir());
+		expect(response.error.data?.path).toBe("~/private/runtime/libelide_embed.so");
+	});
+
+	test("preserves a specific RuntimeRpcError from library setup unchanged", async () => {
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		const failure = new RuntimeRpcError("invalid-params", "specific setup rejection", {
+			reason: "fixture",
+		});
+		new ExecutionWorkerCore(transport, () => {
+			throw failure;
+		});
+
+		transport.emit({ type: "load", id: 1, libraryPath: "/runtime.so" });
+		await flushWorkerQueue();
+
+		expect(responseForId(transport.sent, 1).message).toEqual({
+			type: "error",
+			id: 1,
+			error: { code: "invalid-params", message: "specific setup rejection", data: { reason: "fixture" } },
+		});
+	});
+
 	test("execution close requests library cleanup when a terminal close response is malformed", async () => {
 		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
 		const events: string[] = [];
@@ -436,7 +601,8 @@ describe("embedded dual-worker host", () => {
 		);
 		expect(sentOpen?.transfer).toEqual([openRequest.buffer]);
 		const sentInit = control.sent.find(
-			(entry): entry is SentMessage<Extract<ControlWorkerRequest, { type: "init" }>> => entry.message.type === "init",
+			(entry): entry is SentMessage<Extract<ControlWorkerRequest, { type: "init" }>> =>
+				entry.message.type === "init",
 		);
 		expect(sentInit?.message.handle).toBe(88n);
 
@@ -452,14 +618,42 @@ describe("embedded dual-worker host", () => {
 		execution.releaseLatestCall(new Uint8Array([5]));
 		expect(await call).toEqual(new Uint8Array([5]));
 
-		const cancel = host.cancel(9007199254740993n);
-		expect(await cancel).toEqual(new Uint8Array([2]));
+		const cancelled = await host.cancel(9007199254740993n);
+		expect(cancelled).toEqual(cancelledResponse(9007199254740993n));
 		const sentCancel = control.sent.find(
 			(entry): entry is SentMessage<Extract<ControlWorkerRequest, { type: "cancel" }>> =>
 				entry.message.type === "cancel",
 		);
 		expect(sentCancel?.message.requestId).toBe(9007199254740993n);
 		await host.shutdown();
+	});
+
+	test("decodes a zero-handle serialized open failure before control initialization", async () => {
+		const { host, execution, control } = createHostHarness();
+		execution.openHandle = 0n;
+		execution.openResponse = openFailureResponse("configured languages are unavailable");
+
+		await expect(host.open("/runtime.so", new Uint8Array([1]))).rejects.toMatchObject({
+			code: "internal",
+			message: "configured languages are unavailable",
+			data: { failureCode: "unsupported-language" },
+		});
+		expect(control.sent.some(entry => entry.message.type === "init")).toBe(false);
+		expect(execution.sent.some(entry => entry.message.type === "close")).toBe(false);
+	});
+
+	test("rejects an opened response with a zero handle before control initialization", async () => {
+		const { host, execution, control } = createHostHarness();
+		execution.openHandle = 0n;
+		execution.openResponse = openedResponse();
+
+		await expect(host.open("/runtime.so", new Uint8Array([1]))).rejects.toMatchObject({
+			code: "internal",
+			message: "Embedded runtime opened response requires a valid nonzero runtime handle.",
+			data: { handle: "0" },
+		});
+		expect(control.sent.some(entry => entry.message.type === "init")).toBe(false);
+		expect(execution.sent.some(entry => entry.message.type === "close")).toBe(false);
 	});
 
 	test("ignores stale responses instead of settling a later request", async () => {
@@ -583,6 +777,49 @@ describe("embedded dual-worker host", () => {
 		expect(control.terminateCount).toBe(1);
 
 		await host.shutdown();
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
+	});
+
+	test("shutdown retries dispatch-window cancellation until the native call settles", async () => {
+		const { host, execution, control, events } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		events.length = 0;
+		control.cancelResponses.push(requestNotActiveResponse(77n), cancelledResponse(77n));
+		control.onCancel = attempt => {
+			if (attempt === 2) execution.releaseLatestCall(cancelledResponse(77n));
+		};
+
+		const call = host.call(77n, new Uint8Array([7]));
+		void call.catch(() => undefined);
+		await flushWorkerQueue();
+		await host.shutdown();
+		await call;
+
+		expect(events).toEqual([
+			"execution:call",
+			"control:cancel:77",
+			"control:cancel:77",
+			"execution:call-response",
+			"control:shutdown",
+			"execution:close-runtime",
+			"execution:terminate",
+			"control:terminate",
+		]);
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
+	});
+
+	test("shutdown rejects a serialized native close failure after terminating both workers", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		execution.closeResponse = closeFailureResponse("native runtime close failed");
+
+		await expect(host.shutdown()).rejects.toMatchObject({
+			code: "internal",
+			message: "native runtime close failed",
+			data: { failureCode: "internal" },
+		});
 		expect(execution.terminateCount).toBe(1);
 		expect(control.terminateCount).toBe(1);
 	});

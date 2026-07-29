@@ -4,28 +4,33 @@ import * as path from "node:path";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import {
 	decodeEmbeddedResponse,
+	type EmbeddedDecodedResponse,
+	type EmbeddedExecutionResult,
 	EmbeddedFailureCode,
+	type EmbeddedRunInvocation,
 	encodeOpenRequest,
 	encodeRunRequest,
 	MAX_EMBEDDED_ARGUMENT_COUNT,
-	type EmbeddedDecodedResponse,
-	type EmbeddedExecutionResult,
-	type EmbeddedRunInvocation,
 } from "../embedded/codec";
-import { resolveEmbeddedRuntimeLibrary, type ResolvedEmbeddedRuntimeLibrary } from "../embedded/resolve";
+import {
+	embeddedRuntimeLibraryName,
+	type ResolvedEmbeddedRuntimeLibrary,
+	resolveEmbeddedRuntimeLibrary,
+} from "../embedded/resolve";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../embedded/schema";
-import { EmbeddedWorkerHost } from "../embedded/worker-core";
+import { cancelEmbeddedRequestUntilSettled, EmbeddedWorkerHost } from "../embedded/worker-core";
 import {
 	errorResponse,
 	okResponse,
 	RUNTIME_PROTOCOL_VERSION,
-	RuntimeRpcError,
 	type RuntimeExecResult,
+	RuntimeRpcError,
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
 	type RuntimeStatusResult,
+	toRuntimeRpcError,
 } from "../protocol";
-import { isRegularFile, resolveRuntimeBinary, type ResolvedRuntime } from "../resolve";
+import { isRegularFile, type ResolvedRuntime, resolveRuntimeBinary } from "../resolve";
 import type { RuntimeEndpoint } from "../service";
 
 const MAX_NATIVE_REQUEST_ID = (1n << 64n) - 1n;
@@ -87,6 +92,41 @@ type CallOutcome =
 	| { kind: "failure"; response: Extract<EmbeddedDecodedResponse, { type: "failure" }> };
 
 type CancelOutcome = { kind: "matched" } | { kind: "late" };
+type CancelSettlement = { kind: "completed"; outcome: CancelOutcome } | { kind: "failed"; failure: RuntimeRpcError };
+interface RunRequestSnapshotContext {
+	readonly environment: Readonly<Record<string, unknown>>;
+	preparation?: Promise<PreparedRun>;
+}
+
+const runRequestSnapshots = new WeakMap<object, RunRequestSnapshotContext>();
+
+function snapshotEmbeddedRunRequest(request: RuntimeRpcRequest, environment: NodeJS.ProcessEnv): RuntimeRpcRequest {
+	if (request.method !== "runtime/run") return request;
+	const params = request.params;
+	if (params === null || typeof params !== "object") return request;
+	if (runRequestSnapshots.has(params)) return request;
+
+	const environmentSnapshot: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(environment)) environmentSnapshot[key] = value;
+	const snapshot = Array.isArray(params)
+		? [...params]
+		: (() => {
+				const raw = params as Record<string, unknown>;
+				const args = raw.args;
+				const stdin = raw.stdin;
+				return {
+					code: raw.code,
+					path: raw.path,
+					language: raw.language,
+					args: Array.isArray(args) ? [...args] : args,
+					stdin: stdin instanceof Uint8Array ? new Uint8Array(stdin) : stdin,
+					timeoutMs: raw.timeoutMs,
+					cwd: raw.cwd === undefined ? process.cwd() : raw.cwd,
+				};
+			})();
+	runRequestSnapshots.set(snapshot, { environment: environmentSnapshot });
+	return { ...request, params: snapshot };
+}
 
 export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 	readonly #options: EmbeddedEndpointOptions;
@@ -105,6 +145,27 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		this.#options = options;
 	}
 
+	/** Capture caller-owned run inputs before composite routing performs any asynchronous probe. */
+	snapshotRunRequest(request: RuntimeRpcRequest): RuntimeRpcRequest {
+		return snapshotEmbeddedRunRequest(request, this.#options.env ?? process.env);
+	}
+	/**
+	 * Start immutable validation without entering the native Worker. Auto routing
+	 * awaits this preflight before probing a candidate and reuses it at dispatch.
+	 */
+	preflightRunRequest(request: RuntimeRpcRequest): { request: RuntimeRpcRequest; ready: Promise<unknown> } {
+		const snapshottedRequest = this.snapshotRunRequest(request);
+		if (snapshottedRequest.params === null || typeof snapshottedRequest.params !== "object") {
+			return { request: snapshottedRequest, ready: this.#prepareRun(snapshottedRequest.params) };
+		}
+		const context = runRequestSnapshots.get(snapshottedRequest.params);
+		if (!context) {
+			return { request: snapshottedRequest, ready: this.#prepareRun(snapshottedRequest.params) };
+		}
+		context.preparation ??= this.#prepareRun(snapshottedRequest.params);
+		return { request: snapshottedRequest, ready: context.preparation };
+	}
+
 	async request(request: RuntimeRpcRequest, signal?: AbortSignal): Promise<RuntimeRpcResponse> {
 		try {
 			if (this.#closing) {
@@ -114,13 +175,17 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				return okResponse(request.id, await this.#status());
 			}
 			if (request.method !== "runtime/run") {
-				throw new RuntimeRpcError("invalid-params", `Embedded runtime endpoint does not support ${request.method}.`);
+				throw new RuntimeRpcError(
+					"invalid-params",
+					`Embedded runtime endpoint does not support ${request.method}.`,
+				);
 			}
 			if (signal?.aborted) throw new RuntimeRpcError("cancelled", CANCELLED_MESSAGE);
-			const preparation = this.#prepareRun(request.params);
-			return await this.#enqueue(request.id, preparation, signal);
+			const snapshottedRequest = this.snapshotRunRequest(request);
+			const preparation = this.#preparedRun(snapshottedRequest.params);
+			return await this.#enqueue(snapshottedRequest.id, preparation, signal);
 		} catch (error) {
-			return errorResponse(request.id, runtimeError(error));
+			return errorResponse(request.id, toRuntimeRpcError(error));
 		}
 	}
 
@@ -129,7 +194,9 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		this.#closing = true;
 		for (const queued of this.#queue.splice(0)) {
 			if (queued.queuedAbort) queued.signal?.removeEventListener("abort", queued.queuedAbort);
-			queued.resolve(errorResponse(queued.rpcId, new RuntimeRpcError("internal", "Embedded runtime endpoint is closed.")));
+			queued.resolve(
+				errorResponse(queued.rpcId, new RuntimeRpcError("internal", "Embedded runtime endpoint is closed.")),
+			);
 		}
 		this.#closePromise = this.#performClose();
 		return this.#closePromise;
@@ -176,11 +243,14 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			env,
 			resolvedRuntime,
 		});
-		if (!resolved) return this.#missingSelection(env);
+		if (!resolved) {
+			const configuredPath = this.#options.embeddedPath?.trim() || env.AURA_RUNTIME_EMBEDDED_LIB?.trim();
+			return !configuredPath && resolvedRuntime
+				? this.#missingAdjacentSelection(resolvedRuntime)
+				: this.#missingSelection(env);
+		}
 
-		let loaded:
-			| { libraryPath: string; abiVersion: number; schemaHash: string }
-			| undefined;
+		let loaded: { libraryPath: string; abiVersion: number; schemaHash: string } | undefined;
 		try {
 			const host = this.#workerHost();
 			await host.probe();
@@ -197,7 +267,10 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 					actual: loaded.schemaHash,
 				});
 			}
-			const canonical = { libraryPath: loaded.libraryPath, source: resolved.source } satisfies ResolvedEmbeddedRuntimeLibrary;
+			const canonical = {
+				libraryPath: loaded.libraryPath,
+				source: resolved.source,
+			} satisfies ResolvedEmbeddedRuntimeLibrary;
 			return {
 				kind: "ready",
 				resolved: canonical,
@@ -211,7 +284,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				},
 			};
 		} catch (error) {
-			const failure = runtimeError(error);
+			const failure = toRuntimeRpcError(error);
 			this.#poison(failure);
 			return {
 				kind: "broken",
@@ -233,11 +306,31 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		}
 	}
 
+	#missingAdjacentSelection(resolvedRuntime: ResolvedRuntime): EmbeddedSelection {
+		const libraryPath = path.resolve(
+			path.dirname(resolvedRuntime.binaryPath),
+			"..",
+			"lib",
+			embeddedRuntimeLibraryName(),
+		);
+		const guidance =
+			"The selected runtime installation is missing its embedded library. Install a complete Aura runtime distribution.";
+		const error = new RuntimeRpcError("runtime-missing", guidance, { path: libraryPath });
+		return {
+			kind: "missing",
+			error,
+			status: {
+				available: false,
+				protocolVersion: RUNTIME_PROTOCOL_VERSION,
+				guidance,
+			},
+		};
+	}
+
 	#missingSelection(env: NodeJS.ProcessEnv): EmbeddedSelection {
 		const settingPath = this.#options.embeddedPath?.trim();
 		const environmentPath = env.AURA_RUNTIME_EMBEDDED_LIB?.trim();
 		const candidatePath = settingPath || environmentPath;
-		const source = settingPath ? "setting" : environmentPath ? "env" : undefined;
 		const error = new RuntimeRpcError("runtime-missing", MISSING_LIBRARY_GUIDANCE, {
 			...(candidatePath ? { path: path.resolve(candidatePath) } : {}),
 		});
@@ -247,8 +340,6 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			status: {
 				available: false,
 				protocolVersion: RUNTIME_PROTOCOL_VERSION,
-				...(candidatePath ? { embeddedLibraryPath: path.resolve(candidatePath) } : {}),
-				...(source ? { embeddedLibrarySource: source } : {}),
 				guidance: MISSING_LIBRARY_GUIDANCE,
 			},
 		};
@@ -259,8 +350,18 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		const host = this.#options.createWorkerHost?.() ?? new EmbeddedWorkerHost();
 		this.#host = host;
 		nextPostmortemRegistration += 1;
-		this.#cancelPostmortem = postmortem.register(`embedded-runtime:${nextPostmortemRegistration}`, () => this.close());
+		this.#cancelPostmortem = postmortem.register(`embedded-runtime:${nextPostmortemRegistration}`, () =>
+			this.close(),
+		);
 		return host;
+	}
+
+	#preparedRun(params: unknown): Promise<PreparedRun> {
+		if (params !== null && typeof params === "object") {
+			const cached = runRequestSnapshots.get(params)?.preparation;
+			if (cached) return cached;
+		}
+		return this.#prepareRun(params);
 	}
 
 	async #prepareRun(params: unknown): Promise<PreparedRun> {
@@ -268,7 +369,8 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			throw new RuntimeRpcError("invalid-params", "run params must be an object.");
 		}
 		const raw = params as Record<string, unknown>;
-		const environment = snapshotEnvironment(this.#options.env ?? process.env);
+		const snapshotContext = runRequestSnapshots.get(params);
+		const environment = snapshotEnvironment(snapshotContext?.environment ?? this.#options.env ?? process.env);
 		const code = raw.code;
 		const sourcePath = raw.path;
 		if (code === undefined && sourcePath === undefined) {
@@ -284,11 +386,44 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			throw new RuntimeRpcError("invalid-params", "path must be a non-empty string.");
 		}
 
+		const language = embeddedLanguage(raw.language, typeof sourcePath === "string" ? sourcePath : undefined);
+		const argsValue = raw.args;
+		if (!Array.isArray(argsValue) && argsValue !== undefined) {
+			throw new RuntimeRpcError("invalid-params", "args must be an array of strings.");
+		}
+		if (argsValue !== undefined && argsValue.length > MAX_EMBEDDED_ARGUMENT_COUNT) {
+			throw new RuntimeRpcError("invalid-params", "Embedded runtime invocation has too many arguments.", {
+				argumentCount: argsValue.length,
+			});
+		}
+		const args: string[] = [];
+		if (argsValue !== undefined) {
+			for (const value of argsValue) {
+				if (typeof value !== "string") {
+					throw new RuntimeRpcError("invalid-params", "args must be an array of strings.");
+				}
+				args.push(value);
+			}
+		}
+		const stdinValue = raw.stdin;
+		if (stdinValue !== undefined && typeof stdinValue !== "string") {
+			throw new RuntimeRpcError("invalid-params", "stdin must be a string.");
+		}
+		const stdin = encoder.encode(stdinValue === undefined ? "" : stdinValue);
+		const timeoutValue = raw.timeoutMs;
+		let timeoutMs: number | undefined;
+		if (timeoutValue !== undefined) {
+			if (typeof timeoutValue !== "number" || !Number.isFinite(timeoutValue) || timeoutValue <= 0) {
+				throw new RuntimeRpcError("invalid-params", "timeoutMs must be a positive number of milliseconds.");
+			}
+			timeoutMs = timeoutValue;
+		}
 		const cwdValue = raw.cwd;
 		if (cwdValue !== undefined && (typeof cwdValue !== "string" || cwdValue.trim() === "")) {
 			throw new RuntimeRpcError("invalid-params", "cwd must be a non-empty string.");
 		}
 		const cwd = path.resolve(cwdValue === undefined ? process.cwd() : cwdValue);
+
 		let cwdStat: Stats;
 		try {
 			cwdStat = await (this.#options.stat ?? fs.stat)(cwd);
@@ -299,7 +434,6 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			throw new RuntimeRpcError("invalid-params", `Runtime working directory is not a directory: ${cwd}.`, { cwd });
 		}
 
-		const language = embeddedLanguage(raw.language, typeof sourcePath === "string" ? sourcePath : undefined);
 		let source: EmbeddedRunInvocation["source"];
 		if (typeof sourcePath === "string") {
 			const absolutePath = path.resolve(cwd, sourcePath);
@@ -313,37 +447,16 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			source = { type: "content", code: code as string, name: INLINE_SOURCE_NAME[language] };
 		}
 
-		const argsValue = raw.args;
-		if (argsValue !== undefined && (!Array.isArray(argsValue) || !argsValue.every(value => typeof value === "string"))) {
-			throw new RuntimeRpcError("invalid-params", "args must be an array of strings.");
-		}
-		if (Array.isArray(argsValue) && argsValue.length > MAX_EMBEDDED_ARGUMENT_COUNT) {
-			throw new RuntimeRpcError("invalid-params", "Embedded runtime invocation has too many arguments.", {
-				argumentCount: argsValue.length,
-			});
-		}
-		const stdinValue = raw.stdin;
-		if (stdinValue !== undefined && typeof stdinValue !== "string") {
-			throw new RuntimeRpcError("invalid-params", "stdin must be a string.");
-		}
-		const timeoutValue = raw.timeoutMs;
-		if (
-			timeoutValue !== undefined &&
-			(typeof timeoutValue !== "number" || !Number.isFinite(timeoutValue) || timeoutValue <= 0)
-		) {
-			throw new RuntimeRpcError("invalid-params", "timeoutMs must be a positive number of milliseconds.");
-		}
-
 		return {
 			invocation: {
 				source,
 				language,
-				args: argsValue === undefined ? [] : [...argsValue] as string[],
+				args,
 				cwd,
 				environment,
-				stdin: encoder.encode(stdinValue === undefined ? "" : stdinValue),
+				stdin,
 			},
-			timeoutMs: timeoutValue as number | undefined,
+			timeoutMs,
 		};
 	}
 
@@ -354,7 +467,9 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 	): Promise<RuntimeRpcResponse> {
 		void preparation.catch(() => undefined);
 		if (this.#closing) {
-			return Promise.resolve(errorResponse(rpcId, new RuntimeRpcError("internal", "Embedded runtime endpoint is closed.")));
+			return Promise.resolve(
+				errorResponse(rpcId, new RuntimeRpcError("internal", "Embedded runtime endpoint is closed.")),
+			);
 		}
 		const pending = Promise.withResolvers<RuntimeRpcResponse>();
 		const queued: QueuedRun = { rpcId, preparation, signal, resolve: pending.resolve, queuedAbort: undefined };
@@ -376,10 +491,12 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		if (this.#drain) return;
 		const settled = Promise.withResolvers<void>();
 		this.#drain = settled.promise;
-		void this.#drainQueue().then(settled.resolve, settled.reject).finally(() => {
-			if (this.#drain === settled.promise) this.#drain = undefined;
-			if (this.#queue.length > 0 && !this.#closing) this.#startDrain();
-		});
+		void this.#drainQueue()
+			.then(settled.resolve, settled.reject)
+			.finally(() => {
+				if (this.#drain === settled.promise) this.#drain = undefined;
+				if (this.#queue.length > 0 && !this.#closing) this.#startDrain();
+			});
 	}
 
 	async #drainQueue(): Promise<void> {
@@ -396,7 +513,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			try {
 				prepared = await queued.preparation;
 			} catch (error) {
-				queued.resolve(errorResponse(queued.rpcId, runtimeError(error)));
+				queued.resolve(errorResponse(queued.rpcId, toRuntimeRpcError(error)));
 				continue;
 			}
 			if (this.#closing) {
@@ -412,7 +529,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			try {
 				queued.resolve(okResponse(queued.rpcId, await this.#execute(prepared, queued.signal)));
 			} catch (error) {
-				queued.resolve(errorResponse(queued.rpcId, runtimeError(error)));
+				queued.resolve(errorResponse(queued.rpcId, toRuntimeRpcError(error)));
 			}
 		}
 	}
@@ -430,9 +547,24 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		const host = this.#workerHost();
 		let externalAbort = false;
 		let timeoutFired = false;
-		let cancelPromise: Promise<CancelOutcome> | undefined;
+		let callSettled = false;
+		const callSettlement = Promise.withResolvers<void>();
+		let cancelPromise: Promise<CancelSettlement> | undefined;
 		const requestCancel = (): void => {
-			cancelPromise ??= this.#cancel(requestId);
+			cancelPromise ??= cancelEmbeddedRequestUntilSettled(
+				requestId,
+				() => host.cancel(requestId),
+				() => callSettled,
+				callSettlement.promise,
+			).then(
+				outcome => ({ kind: "completed", outcome }),
+				error => {
+					const failure = toRuntimeRpcError(error);
+					this.#poison(failure);
+					void host.shutdown().catch(() => undefined);
+					return { kind: "failed", failure: this.#poisoned ?? failure };
+				},
+			);
 		};
 		const onAbort = (): void => {
 			externalAbort = true;
@@ -442,6 +574,16 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		if (signal?.aborted) onAbort();
 		const startedAt = this.#options.now?.() ?? performance.now();
 		const call = host.call(requestId, request);
+		void call.then(
+			() => {
+				callSettled = true;
+				callSettlement.resolve();
+			},
+			() => {
+				callSettled = true;
+				callSettlement.resolve();
+			},
+		);
 		let timer: NodeJS.Timeout | undefined;
 		if (prepared.timeoutMs !== undefined) {
 			timer = setTimeout(() => {
@@ -455,7 +597,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		try {
 			callOutcome = decodeCallOutcome(await call, requestId);
 		} catch (error) {
-			const failure = runtimeError(error);
+			const failure = toRuntimeRpcError(error);
 			this.#poison(failure);
 			callOutcome = {
 				kind: "failure",
@@ -475,19 +617,20 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		let cancelOutcome: CancelOutcome | undefined;
 		let cancellationFailure: RuntimeRpcError | undefined;
 		if (cancelPromise) {
-			try {
-				cancelOutcome = await cancelPromise;
-			} catch (error) {
-				this.#poison(runtimeError(error));
-				cancellationFailure = this.#poisoned;
-			}
+			const cancellation = await cancelPromise;
+			if (cancellation.kind === "completed") cancelOutcome = cancellation.outcome;
+			else cancellationFailure = cancellation.failure;
 		}
 		if (externalAbort) throw new RuntimeRpcError("cancelled", CANCELLED_MESSAGE);
 		if (cancellationFailure) throw cancellationFailure;
 		if (callOutcome.kind === "failure") {
-			const failure = new RuntimeRpcError("internal", callOutcome.response.message || "Embedded runtime call failed.", {
-				failureCode: callOutcome.response.code,
-			});
+			const failure = new RuntimeRpcError(
+				"internal",
+				callOutcome.response.message || "Embedded runtime call failed.",
+				{
+					failureCode: callOutcome.response.code,
+				},
+			);
 			this.#poison(failure);
 			throw failure;
 		}
@@ -516,23 +659,12 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 					throw new RuntimeRpcError("internal", "Embedded runtime returned an invalid open response.");
 				}
 			} catch (error) {
-				const failure = runtimeError(error);
+				const failure = toRuntimeRpcError(error);
 				this.#poison(failure);
 				throw failure;
 			}
 		})();
 		return this.#opened;
-	}
-
-	async #cancel(requestId: bigint): Promise<CancelOutcome> {
-		const response = decodeEmbeddedResponse(await this.#workerHost().cancel(requestId), requestId);
-		if (response.type === "cancelled") return { kind: "matched" };
-		if (response.type === "failure" && response.code === EmbeddedFailureCode.REQUEST_NOT_ACTIVE) {
-			return { kind: "late" };
-		}
-		throw new RuntimeRpcError("internal", "Embedded runtime returned an invalid cancellation response.", {
-			responseType: response.type,
-		});
 	}
 
 	#nextRequestId(): bigint {
@@ -564,7 +696,7 @@ function embeddedLanguage(value: unknown, sourcePath: string | undefined): Embed
 	return "ts";
 }
 
-function snapshotEnvironment(environment: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
+function snapshotEnvironment(environment: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> {
 	const snapshot: Record<string, string> = {};
 	for (const [key, value] of Object.entries(environment)) {
 		if (value === undefined) continue;
@@ -585,9 +717,4 @@ function decodeCallOutcome(bytes: Uint8Array, requestId: bigint): CallOutcome {
 	if (response.type === "completed") return { kind: "completed", result: response.result };
 	if (response.type === "failure") return { kind: "failure", response };
 	throw new RuntimeRpcError("internal", `Embedded runtime returned ${response.type} for a call.`);
-}
-
-function runtimeError(error: unknown): RuntimeRpcError {
-	if (error instanceof RuntimeRpcError) return error;
-	return new RuntimeRpcError("internal", error instanceof Error ? error.message : String(error));
 }
