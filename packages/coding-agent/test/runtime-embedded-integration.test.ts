@@ -79,7 +79,7 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 	afterAll(async () => {
 		await Promise.allSettled([service.close(), processService.close()]);
 		await Promise.all(tempRoots.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })));
-	});
+	}, 120_000);
 
 	test("reports embedded adapter ABI schema and absolute library path", async () => {
 		const status = await service.status();

@@ -1,7 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import {
+	acquireRuntimeServiceLease,
+	disposeCachedRuntimeService,
+	getOrCreateRuntimeService,
+	type RuntimeServiceScope,
+} from "../src/runtime";
 import { formatExecResult } from "../src/runtime/format";
-import type { RuntimeExecResult } from "../src/runtime/protocol";
+import { type RuntimeExecResult, RuntimeRpcError } from "../src/runtime/protocol";
 import type { ToolSession } from "../src/tools";
 import { wrapToolWithMetaNotice } from "../src/tools/output-meta";
 import { RuntimeRunTool } from "../src/tools/runtime-run";
@@ -45,6 +51,44 @@ describe("run tool", () => {
 		const block = result?.content[0] as { type: "text"; text: string } | undefined;
 		expect(block?.text).toContain("hello");
 		expect(result?.details).toMatchObject({ exitCode: 0 });
+	});
+
+	test("evicts an internally failed cached service so the next call gets a fresh runtime", async () => {
+		const options = { adapter: "process" as const, autoDownload: false, explicitPath: "/runtime-fixture" };
+		const scope: RuntimeServiceScope = {
+			readSettings: () => ({
+				enabled: true,
+				autoDownload: false,
+				path: "/runtime-fixture",
+				version: "",
+				adapter: "process",
+				embeddedPath: "",
+			}),
+		};
+		const release = acquireRuntimeServiceLease(scope);
+		try {
+			const first = getOrCreateRuntimeService(options, undefined, scope);
+			const close = vi.spyOn(first, "close").mockResolvedValue();
+			vi.spyOn(first, "run").mockRejectedValue(
+				new RuntimeRpcError("internal", "Embedded runtime execution worker failed."),
+			);
+			const session = {
+				settings: { get: (key: string) => key === "runtime.enabled" },
+				runtimeServiceScope: scope,
+				getRuntimeService: () => getOrCreateRuntimeService(options, undefined, scope),
+			} as unknown as ToolSession;
+			const tool = new RuntimeRunTool(session);
+
+			await expect(tool.execute("id", { code: "print('first')", language: "python" })).rejects.toThrow(
+				"Embedded runtime execution worker failed.",
+			);
+			expect(close).toHaveBeenCalledTimes(1);
+			const replacement = getOrCreateRuntimeService(options, undefined, scope);
+			expect(replacement).not.toBe(first);
+			await disposeCachedRuntimeService(replacement, scope);
+		} finally {
+			await release();
+		}
 	});
 
 	test("nonzero exit is surfaced in the formatted output", () => {

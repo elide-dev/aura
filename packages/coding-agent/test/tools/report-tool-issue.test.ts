@@ -69,6 +69,7 @@ function pushSettings(overrides: Record<string, unknown> = {}): Settings {
 }
 
 let originalPiAutoQa: string | undefined;
+let originalPushUrl: string | undefined;
 
 function restoreAutoQaEnv(): void {
 	if (originalPiAutoQa === undefined) {
@@ -78,12 +79,22 @@ function restoreAutoQaEnv(): void {
 	Bun.env.PI_AUTO_QA = originalPiAutoQa;
 }
 
+function restorePushUrlEnv(): void {
+	if (originalPushUrl === undefined) {
+		delete Bun.env.PI_AUTO_QA_PUSH_URL;
+		return;
+	}
+	Bun.env.PI_AUTO_QA_PUSH_URL = originalPushUrl;
+}
+
 describe("flushGrievances", () => {
 	let db: Database;
 
 	beforeEach(() => {
 		__resetAutoQaFlushStateForTests();
 		originalPiAutoQa = Bun.env.PI_AUTO_QA;
+		originalPushUrl = Bun.env.PI_AUTO_QA_PUSH_URL;
+		delete Bun.env.PI_AUTO_QA_PUSH_URL;
 		delete Bun.env.PI_AUTO_QA;
 		db = openTempDb();
 	});
@@ -92,6 +103,7 @@ describe("flushGrievances", () => {
 		vi.restoreAllMocks();
 		__resetAutoQaFlushStateForTests();
 		restoreAutoQaEnv();
+		restorePushUrlEnv();
 		db.close();
 	});
 
@@ -109,6 +121,10 @@ describe("flushGrievances", () => {
 
 	it("enables auto QA by default with consent still unset", () => {
 		expect(isAutoQaEnabled(Settings.isolated())).toBe(true);
+	});
+
+	it("uses the Elide collector as the default Auto-QA endpoint", () => {
+		expect(Settings.isolated().get("dev.autoqaPush.endpoint")).toBe("https://qa.elide.dev/v1/grievances");
 	});
 
 	it("vetoes default-on auto QA once the user denied consent", () => {
@@ -202,6 +218,21 @@ describe("flushGrievances", () => {
 		expect(selectIds(db)).toEqual([1, 2]);
 		expect(selectPushedIds(db)).toEqual([1, 2]);
 		expect(selectUnpushedIds(db)).toEqual([]);
+	});
+
+	it("prefers PI_AUTO_QA_PUSH_URL over the configured endpoint", async () => {
+		Bun.env.PI_AUTO_QA_PUSH_URL = "https://override.example.com/grievances";
+		insertGrievance(db, "run", "override endpoint");
+		let capturedInput: string | URL | Request | undefined;
+		const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+			capturedInput = input;
+			return new Response("", { status: 200 });
+		});
+
+		const result = await flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
+
+		expect(result).toEqual({ pushed: 1, ok: true });
+		expect(String(capturedInput)).toBe("https://override.example.com/grievances");
 	});
 
 	it("omits the Authorization header when no token is configured", async () => {

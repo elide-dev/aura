@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the default Auto-QA grievance collector to the Elide-operated `qa.elide.dev` endpoint while preserving explicit endpoint overrides.
+- Changed Aura's compact prompt and terminal-title brand mark from `π` to `☉`, with `o` retained for explicit ASCII-only symbol mode.
+
+### Fixed
+
+- Fixed transient internal runtime failures poisoning the session-wide service cache permanently; the failed service is now retired so the next explicit run gets a fresh embedded worker host without retrying the failed guest execution.
+
 ## [17.1.8] - 2026-07-28
 
 ### Breaking Changes

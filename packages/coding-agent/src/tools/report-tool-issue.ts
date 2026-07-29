@@ -22,9 +22,9 @@
  * the dialog for headless environments.
  *
  * When the user grants consent, push is automatically active against the
- * bundled endpoint (`dev.autoqaPush.endpoint`, default `qa.omp.sh`). Each
- * insert schedules a background flush that POSTs pending rows and deletes them
- * on HTTP 2xx. `PI_AUTO_QA_PUSH=1` forces push in non-interactive environments
+ * bundled endpoint (`dev.autoqaPush.endpoint`, default `qa.elide.dev`). Each
+ * insert schedules a background flush that POSTs pending rows and marks them
+ * pushed on HTTP 2xx. `PI_AUTO_QA_PUSH=1` forces push in non-interactive environments
  * where the consent dialog never fires. Device execution is never blocked on
  * the network and never throws.
  */

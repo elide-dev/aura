@@ -1,8 +1,10 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { logger } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import runtimeRunDescription from "../prompts/tools/runtime-run.md" with { type: "text" };
+import { disposeCachedRuntimeService } from "../runtime";
 import { formatExecResult } from "../runtime/format";
-import type { RuntimeExecResult } from "../runtime/protocol";
+import { type RuntimeExecResult, RuntimeRpcError } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
 const runtimeRunSchema = type({
@@ -44,7 +46,19 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 			throw new Error(
 				"The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).",
 			);
-		const result = await service.run({ ...params, cwd: params.cwd ?? this.session.cwd }, signal);
+		let result: RuntimeExecResult;
+		try {
+			result = await service.run({ ...params, cwd: params.cwd ?? this.session.cwd }, signal);
+		} catch (error) {
+			if (error instanceof RuntimeRpcError && error.code === "internal" && this.session.runtimeServiceScope) {
+				try {
+					await disposeCachedRuntimeService(service, this.session.runtimeServiceScope);
+				} catch (disposeError) {
+					logger.warn("Failed to retire internally failed runtime service", { error: String(disposeError) });
+				}
+			}
+			throw error;
+		}
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,
