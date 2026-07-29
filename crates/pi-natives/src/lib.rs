@@ -1,4 +1,4 @@
-//! Native utilities exported via N-API for the Oh My Pi toolchain.
+//! Native utilities exported via N-API for the Aura toolchain.
 //!
 //! # Overview
 //! High-performance primitives for clipboard access, grep, file discovery,
