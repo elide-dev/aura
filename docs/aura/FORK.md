@@ -74,7 +74,7 @@ and after every upstream merge.
 | `packages/metaharness/src/runtime-benchmark.test.ts` | covers matched arm construction, canonical tool-call counting, balanced ordering, report metrics, adapter sample ordering/output acceptance, percentile and speedup math, cold-row/skip formatting, option precedence, and service cleanup |
 | `packages/metaharness/package.json` | exposes the `bench:runtime` package script for the Aura runtime capability and microbenchmark suite |
 | `packages/metaharness/README.md` | documents the one-command runtime benchmark, its comparison contract, outputs, focused run modes, and opt-in 30-iteration process-vs-embedded decision run |
-| `package.json` | exposes root `bench:runtime` as the one-command entrypoint for Aura's matched-arm runtime evaluation |
+| `package.json` | exposes root `bench:runtime` as the one-command entrypoint for Aura's matched-arm runtime evaluation and `build:runtime-bundle` for the relocatable Aura + Elide archive builder; includes its contract test in `test:scripts` |
 | `docs/settings.md` | appended a `### Runtime` subsection under `### Tools and approvals` documenting `runtime.enabled` / `runtime.adapter` / `runtime.autoDownload` / `runtime.path` / `runtime.version` / `runtime.embeddedPath` / `runtime.allowShell`, including process-default adapter selection, explicit-embedded no-fallback behavior, embedded-library resolution precedence, off-pin managed-version verification limits, and links to the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`/`serve`, and `project_advice`), plus a `#### Runtime shell policy` subsection covering the interceptor rules and the opt-out, and a `#### Bundled runtime skills` subsection covering `skills.enableBundled` and the materialization directory |
 | `packages/coding-agent/src/cli/update-cli.ts` | distribution coordinates come from `pi-utils/distribution` (`DIST_*`) instead of upstream's can1357/npm constants; `getLatestRelease` is channel-aware (GitHub `releases/latest` on the fork repo, token-aware via `GITHUB_TOKEN`/`GH_TOKEN`, npm branch retained for a future publish) and exported with a `timeoutMs` param for the startup check; `resolveReleaseBinaryAsset` additionally returns the API asset URL and `updateViaBinaryAt` downloads through it with `Accept: application/octet-stream` + bearer auth when a token is present (the browser download URL 404s while the repo is private); the reinstall hint points at `DIST_INSTALL_URL` |
 | `packages/coding-agent/src/main.ts` (version check) | `checkForNewVersion` delegates to `getLatestRelease(5_000)` from update-cli so the startup notification and `aura update` consult the same channel; any check failure stays silent |
@@ -186,6 +186,11 @@ re-appending this one.
 - `packages/coding-agent/src/discovery/builtin-skills.ts`,
   `src/discovery/builtin-skill-sources/*.md` — bundled runtime skills, materialized
   into the agent dir under a `.bundled.json` manifest that is the sole prune authority
+- `scripts/build-relocatable-runtime-bundle.ts`,
+  `scripts/build-relocatable-runtime-bundle.test.ts` — fork-owned Linux x64/glibc
+  packager and behavioral contract tests for a relocatable standalone Aura binary,
+  complete Elide distribution, embedded-library sidecars, runtime overlay, launcher,
+  archive, checksum, and post-extraction verification
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
   keeping a process registry of its own), `src/prompts/tools/runtime-*.md`

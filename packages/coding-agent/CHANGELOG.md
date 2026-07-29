@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a repeatable Linux x64/glibc relocatable bundle builder that packages standalone Aura with the complete Elide process and embedded runtimes, verifies the staged and extracted layouts, and emits a tarball plus SHA-256.
+
 ### Changed
 
 - Changed the default Auto-QA grievance collector to the Elide-operated `qa.elide.dev` endpoint while preserving explicit endpoint overrides.
