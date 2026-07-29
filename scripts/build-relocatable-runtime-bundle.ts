@@ -14,7 +14,16 @@ const BUNDLE_CONFIG = "runtime:\n  enabled: true\n  adapter: auto\n  autoDownloa
 const BUNDLE_LAUNCHER = `#!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+LAUNCHER=$0
+while [ -L "$LAUNCHER" ]; do
+    LAUNCHER_DIR=$(CDPATH= cd -P -- "$(dirname -- "$LAUNCHER")" && pwd)
+    LINK_TARGET=$(readlink -- "$LAUNCHER")
+    case "$LINK_TARGET" in
+        /*) LAUNCHER="$LINK_TARGET" ;;
+        *)  LAUNCHER="$LAUNCHER_DIR/$LINK_TARGET" ;;
+    esac
+done
+ROOT=$(CDPATH= cd -P -- "$(dirname -- "$LAUNCHER")/.." && pwd)
 
 export AURA_RUNTIME_BIN="$ROOT/bin/elide"
 export AURA_RUNTIME_EMBEDDED_LIB="$ROOT/lib/libelide_embed.so"

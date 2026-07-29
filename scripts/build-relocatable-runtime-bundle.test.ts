@@ -108,6 +108,47 @@ describe("relocatable Aura runtime bundle", () => {
 		expect(stdout).toContain("args=hello world");
 	});
 
+	test("launches through relative and absolute installation symlinks", async () => {
+		const root = await temporaryDirectory();
+		const { runtimeDist, auraBinary } = await createInputs(root);
+		const outputDir = path.join(root, "output");
+		const result = await runBuilder([
+			"--runtime-dist",
+			runtimeDist,
+			"--aura-binary",
+			auraBinary,
+			"--output-dir",
+			outputDir,
+			"--skip-smoke",
+			"--no-archive",
+		]);
+		expect(result.exitCode, result.stderr).toBe(0);
+
+		const bundle = path.join(outputDir, bundleName);
+		const absoluteLink = path.join(root, "current-aura");
+		await fs.symlink(path.join(bundle, "bin", "aura"), absoluteLink);
+		const installDir = path.join(root, "install", "bin");
+		await fs.mkdir(installDir, { recursive: true });
+		const installedAura = path.join(installDir, "aura");
+		await fs.symlink(path.relative(installDir, absoluteLink), installedAura);
+
+		const launch = Bun.spawn([installedAura, "hello", "world"], {
+			env: { ...process.env, PI_CONFIG_FILES: "/user/override.yml" },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [launchCode, stdout, stderr] = await Promise.all([
+			launch.exited,
+			new Response(launch.stdout).text(),
+			new Response(launch.stderr).text(),
+		]);
+		expect(launchCode, stderr).toBe(0);
+		expect(stdout).toContain(`runtime=${path.join(bundle, "bin", "elide")}`);
+		expect(stdout).toContain(`embedded=${path.join(bundle, "lib", "libelide_embed.so")}`);
+		expect(stdout).toContain(`config=${path.join(bundle, "etc", "aura-bundle.yml")}:/user/override.yml`);
+		expect(stdout).toContain("args=hello world");
+	});
+
 	test("rejects distributions missing a required runtime artifact", async () => {
 		for (const relativePath of [
 			path.join("bin", "elide"),

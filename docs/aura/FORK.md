@@ -190,7 +190,7 @@ re-appending this one.
   `scripts/build-relocatable-runtime-bundle.test.ts` — fork-owned Linux x64/glibc
   packager and behavioral contract tests for a relocatable standalone Aura binary,
   complete Elide distribution, embedded-library sidecars, runtime overlay, launcher,
-  archive, checksum, and post-extraction verification
+  archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
   keeping a process registry of its own), `src/prompts/tools/runtime-*.md`
