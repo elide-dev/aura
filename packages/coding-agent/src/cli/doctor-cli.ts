@@ -35,6 +35,12 @@ import {
 import type { DoctorCheck } from "../extensibility/plugins/types";
 import { RUNTIME_PROTOCOL_VERSION } from "../runtime";
 import type { RuntimeStatusResult } from "../runtime/protocol";
+import { formatDisplayPath } from "../utils/display-path";
+import {
+	createStatusRuntime as defaultCreateStatusRuntime,
+	readRuntimeSettings as defaultReadRuntimeSettings,
+	RUNTIME_DISABLED,
+} from "./runtime-cli";
 
 // ---------------------------------------------------------------------------
 // Report shape
@@ -234,6 +240,35 @@ function protocolEntry(input: DoctorRuntimeInput): DoctorEntry {
 	return { label: "protocol", status: "ok", detail: `v${reported}` };
 }
 
+function runtimeSelectionEntries(status: RuntimeStatusResult): DoctorEntry[] {
+	const entries: DoctorEntry[] = [];
+	if (status.adapter) entries.push({ label: "adapter", status: "ok", detail: status.adapter });
+	if (status.effectiveAdapter) {
+		entries.push({ label: "effective adapter", status: "ok", detail: status.effectiveAdapter });
+	}
+	if (status.embeddedLibraryPath) {
+		entries.push({
+			label: "embedded runtime library",
+			status: "ok",
+			detail: formatDisplayPath(status.embeddedLibraryPath),
+		});
+	}
+	if (status.embeddedLibrarySource) {
+		entries.push({
+			label: "embedded runtime library source",
+			status: "ok",
+			detail: status.embeddedLibrarySource,
+		});
+	}
+	if (status.embeddedAbiVersion !== undefined) {
+		entries.push({ label: "ABI", status: "ok", detail: String(status.embeddedAbiVersion) });
+	}
+	if (status.embeddedSchemaHash !== undefined) {
+		entries.push({ label: "schema", status: "ok", detail: status.embeddedSchemaHash });
+	}
+	return entries;
+}
+
 function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 	const protocol = protocolEntry(input);
 	if (!input.enabled) {
@@ -258,6 +293,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 		];
 	}
 	const status = input.status;
+	const selection = runtimeSelectionEntries(status);
 	if (!status.available) {
 		return [
 			{
@@ -265,15 +301,18 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 				status: "fail",
 				detail: `enabled, but unavailable${status.guidance ? ` — ${status.guidance}` : ""}`,
 			},
+			...selection,
 			protocol,
 		];
 	}
 	const entries: DoctorEntry[] = [
 		{ label: "state", status: "ok", detail: `available (version ${status.version ?? "unknown"})` },
 	];
-	if (status.binaryPath) entries.push({ label: "binary", status: "ok", detail: status.binaryPath });
+	if (status.binaryPath) {
+		entries.push({ label: "binary", status: "ok", detail: formatDisplayPath(status.binaryPath) });
+	}
 	if (status.source) entries.push({ label: "source", status: "ok", detail: status.source });
-	entries.push(protocol);
+	entries.push(...selection, protocol);
 	return entries;
 }
 
@@ -497,8 +536,14 @@ async function gatherIdentity(): Promise<DoctorIdentityInput> {
 	};
 }
 
-async function gatherRuntime(): Promise<DoctorRuntimeInput> {
-	const { createStatusRuntime, RUNTIME_DISABLED, readRuntimeSettings } = await import("./runtime-cli");
+interface GatherRuntimeDependencies {
+	createStatusRuntime?: typeof defaultCreateStatusRuntime;
+	readRuntimeSettings?: typeof defaultReadRuntimeSettings;
+}
+
+async function gatherRuntime(dependencies: GatherRuntimeDependencies = {}): Promise<DoctorRuntimeInput> {
+	const createStatusRuntime = dependencies.createStatusRuntime ?? defaultCreateStatusRuntime;
+	const readRuntimeSettings = dependencies.readRuntimeSettings ?? defaultReadRuntimeSettings;
 	const service = await attempt(() => createStatusRuntime(readRuntimeSettings()));
 	if ("error" in service) {
 		return { enabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION, error: service.error };
@@ -506,10 +551,24 @@ async function gatherRuntime(): Promise<DoctorRuntimeInput> {
 	if (service.value === RUNTIME_DISABLED || "disabled" in service.value) {
 		return { enabled: false, protocolVersion: RUNTIME_PROTOCOL_VERSION };
 	}
-	const probed = await attempt(() => (service.value as { status: () => Promise<RuntimeStatusResult> }).status());
-	return "error" in probed
-		? { enabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION, error: probed.error }
-		: { enabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION, status: probed.value };
+	const runtime = service.value;
+
+	let cleanupError: string | undefined;
+	const probed = await (async () => {
+		try {
+			return await attempt(() => runtime.status());
+		} finally {
+			const closed = await attempt(() => runtime.close());
+			if ("error" in closed) cleanupError = closed.error;
+		}
+	})();
+	if ("error" in probed) {
+		return { enabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION, error: probed.error };
+	}
+	if (cleanupError !== undefined) {
+		return { enabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION, error: cleanupError };
+	}
+	return { enabled: true, protocolVersion: RUNTIME_PROTOCOL_VERSION, status: probed.value };
 }
 
 async function gatherNatives(): Promise<DoctorNativesInput> {
@@ -747,10 +806,10 @@ async function gatherMemory(): Promise<DoctorMemoryInput> {
  * Collect every section's live data. Each probe is independently fault-isolated:
  * a section that cannot be read reports that fact instead of aborting the run.
  */
-export async function gatherDoctorInput(): Promise<DoctorInput> {
+export async function gatherDoctorInput(dependencies: GatherRuntimeDependencies = {}): Promise<DoctorInput> {
 	const [identity, runtime, natives, tools, plugins, terminal, memory] = await Promise.all([
 		gatherIdentity(),
-		gatherRuntime(),
+		gatherRuntime(dependencies),
 		gatherNatives(),
 		gatherTools(),
 		gatherPlugins(),

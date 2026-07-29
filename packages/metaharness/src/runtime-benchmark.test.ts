@@ -3,12 +3,19 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	type AdapterBenchmarkRuntime,
 	type ArmSummary,
 	BASELINE_TOOLS,
 	buildArmLaunches,
 	countToolCalls,
 	formatComparison,
+	measureAdapterCase,
+	packagedRuntimeBinaryForLibrary,
+	parseRuntimeBenchmarkCli,
 	RUNTIME_TOOLS,
+	runAdapterMicrobenchmarks,
+	summarizeAdapterSamples,
+	validateAdapterOutput,
 } from "./runtime-benchmark";
 import { RUNTIME_TASKS } from "./runtime-benchmark-suite";
 
@@ -17,7 +24,64 @@ const cleanups: string[] = [];
 afterEach(() => {
 	for (const dir of cleanups.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
+
+function summary(arm: "baseline" | "runtime"): ArmSummary {
+	return {
+		arm,
+		tasks: 12,
+		trials: 24,
+		pass: 18,
+		fail: 5,
+		error: 1,
+		costUsd: 1.2,
+		tokIn: 12000,
+		tokOut: 3000,
+		durationMs: 120000,
+		medianDurationMs: 10_000,
+		toolCalls: 80,
+		runtimeTasks: 0,
+	};
+}
 describe("runtime benchmark orchestration", () => {
+	it("resolves the packaged Linux process binary next to the embedded library", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-package-linux-"));
+		cleanups.push(root);
+		const libraryPath = path.join(root, "lib", "libelide_embed.so");
+		const binaryPath = path.join(root, "bin", "elide");
+		fs.mkdirSync(path.dirname(libraryPath), { recursive: true });
+		fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
+		fs.writeFileSync(libraryPath, "library");
+		fs.writeFileSync(binaryPath, "binary");
+
+		expect(await packagedRuntimeBinaryForLibrary(libraryPath, { platform: "linux" })).toBe(binaryPath);
+	});
+
+	it("probes canonical Windows packaged binary names in precedence order", async () => {
+		const libraryPath = String.raw`C:\runtime\lib\elide_embed.dll`;
+		const expected = String.raw`C:\runtime\bin\elide.cmd`;
+		const probed: string[] = [];
+
+		const resolved = await packagedRuntimeBinaryForLibrary(libraryPath, {
+			platform: "win32",
+			isRegularFile: candidate => {
+				probed.push(candidate);
+				return Promise.resolve(candidate === expected);
+			},
+		});
+
+		expect(resolved).toBe(expected);
+		expect(probed).toEqual([String.raw`C:\runtime\bin\elide.exe`, expected]);
+	});
+
+	it("rejects a packaged embedded library without a sibling process binary", async () => {
+		await expect(
+			packagedRuntimeBinaryForLibrary("/runtime/lib/libelide_embed.so", {
+				platform: "linux",
+				isRegularFile: () => Promise.resolve(false),
+			}),
+		).rejects.toThrow("No packaged runtime binary found");
+	});
+
 	it("builds matched baseline and runtime launches for every capability task", () => {
 		const launches = buildArmLaunches({
 			model: "openai-codex/gpt-5.6-sol",
@@ -103,5 +167,180 @@ describe("runtime benchmark orchestration", () => {
 		expect(report).toContain("+12.5 pp");
 		expect(report).toContain("8/12");
 		expect(report).toContain("Median trial time");
+	});
+
+	it("alternates process and embedded samples after warming each operation once", async () => {
+		const calls: string[] = [];
+		const result = await measureAdapterCase({
+			name: "Warm JS startup",
+			iterations: 2,
+			process: async () => {
+				calls.push("process");
+				return { durationMs: 10, value: "ok" };
+			},
+			embedded: async () => {
+				calls.push("embedded");
+				return { durationMs: 5, value: "ok" };
+			},
+			validate: value => {
+				if (value !== "ok") throw new Error(`unexpected output: ${value}`);
+			},
+		});
+
+		expect(calls).toEqual(["process", "embedded", "process", "embedded", "embedded", "process"]);
+		expect(result.processMs).toBe(10);
+		expect(result.embeddedMs).toBe(5);
+	});
+
+	it("rejects an invalid exact output before accepting its timed sample", async () => {
+		const calls: string[] = [];
+		let processCalls = 0;
+		const valid = { exitCode: 0, stdout: "ok\n", stderr: "", durationMs: 1, killed: false };
+
+		const measured = measureAdapterCase({
+			name: "Warm JS startup",
+			iterations: 1,
+			process: async () => {
+				calls.push("process");
+				processCalls++;
+				return {
+					durationMs: 10,
+					value: processCalls === 1 ? valid : { ...valid, stdout: "wrong\n" },
+				};
+			},
+			embedded: async () => {
+				calls.push("embedded");
+				return { durationMs: 5, value: valid };
+			},
+			validate: value => validateAdapterOutput(value, "ok\n"),
+		});
+
+		await expect(measured).rejects.toThrow('expected stdout "ok\\n", received "wrong\\n"');
+		expect(calls).toEqual(["process", "embedded", "process"]);
+	});
+
+	it("computes p50, p95, and process-over-embedded speedups", () => {
+		const result = summarizeAdapterSamples("Warm JS startup", [10, 20, 30, 40], [2, 4, 6, 8]);
+
+		expect(result).toMatchObject({
+			name: "Warm JS startup",
+			processMs: 25,
+			embeddedMs: 5,
+			speedup: 5,
+		});
+		expect(result.processP95Ms).toBeCloseTo(38.5);
+		expect(result.embeddedP95Ms).toBeCloseTo(7.7);
+		expect(result.p95Speedup).toBeCloseTo(5);
+	});
+
+	it("keeps the embedded cold-open row explicitly non-comparable", () => {
+		const result = summarizeAdapterSamples("Embedded cold open + first JS", null, [123]);
+
+		expect(result).toEqual({
+			name: "Embedded cold open + first JS",
+			processMs: null,
+			processP95Ms: null,
+			embeddedMs: 123,
+			embeddedP95Ms: 123,
+			speedup: null,
+			p95Speedup: null,
+		});
+	});
+
+	it("reports an explicit adapter skip when no embedded library is supplied", () => {
+		const report = formatComparison("rtbench", summary("baseline"), summary("runtime"), []);
+
+		expect(report).toContain("## Runtime adapter microbenchmarks");
+		expect(report).toContain("Adapter comparison skipped: no embedded runtime library was supplied");
+	});
+
+	it("formats the adapter heading, table, percentiles, speedups, and cold-row semantics", () => {
+		const cold = summarizeAdapterSamples("Embedded cold open + first JS", null, [123]);
+		const warm = summarizeAdapterSamples("Warm JS startup", [10, 20, 30, 40], [2, 4, 6, 8]);
+		const report = formatComparison("rtbench", summary("baseline"), summary("runtime"), [], {
+			kind: "completed",
+			results: [cold, warm],
+		});
+
+		expect(report).toContain("## Runtime adapter microbenchmarks");
+		expect(report).toContain("| Case | Process runtime | Embedded runtime | Speedup |");
+		expect(report).toContain(
+			"| Embedded cold open + first JS | — | 123.00 ms (single cold sample) | Not comparable |",
+		);
+		expect(report).toContain(
+			"| Warm JS startup | 25.00 ms p50 / 38.50 ms p95 | 5.00 ms p50 / 7.70 ms p95 | 5.00× p50 / 5.00× p95 |",
+		);
+	});
+
+	it("gives --embedded-lib precedence over the benchmark environment without mutating it", () => {
+		const env = { AURA_RUNTIME_EMBEDDED_LIB: "/env/libelide_embed.so" };
+
+		const fromFlag = parseRuntimeBenchmarkCli(["--embedded-lib=/flag/libelide_embed.so"], env);
+		const fromEnv = parseRuntimeBenchmarkCli([], env);
+
+		expect(fromFlag.embeddedLib).toBe("/flag/libelide_embed.so");
+		expect(fromEnv.embeddedLib).toBe("/env/libelide_embed.so");
+		expect(env.AURA_RUNTIME_EMBEDDED_LIB).toBe("/env/libelide_embed.so");
+	});
+
+	it("closes both independent adapter services when measurement fails", async () => {
+		const closed: string[] = [];
+		const runtime = (name: string): AdapterBenchmarkRuntime => ({
+			run: async () => {
+				throw new Error(`${name} run should not be called`);
+			},
+			close: async () => {
+				closed.push(name);
+			},
+		});
+
+		await expect(
+			runAdapterMicrobenchmarks(
+				{
+					iterations: 30,
+					processBinaryPath: "/runtime/bin/elide",
+					embeddedLibraryPath: "/runtime/lib/libelide_embed.so",
+				},
+				{
+					createProcessService: () => runtime("process"),
+					createEmbeddedService: () => runtime("embedded"),
+					runCases: async () => {
+						throw new Error("measurement failed");
+					},
+				},
+			),
+		).rejects.toThrow("measurement failed");
+		expect(closed).toEqual(["process", "embedded"]);
+	});
+
+	it("preserves the measurement failure when service cleanup also fails", async () => {
+		const closed: string[] = [];
+		const runtime = (name: string): AdapterBenchmarkRuntime => ({
+			run: async () => {
+				throw new Error(`${name} run should not be called`);
+			},
+			close: async () => {
+				closed.push(name);
+				if (name === "embedded") throw new Error("embedded close failed");
+			},
+		});
+
+		await expect(
+			runAdapterMicrobenchmarks(
+				{
+					iterations: 30,
+					processBinaryPath: "/runtime/bin/elide",
+					embeddedLibraryPath: "/runtime/lib/libelide_embed.so",
+				},
+				{
+					createProcessService: () => runtime("process"),
+					createEmbeddedService: () => runtime("embedded"),
+					runCases: async () => {
+						throw new Error("measurement failed");
+					},
+				},
+			),
+		).rejects.toThrow("measurement failed");
+		expect(closed).toEqual(["process", "embedded"]);
 	});
 });

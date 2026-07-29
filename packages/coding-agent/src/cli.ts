@@ -28,6 +28,10 @@ import { declareWorkerHostEntry, installWorkerInbox } from "@oh-my-pi/pi-utils/w
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
+import { startEmbeddedControlWorker } from "./runtime/embedded/control-worker-entry";
+import { smokeTestEmbeddedWorkers } from "./runtime/embedded/worker-core";
+import { startEmbeddedExecutionWorker } from "./runtime/embedded/worker-entry";
+import { EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_EXECUTION_WORKER_ARG } from "./runtime/embedded/worker-protocol";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -102,6 +106,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestComputerWorker();
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();
+	await smokeTestEmbeddedWorkers();
 	await smokeTestDaemonBroker();
 	process.stdout.write("smoke-test: ok\n");
 }
@@ -150,6 +155,16 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	// synchronous `init` is dropped. Install a buffering inbox synchronously here
 	// (still inside the entry's sync prefix) so the handshake survives; the worker
 	// module binds the real handler once loaded.
+	if (arg === EMBEDDED_EXECUTION_WORKER_ARG) {
+		if (parentPort) installWorkerInbox(parentPort);
+		startEmbeddedExecutionWorker();
+		return true;
+	}
+	if (arg === EMBEDDED_CONTROL_WORKER_ARG) {
+		if (parentPort) installWorkerInbox(parentPort);
+		startEmbeddedControlWorker();
+		return true;
+	}
 	if (arg === TAB_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
 		await import("./tools/browser/tab-worker-entry");

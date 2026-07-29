@@ -6,6 +6,7 @@ import type { NumstatEntry } from "../../../commit/types";
 import type { ModelRegistry } from "../../../config/model-registry";
 import type { Settings } from "../../../config/settings";
 import type { CustomTool, CustomToolContext } from "../../../extensibility/custom-tools/types";
+import type { RuntimeServiceScope } from "../../../runtime";
 import type { AuthStorage } from "../../../session/auth-storage";
 import { TaskTool } from "../../../task";
 import type { TaskParams } from "../../../task/types";
@@ -33,6 +34,7 @@ function buildToolSession(
 		modelRegistry: ModelRegistry;
 		settings: Settings;
 		spawns: string;
+		runtimeServiceScope: RuntimeServiceScope;
 	},
 ): ToolSession {
 	return {
@@ -46,6 +48,7 @@ function buildToolSession(
 		settings: options.settings,
 		authStorage: options.authStorage,
 		modelRegistry: options.modelRegistry,
+		runtimeServiceScope: options.runtimeServiceScope,
 		// The task tool no longer takes a per-call schema; the inherited session
 		// schema drives structured output for every spawn from this session.
 		outputSchema: analyzeFileOutputSchema,
@@ -58,6 +61,7 @@ export function createAnalyzeFileTool(options: {
 	modelRegistry: ModelRegistry;
 	settings: Settings;
 	spawns: string;
+	runtimeServiceScope: RuntimeServiceScope;
 	state: CommitAgentState;
 }): CustomTool<typeof analyzeFileSchema> {
 	return {

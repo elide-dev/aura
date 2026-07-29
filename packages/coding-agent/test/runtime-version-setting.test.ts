@@ -30,18 +30,45 @@ async function makeManagedInstall(version: string): Promise<{ root: string; bina
 
 describe("runtime.version → endpoint options", () => {
 	test("an empty or whitespace version is omitted so the pinned default applies", () => {
-		expect(resolveRuntimeEndpointOptions({ enabled: true, autoDownload: true, path: "", version: "" })).toEqual({
+		expect(
+			resolveRuntimeEndpointOptions({
+				enabled: true,
+				autoDownload: true,
+				path: "",
+				version: "",
+				adapter: "process",
+				embeddedPath: "",
+			}),
+		).toEqual({
+			adapter: "process",
 			autoDownload: true,
 		});
-		expect(resolveRuntimeEndpointOptions({ enabled: true, autoDownload: true, path: "", version: "  " })).toEqual({
+		expect(
+			resolveRuntimeEndpointOptions({
+				enabled: true,
+				autoDownload: true,
+				path: "",
+				version: "  ",
+				adapter: "process",
+				embeddedPath: "",
+			}),
+		).toEqual({
+			adapter: "process",
 			autoDownload: true,
 		});
 	});
 
 	test("a non-empty version is trimmed and passed through", () => {
 		expect(
-			resolveRuntimeEndpointOptions({ enabled: true, autoDownload: true, path: "", version: `  ${OFF_PIN}  ` }),
-		).toEqual({ autoDownload: true, version: OFF_PIN });
+			resolveRuntimeEndpointOptions({
+				enabled: true,
+				autoDownload: true,
+				path: "",
+				version: `  ${OFF_PIN}  `,
+				adapter: "process",
+				embeddedPath: "",
+			}),
+		).toEqual({ adapter: "process", autoDownload: true, version: OFF_PIN });
 	});
 });
 

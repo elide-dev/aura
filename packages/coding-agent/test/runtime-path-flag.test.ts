@@ -41,8 +41,10 @@ describe("--runtime threads into endpoint resolution as explicitPath", () => {
 				autoDownload: true,
 				path: "/opt/aura/elide",
 				version: "",
+				adapter: "process",
+				embeddedPath: "",
 			}),
-		).toEqual({ autoDownload: false, explicitPath: "/opt/aura/elide" });
+		).toEqual({ adapter: "process", autoDownload: false, explicitPath: "/opt/aura/elide" });
 	});
 
 	test("readRuntimeSettings lets --runtime override the runtime.path setting", async () => {
@@ -58,7 +60,14 @@ describe("--runtime threads into endpoint resolution as explicitPath", () => {
 			// A binary that answers `--version` the way the real one does, so status
 			// exercises the whole locate → spawn → report path.
 			await fs.writeFile(bin, "#!/bin/sh\necho 'Elide 1.4.1 (build test)'\n", { mode: 0o755 });
-			const runtime = createStatusRuntime({ enabled: true, autoDownload: true, path: bin, version: "" });
+			const runtime = createStatusRuntime({
+				enabled: true,
+				autoDownload: true,
+				path: bin,
+				version: "",
+				adapter: "process",
+				embeddedPath: "",
+			});
 			expect(runtime).not.toBe(RUNTIME_DISABLED);
 			if ("disabled" in runtime) throw new Error("runtime unexpectedly disabled");
 			const status = await runtime.status();

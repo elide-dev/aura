@@ -1,11 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES } from "./rpc-limits";
 import type { RpcChunkFrame } from "./rpc-types";
 
-/** Maximum UTF-8 size of one newline-delimited RPC frame, including the newline. */
-export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
-/** Maximum UTF-8 size of one logical frame reassembled by protocol v2. */
-export const MAX_RPC_REASSEMBLED_BYTES = 64 * 1024 * 1024;
+export { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES } from "./rpc-limits";
 
 const RPC_CHUNK_PAYLOAD_BYTES = 256 * 1024;
 

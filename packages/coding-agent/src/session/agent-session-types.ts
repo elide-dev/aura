@@ -23,6 +23,7 @@ import type { ExtensionRunner } from "../extensibility/extensions";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
+import type { RuntimeServiceScope } from "../runtime";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { XdevRegistry } from "../tools/xdev";
@@ -214,6 +215,10 @@ export interface AgentSessionConfig {
 	advisorConfigs?: AdvisorConfig[];
 	/** Strip tool descriptions from provider-bound side-request tool specs. */
 	pruneToolDescriptions?: boolean;
+	/** Dispose the runtime service owned by the root session. Subagents never receive this callback. */
+	disposeRuntimeService?: () => Promise<void>;
+	/** Root runtime cache/config scope inherited unchanged by every descendant. */
+	runtimeServiceScope: RuntimeServiceScope;
 	/** Disconnect the MCP manager owned by this session during disposal. */
 	disconnectOwnedMcpManager?: () => Promise<void>;
 	/** System prompt used by automatic session-title generation. */

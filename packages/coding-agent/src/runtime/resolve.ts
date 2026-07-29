@@ -1,3 +1,4 @@
+import type * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -36,11 +37,17 @@ export function managedVersionDir(version = ELIDE_VERSION, root = managedRuntime
 	return path.join(root, version);
 }
 
-const BINARY_NAMES = process.platform === "win32" ? ["elide.exe", "elide.cmd", "elide"] : ["elide"];
+const WINDOWS_RUNTIME_BINARY_NAMES = ["elide.exe", "elide.cmd", "elide"] as const;
+const POSIX_RUNTIME_BINARY_NAMES = ["elide"] as const;
 
-async function isFile(p: string): Promise<boolean> {
+/** Canonical executable probe order for packaged and managed runtime distributions. */
+export function runtimeBinaryNames(platform: NodeJS.Platform = process.platform): readonly string[] {
+	return platform === "win32" ? WINDOWS_RUNTIME_BINARY_NAMES : POSIX_RUNTIME_BINARY_NAMES;
+}
+
+export async function isRegularFile(filePath: string): Promise<boolean> {
 	try {
-		return (await fs.stat(p)).isFile();
+		return (await fs.stat(filePath)).isFile();
 	} catch {
 		return false;
 	}
@@ -55,13 +62,13 @@ export async function findBinaryInTree(dir: string): Promise<string | null> {
 		return null;
 	}
 	// direct hit: dir/bin/elide
-	for (const name of BINARY_NAMES) {
+	for (const name of runtimeBinaryNames()) {
 		const direct = path.join(dir, "bin", name);
-		if (await isFile(direct)) return direct;
+		if (await isRegularFile(direct)) return direct;
 	}
 	for (const entry of entries) {
 		const child = path.join(dir, entry);
-		let stat: Awaited<ReturnType<typeof fs.stat>>;
+		let stat: nodeFs.Stats;
 		try {
 			stat = await fs.stat(child);
 		} catch {
@@ -77,7 +84,7 @@ export async function findBinaryInTree(dir: string): Promise<string | null> {
 export async function resolveRuntimeBinary(opts: ResolveOptions = {}): Promise<ResolvedRuntime | null> {
 	const env = opts.env ?? process.env;
 	if (opts.explicitPath) {
-		if (await isFile(opts.explicitPath)) return { binaryPath: opts.explicitPath, source: "flag" };
+		if (await isRegularFile(opts.explicitPath)) return { binaryPath: opts.explicitPath, source: "flag" };
 		return null; // an explicit path that doesn't exist is an error, not a fallthrough
 	}
 	// A set env override is as binding as an explicit path: pointing it at a missing
@@ -86,7 +93,7 @@ export async function resolveRuntimeBinary(opts: ResolveOptions = {}): Promise<R
 	for (const key of ["AURA_RUNTIME_BIN", "ELIDE_BIN"] as const) {
 		const p = env[key];
 		if (!p) continue;
-		if (await isFile(p)) return { binaryPath: p, source: "env" };
+		if (await isRegularFile(p)) return { binaryPath: p, source: "env" };
 		return null;
 	}
 	const managed = await findBinaryInTree(managedVersionDir(opts.version, opts.managedRoot));

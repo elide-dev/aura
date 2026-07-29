@@ -29,8 +29,8 @@ bun run serve --port 4700
 
 ## Runtime capability benchmark
 
-Run the matched Bash-vs-runtime agent suite plus deterministic runtime
-microbenchmarks from the repository root:
+Run the matched Bash-vs-runtime agent suite plus the existing deterministic
+direct-vs-runtime microbenchmarks from the repository root:
 
 ```bash
 bun run bench:runtime
@@ -41,6 +41,29 @@ alternating AB/BA order, and writes
 `runs/harbor/_bench/<prefix>-runtime-comparison.md`. Both arms use the same
 model, reasoning level, task fixtures, and attempts; only the runtime tools are
 added to the second arm.
+
+An adapter decision run additionally compares independent process and embedded
+runtime services:
+
+```bash
+bun run bench:runtime --micro-only --micro-iterations 30 \
+  --embedded-lib=/absolute/path/to/packaged/runtime-library \
+  --prefix=runtime-embedded-decision
+```
+
+The benchmark derives the packaged process executable from the library's
+sibling `bin/` directory. `--embedded-lib` takes precedence over
+`AURA_RUNTIME_EMBEDDED_LIB` for this benchmark only; it does not change the
+process rollout default. Without either value, the existing report is preserved
+and its adapter section states that comparison was skipped.
+
+The adapter table reports embedded cold open plus first JavaScript execution as
+a non-comparable single sample, then p50/p95 process and embedded latency plus
+process-over-embedded speedup for warm JavaScript, TypeScript, and Python
+startup, the same three compute cases, and bounded cancellation. Every warm
+operation runs once before sampling, timed order alternates each iteration,
+exact output is checked before a sample is accepted, and both services close
+after the run. Use at least 30 iterations for a rollout decision.
 
 Useful controls:
 

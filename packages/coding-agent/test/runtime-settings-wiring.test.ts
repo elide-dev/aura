@@ -1,30 +1,65 @@
 import { describe, expect, test } from "bun:test";
-import { resolveRuntimeEndpointOptions } from "../src/runtime";
+import { SETTINGS_SCHEMA } from "../src/config/settings-schema";
+import { type RuntimeSettingsValues, resolveRuntimeEndpointOptions } from "../src/runtime";
 
-describe("resolveRuntimeEndpointOptions", () => {
+describe("runtime settings wiring", () => {
+	const defaults: RuntimeSettingsValues = {
+		enabled: true,
+		autoDownload: true,
+		path: "",
+		version: "",
+		adapter: "process",
+		embeddedPath: "",
+	};
+
+	test("registers process as the default adapter and no explicit embedded library", () => {
+		expect(SETTINGS_SCHEMA["runtime.adapter"]).toMatchObject({
+			type: "enum",
+			values: ["process", "embedded", "auto"],
+			default: "process",
+		});
+		expect(SETTINGS_SCHEMA["runtime.embeddedPath"]).toMatchObject({
+			type: "string",
+			default: "",
+		});
+	});
+
 	test("returns undefined when the runtime is disabled", () => {
 		expect(
-			resolveRuntimeEndpointOptions({ enabled: false, autoDownload: true, path: "/opt/aura/runtime", version: "" }),
+			resolveRuntimeEndpointOptions({
+				...defaults,
+				enabled: false,
+				path: "/opt/aura/runtime",
+				adapter: "embedded",
+				embeddedPath: "/opt/aura/lib/libelide_embed.so",
+			}),
 		).toBe(undefined);
 	});
 
 	test("omits explicitPath when runtime.path is empty or whitespace", () => {
-		expect(resolveRuntimeEndpointOptions({ enabled: true, autoDownload: true, path: "", version: "" })).toEqual({
+		expect(resolveRuntimeEndpointOptions(defaults)).toEqual({
+			adapter: "process",
 			autoDownload: true,
 		});
-		expect(resolveRuntimeEndpointOptions({ enabled: true, autoDownload: false, path: "   ", version: "" })).toEqual({
+		expect(resolveRuntimeEndpointOptions({ ...defaults, autoDownload: false, path: "   " })).toEqual({
+			adapter: "process",
 			autoDownload: false,
 		});
 	});
 
-	test("passes a trimmed explicitPath through alongside autoDownload", () => {
+	test("maps trimmed process and embedded paths with the selected adapter and download policy", () => {
 		expect(
 			resolveRuntimeEndpointOptions({
-				enabled: true,
-				autoDownload: true,
+				...defaults,
 				path: "  /opt/aura/runtime  ",
-				version: "",
+				adapter: "auto",
+				embeddedPath: " /opt/aura/lib/libelide_embed.so ",
 			}),
-		).toEqual({ autoDownload: true, explicitPath: "/opt/aura/runtime" });
+		).toEqual({
+			adapter: "auto",
+			autoDownload: true,
+			explicitPath: "/opt/aura/runtime",
+			embeddedPath: "/opt/aura/lib/libelide_embed.so",
+		});
 	});
 });

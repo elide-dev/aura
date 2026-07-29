@@ -8,7 +8,8 @@ import typesDescriptionPrompt from "../../commit/prompts/types-description.md" w
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import { getMarkdownTheme } from "../../modes/theme/theme";
-import { createAgentSession } from "../../sdk";
+import type { RuntimeServiceScope } from "../../runtime";
+import { createAgentSession, readRuntimeSettingsValues } from "../../sdk";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
 import agentUserPrompt from "./prompts/session-user.md" with { type: "text" };
@@ -26,6 +27,7 @@ export interface CommitAgentInput {
 	userContext?: string;
 	contextFiles?: Array<{ path: string; content: string }>;
 	changelogTargets: string[];
+	runtimeServiceScope?: RuntimeServiceScope;
 	requireChangelog: boolean;
 	diffText?: string;
 	existingChangelogEntries?: ExistingChangelogEntries[];
@@ -44,6 +46,9 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 	});
 	const state: CommitAgentState = { diffText: input.diffText };
 	const spawns = "sonic";
+	const runtimeServiceScope: RuntimeServiceScope = input.runtimeServiceScope ?? {
+		readSettings: () => readRuntimeSettingsValues(input.settings),
+	};
 	const tools = createCommitTools({
 		cwd: input.cwd,
 		authStorage: input.authStorage,
@@ -51,6 +56,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 		settings: input.settings,
 		spawns,
 		state,
+		runtimeServiceScope,
 		changelogTargets: input.changelogTargets,
 		enableAnalyzeFiles: true,
 	});
@@ -64,6 +70,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 		thinkingLevel: input.thinkingLevel,
 		systemPrompt: [systemPrompt],
 		customTools: tools,
+		runtimeServiceScope,
 		enableLsp: false,
 		enableMCP: false,
 		hasUI: false,

@@ -47,6 +47,7 @@ import {
 import { Settings } from "../../config/settings";
 import agentCreationArchitectPrompt from "../../prompts/system/agent-creation-architect.md" with { type: "text" };
 import agentCreationUserPrompt from "../../prompts/system/agent-creation-user.md" with { type: "text" };
+import type { RuntimeServiceScope } from "../../runtime";
 import { createAgentSession } from "../../sdk";
 import { discoverAgents } from "../../task/discovery";
 import { resolveAgentPrewalkDefault } from "../../task/prewalk";
@@ -94,6 +95,7 @@ interface AgentDashboardModelContext {
 	modelRegistry?: ModelRegistry;
 	activeModelPattern?: string;
 	defaultModelPattern?: string;
+	runtimeServiceScope?: RuntimeServiceScope;
 }
 
 const SOURCE_ORDER: Record<AgentSource, number> = {
@@ -754,6 +756,7 @@ export class AgentDashboard extends Container {
 			authStorage: modelRegistry.authStorage,
 			modelRegistry,
 			settings,
+			runtimeServiceScope: this.modelContext.runtimeServiceScope,
 			model: selectedModel,
 			systemPrompt: [systemPrompt],
 			hasUI: false,

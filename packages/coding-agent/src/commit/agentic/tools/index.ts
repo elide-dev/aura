@@ -2,6 +2,7 @@ import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { ModelRegistry } from "../../../config/model-registry";
 import type { Settings } from "../../../config/settings";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
+import type { RuntimeServiceScope } from "../../../runtime";
 import type { AuthStorage } from "../../../session/auth-storage";
 import { createAnalyzeFileTool } from "./analyze-file";
 import { createGitFileDiffTool } from "./git-file-diff";
@@ -19,6 +20,7 @@ export interface CommitToolOptions {
 	settings: Settings;
 	spawns: string;
 	state: CommitAgentState;
+	runtimeServiceScope: RuntimeServiceScope;
 	changelogTargets: string[];
 	enableAnalyzeFiles?: boolean;
 }
@@ -39,6 +41,7 @@ export function createCommitTools(options: CommitToolOptions): Array<CustomTool<
 				modelRegistry: options.modelRegistry,
 				settings: options.settings,
 				spawns: options.spawns,
+				runtimeServiceScope: options.runtimeServiceScope,
 				state: options.state,
 			}),
 		);

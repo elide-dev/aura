@@ -380,6 +380,7 @@ export class SelectorController {
 			modelRegistry: this.ctx.session.modelRegistry,
 			activeModelPattern,
 			defaultModelPattern,
+			runtimeServiceScope: this.ctx.session.runtimeServiceScope,
 		});
 		const overlay = this.ctx.ui.showOverlay(dashboard, {
 			width: "100%",

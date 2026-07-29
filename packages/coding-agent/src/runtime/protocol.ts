@@ -235,6 +235,10 @@ export interface RuntimeExecResult {
 	killed: boolean;
 }
 
+export type RuntimeAdapter = "process" | "embedded" | "auto";
+export type RuntimeEffectiveAdapter = "process" | "embedded";
+export type RuntimeEmbeddedSource = "setting" | "env" | "managed" | "binary-adjacent";
+
 export type RuntimeSource = "flag" | "env" | "managed" | "path";
 
 export interface RuntimeStatusResult {
@@ -244,6 +248,14 @@ export interface RuntimeStatusResult {
 	source?: RuntimeSource;
 	guidance?: string;
 	protocolVersion: number;
+	/** Requested adapter from settings. `auto` is preserved rather than collapsed. */
+	adapter?: RuntimeAdapter;
+	/** Adapter selected after resolving and validating the embedded runtime library. */
+	effectiveAdapter?: RuntimeEffectiveAdapter;
+	embeddedLibraryPath?: string;
+	embeddedLibrarySource?: RuntimeEmbeddedSource;
+	embeddedAbiVersion?: number;
+	embeddedSchemaHash?: string;
 }
 
 export type RuntimeErrorCode =
@@ -263,6 +275,12 @@ export class RuntimeRpcError extends Error {
 		super(message);
 		this.name = "RuntimeRpcError";
 	}
+}
+
+/** Preserve protocol errors and normalize unknown transport failures at the endpoint boundary. */
+export function toRuntimeRpcError(error: unknown): RuntimeRpcError {
+	if (error instanceof RuntimeRpcError) return error;
+	return new RuntimeRpcError("internal", error instanceof Error ? error.message : String(error));
 }
 
 export interface RuntimeRpcRequest {

@@ -22,6 +22,8 @@ import type { MnemopiSessionState } from "../mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { AgentRegistry } from "../registry/agent-registry";
+import type { RuntimeServiceScope } from "../runtime";
+import type { RuntimeService } from "../runtime/service";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
@@ -250,7 +252,7 @@ export interface ToolSession {
 	/** Get Mnemopi runtime state for this agent session. */
 	getMnemopiSessionState?: () => MnemopiSessionState | undefined;
 	/** Aura runtime capability service (run/check/build/insights/profile); undefined when runtime.enabled is off. */
-	getRuntimeService?: () => import("../runtime/service").RuntimeService | undefined;
+	getRuntimeService?: () => RuntimeService | undefined;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "Main", "AuthLoader"). */
 	getAgentId?: () => string | null;
 	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
@@ -308,6 +310,8 @@ export interface ToolSession {
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
+	/** Root runtime cache/config scope inherited unchanged by every descendant. */
+	runtimeServiceScope?: RuntimeServiceScope;
 	/** Plan mode state (if active) */
 	getPlanModeState?: () => PlanModeState | undefined;
 	/** Path of the session's active plan reference (e.g. `local://<title>.md`); defaults to `local://PLAN.md`. */
