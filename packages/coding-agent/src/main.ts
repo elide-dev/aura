@@ -101,7 +101,6 @@ import {
 	writeLastChangelogVersion,
 } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
-import { withTimeoutSignal } from "./utils/fetch-timeout";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
@@ -121,13 +120,11 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		return;
 	}
 	try {
-		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest", {
-			signal: withTimeoutSignal(5_000),
-		});
-		if (!response.ok) return undefined;
-
-		const data = (await response.json()) as { version?: string };
-		const latestVersion = data.version;
+		// Same channel `aura update` installs from (see cli/update-cli.ts);
+		// "cannot check" — offline, private-repo check without a token — stays
+		// silent rather than nagging about an update that cannot be verified.
+		const { getLatestRelease } = await import("./cli/update-cli");
+		const latestVersion = (await getLatestRelease(5_000)).version;
 
 		if (latestVersion && Bun.semver.order(latestVersion, currentVersion) > 0) {
 			return latestVersion;

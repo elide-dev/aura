@@ -10,16 +10,29 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { $env, $which, APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	$which,
+	APP_NAME,
+	DIST_HOMEBREW_FORMULA,
+	DIST_INSTALL_URL,
+	DIST_MISE_TOOL,
+	DIST_NPM_REGISTRY,
+	DIST_PACKAGE,
+	DIST_REPO,
+	DIST_UPDATE_CHANNEL,
+	isEnoent,
+	VERSION,
+} from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 
-const REPO = "can1357/oh-my-pi";
-const PACKAGE = "@oh-my-pi/pi-coding-agent";
-const HOMEBREW_FORMULA = "can1357/tap/omp";
-const MISE_TOOL = "github:can1357/oh-my-pi";
+const REPO = DIST_REPO;
+const PACKAGE = DIST_PACKAGE;
+const HOMEBREW_FORMULA = DIST_HOMEBREW_FORMULA;
+const MISE_TOOL = DIST_MISE_TOOL;
 /**
  * Official npm registry origin.
  *
@@ -31,7 +44,7 @@ const MISE_TOOL = "github:can1357/oh-my-pi";
  * `No version matching "X" found for specifier "<pkg>" (but package exists)`.
  * See #1686.
  */
-const NPM_REGISTRY = "https://registry.npmjs.org/";
+const NPM_REGISTRY = DIST_NPM_REGISTRY;
 const GITHUB_API = "https://api.github.com";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
 const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
@@ -70,6 +83,13 @@ interface ReleaseInfo {
 
 export interface ReleaseBinaryAsset {
 	url: string;
+	/**
+	 * GitHub API asset endpoint (`/repos/…/releases/assets/<id>`). Downloads
+	 * from a private repository must use this with an Authorization header and
+	 * `Accept: application/octet-stream`; `url` (the browser download URL) only
+	 * works for public repositories.
+	 */
+	apiUrl?: string;
 	size: number;
 	digest: string;
 }
@@ -126,8 +146,14 @@ export function resolveReleaseBinaryAsset(
 		throw new Error(`GitHub release asset ${binaryName} has an unexpected download URL`);
 	}
 
+	// The API asset endpoint is the only download path that honors an
+	// Authorization header (required while the release repo is private).
+	const expectedApiUrlPrefix = `${GITHUB_API}/repos/${REPO}/releases/assets/`;
+	const apiUrl = typeof asset.url === "string" && asset.url.startsWith(expectedApiUrlPrefix) ? asset.url : undefined;
+
 	return {
 		url: expectedUrl,
+		apiUrl,
 		size: asset.size,
 		digest: `sha256:${digest.toLowerCase()}`,
 	};
@@ -176,6 +202,7 @@ export interface VerifiedBinaryDownloadOptions {
 	expectedSize: number;
 	expectedDigest: string;
 	fetchImpl?: Fetch;
+	headers?: Record<string, string>;
 }
 
 /**
@@ -189,6 +216,7 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 	try {
 		response = await fetchImpl(options.url, {
 			redirect: "follow",
+			headers: options.headers,
 			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
 		});
 	} catch (err) {
@@ -469,18 +497,63 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
 }
 
 /**
- * Get the latest release info from the npm registry.
- * Uses npm instead of GitHub API to avoid unauthenticated rate limiting.
+ * Get the latest release info from the configured distribution channel.
+ *
+ * `github`: latest published release of {@link REPO}. The fork repository is
+ * private, so the request carries `GITHUB_TOKEN`/`GH_TOKEN` when present;
+ * without one this throws and callers decide whether that is fatal (`aura
+ * update`) or silent (the startup check).
+ *
+ * `npm`: `<registry>/<package>/latest` — upstream's channel, kept for a future
+ * aura npm publish. npm is preferred over the GitHub API there because it has
+ * no unauthenticated rate limiting.
  */
-async function getLatestRelease(): Promise<ReleaseInfo> {
+export async function getLatestRelease(timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS): Promise<ReleaseInfo> {
+	if (DIST_UPDATE_CHANNEL === "github") {
+		const headers: Record<string, string> = {
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		};
+		const githubToken = $env.GITHUB_TOKEN || $env.GH_TOKEN;
+		if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+
+		let response: Response;
+		try {
+			response = await fetch(`${GITHUB_API}/repos/${REPO}/releases/latest`, {
+				headers,
+				signal: withTimeoutSignal(timeoutMs),
+			});
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new Error(`Timed out fetching release info after ${Math.round(timeoutMs / 1000)}s`, { cause: err });
+			}
+			throw err;
+		}
+		if ((response.status === 403 && !githubToken) || response.status === 429) {
+			throw new Error(
+				"GitHub API rate limit exceeded while fetching release info; retry later or set GITHUB_TOKEN or GH_TOKEN",
+			);
+		}
+		if (!response.ok) {
+			throw new Error(`Failed to fetch release info: ${response.statusText}`);
+		}
+
+		const data = (await response.json()) as { tag_name?: string };
+		const tag = data.tag_name;
+		if (typeof tag !== "string" || !/^v\d+\.\d+\.\d+$/.test(tag)) {
+			throw new Error(`Latest GitHub release has an unexpected tag: ${String(tag)}`);
+		}
+		return { tag, version: tag.slice(1) };
+	}
+
 	let response: Response;
 	try {
 		response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`, {
-			signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
+			signal: withTimeoutSignal(timeoutMs),
 		});
 	} catch (err) {
 		if (isTimeoutError(err)) {
-			throw new Error("Timed out fetching release info after 30s", { cause: err });
+			throw new Error(`Timed out fetching release info after ${Math.round(timeoutMs / 1000)}s`, { cause: err });
 		}
 		throw err;
 	}
@@ -862,7 +935,7 @@ async function printVerification(expectedVersion: string): Promise<void> {
 		return;
 	}
 	console.log(chalk.yellow(`\nWarning: ${formatVerificationFailure(result, expectedVersion)}`));
-	console.log(chalk.yellow(`You may need to reinstall: curl -fsSL https://omp.sh/install | sh`));
+	console.log(chalk.yellow(`You may need to reinstall from ${DIST_INSTALL_URL}`));
 }
 
 async function unlinkIfExists(filePath: string): Promise<void> {
@@ -1118,14 +1191,21 @@ export async function updateViaBinaryAt(
 	// would force the move-aside rename to overwrite it. pid + timestamp keeps
 	// two forced updates in the same millisecond from colliding.
 	const backupPath = `${targetPath}.${Date.now()}.${process.pid}.bak`;
-	const asset = await getReleaseBinaryAsset(expectedVersion, binaryName, options.fetchImpl, options.githubToken);
+	const githubToken = options.githubToken ?? ($env.GITHUB_TOKEN || $env.GH_TOKEN);
+	const asset = await getReleaseBinaryAsset(expectedVersion, binaryName, options.fetchImpl, githubToken);
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
+	// With a token, download through the API asset endpoint: the plain
+	// browser download URL 404s while the release repository is private.
+	const useApiDownload = Boolean(githubToken && asset.apiUrl);
 	await downloadVerifiedBinary({
-		url: asset.url,
+		url: useApiDownload && asset.apiUrl ? asset.apiUrl : asset.url,
 		targetPath: tempPath,
 		expectedSize: asset.size,
 		expectedDigest: asset.digest,
 		fetchImpl: options.fetchImpl,
+		headers: useApiDownload
+			? { Accept: "application/octet-stream", Authorization: `Bearer ${githubToken}` }
+			: undefined,
 	});
 	console.log(chalk.dim(`Verified ${asset.digest}`));
 
