@@ -1103,7 +1103,15 @@ export class Settings {
 	async #loadProjectConfigYaml(): Promise<RawSettings> {
 		const branded = await this.#loadYamlIfPresentForStartup(this.#projectConfigPath());
 		if (branded) return branded;
-		return (await this.#loadYamlIfPresentForStartup(this.#legacyProjectConfigPath())) ?? {};
+		return (await this.#loadLegacyYamlIfPresent(this.#legacyProjectConfigPath())) ?? {};
+	}
+
+	/**
+	 * Read a legacy `.omp` file without the quarantine path: the legacy dir is
+	 * read-only, so an invalid file is reported but never moved aside.
+	 */
+	async #loadLegacyYamlIfPresent(filePath: string): Promise<RawSettings | null> {
+		return this.#unwrapYamlLoadResult(filePath, await this.#loadYamlIfPresent(filePath));
 	}
 
 	/** Pre-rebrand project config. Read-only: consulted for `modelRoles`, never written. */
@@ -1112,10 +1120,9 @@ export class Settings {
 	}
 
 	/**
-	 * Merge base for a project-config write.
-	 *
-	 * When the branded file exists, seed from it wholesale — we are rewriting that very
-	 * file and must not drop keys the user put there.
+	 * Merge base for a project-config write when the branded file is absent
+	 * (`#saveProjectNow` seeds from the branded file itself whenever its
+	 * write-locked read returns content).
 	 *
 	 * When only a pre-rebrand `.omp/config.yml` exists, seed with its `modelRoles` slice
 	 * and *nothing else*. The legacy file is consulted for model roles alone, but the
@@ -1126,9 +1133,7 @@ export class Settings {
 	 * must not start taking effect just because someone changed a model role.
 	 */
 	async #projectConfigWriteBase(): Promise<RawSettings> {
-		const branded = await this.#loadYamlIfPresentForStartup(this.#projectConfigPath());
-		if (branded) return branded;
-		const legacy = await this.#loadYamlIfPresentForStartup(this.#legacyProjectConfigPath());
+		const legacy = await this.#loadLegacyYamlIfPresent(this.#legacyProjectConfigPath());
 		const legacyRoles = getByPath(legacy ?? {}, ["modelRoles"]);
 		return isRecord(legacyRoles) ? { modelRoles: { ...legacyRoles } } : {};
 	}

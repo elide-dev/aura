@@ -32,9 +32,6 @@ import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { startJsEvalProcess } from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
-import { startEmbeddedControlWorker } from "./runtime/embedded/control-worker-entry";
-import { smokeTestEmbeddedWorkers } from "./runtime/embedded/worker-core";
-import { startEmbeddedExecutionWorker } from "./runtime/embedded/worker-entry";
 import { EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_EXECUTION_WORKER_ARG } from "./runtime/embedded/worker-protocol";
 import { COMPUTER_WORKER_ARG } from "./tools/computer/protocol";
 import { smokeTestComputerWorker } from "./tools/computer/supervisor";
@@ -112,6 +109,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestComputerWorker();
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();
+	const { smokeTestEmbeddedWorkers } = await import("./runtime/embedded/worker-core");
 	await smokeTestEmbeddedWorkers();
 	await smokeTestDaemonBroker();
 	process.stdout.write("smoke-test: ok\n");
@@ -160,11 +158,13 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	// consume the same inbox after their module evaluation begins.
 	if (arg === EMBEDDED_EXECUTION_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
+		const { startEmbeddedExecutionWorker } = await import("./runtime/embedded/worker-entry");
 		startEmbeddedExecutionWorker();
 		return true;
 	}
 	if (arg === EMBEDDED_CONTROL_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
+		const { startEmbeddedControlWorker } = await import("./runtime/embedded/control-worker-entry");
 		startEmbeddedControlWorker();
 		return true;
 	}

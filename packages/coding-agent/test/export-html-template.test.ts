@@ -18,10 +18,12 @@ interface TemplateProbeResult {
 	assetsRemoved: number;
 }
 
+// Fork note: byte/char/sha pins re-derived from the fork's template —
+// tool-views.generated.js additionally carries the runtime tool renderers.
 const expectedTemplate: TemplateProbeResult = {
-	chars: 377_268,
-	bytes: 377_446,
-	sha256: "023cf3773498db52ff0ec508b22ef2c002710f9e9fcb90fea361659d5b0205df",
+	chars: 377_378,
+	bytes: 377_556,
+	sha256: "8aa18334f4d87df7ed93303a939e7d54e82926d9866bcb7c72b75561e1d5aeda",
 	stableCache: true,
 	assetsRemoved: 0,
 };
