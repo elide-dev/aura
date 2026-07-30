@@ -267,6 +267,9 @@ describe("retain.execute", () => {
 	beforeEach(() => {
 		resetSettingsForTest();
 		registeredState = undefined;
+		// Keep the suite hermetic: `ensureBankExists` fires a real createBank
+		// HTTP call before the mocked retain/reflect paths run.
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 	});
 
 	afterEach(() => {
@@ -1342,6 +1345,9 @@ describe("reflect.execute", () => {
 	beforeEach(() => {
 		resetSettingsForTest();
 		registeredState = undefined;
+		// Keep the suite hermetic: `ensureBankExists` fires a real createBank
+		// HTTP call before the mocked reflect path runs.
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 	});
 
 	afterEach(() => {
