@@ -210,7 +210,9 @@ describe("collab chunked welcome (#3144)", () => {
 			await expect(
 				Promise.race([
 					joinAttempt,
-					Bun.sleep(250).then(() => {
+					// Hang guard only — generous so parallel-suite CPU contention
+					// cannot beat the genuine rejection to the race.
+					Bun.sleep(4000).then(() => {
 						throw new Error("join did not reject");
 					}),
 				]),
