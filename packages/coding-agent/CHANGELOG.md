@@ -15,6 +15,7 @@
 
 - Fixed transient internal runtime failures poisoning the session-wide service cache permanently; the failed service is now retired so the next explicit run gets a fresh embedded worker host without retrying the failed guest execution.
 - Fixed relocatable Aura bundles failing to launch when `bin/aura` is installed through a filesystem symlink.
+- Fixed Kotlin runtime execution missing the bundled standard library, and made Auto runtime selection try Java/Kotlin in-process before falling back when the embedded library does not support them yet.
 
 ## [17.1.8] - 2026-07-28
 

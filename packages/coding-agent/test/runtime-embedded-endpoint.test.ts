@@ -8,9 +8,11 @@ import type { EmbeddedExecutionResult } from "../src/runtime/embedded/codec";
 import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
 import {
 	EmbeddedCallRequest,
+	EmbeddedOpenRequest,
 	EmbeddedResponse,
 	EmbeddedFailureCode as WireFailureCode,
 } from "../src/runtime/embedded/generated/embed";
+import { Language } from "../src/runtime/embedded/generated/engine";
 import { EngineInvocation_CliInvocation_SourceLanguage } from "../src/runtime/embedded/generated/invocation";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import { ExecutionWorkerCore } from "../src/runtime/embedded/worker-core";
@@ -79,9 +81,7 @@ function failureResponse(requestId: bigint, code: WireFailureCode, message: stri
 	});
 }
 
-function responseError(
-	response: RuntimeRpcResponse,
-): RuntimeRpcResponse & { error: { code: string; message: string } } {
+function responseError(response: RuntimeRpcResponse): Extract<RuntimeRpcResponse, { error: unknown }> {
 	if (!("error" in response)) throw new Error("expected runtime RPC error response");
 	return response;
 }
@@ -97,6 +97,7 @@ class FakeEmbeddedHost implements EmbeddedRuntimeWorkerHost {
 	readonly events: string[] = [];
 	readonly callIds: bigint[] = [];
 	readonly callRequests: Uint8Array[] = [];
+	readonly openRequests: Uint8Array[] = [];
 	readonly cancelIds: bigint[] = [];
 	readonly #callWaiters: Array<{ count: number; resolve: () => void }> = [];
 	readonly #cancelWaiters: Array<{ count: number; resolve: () => void }> = [];
@@ -109,6 +110,14 @@ class FakeEmbeddedHost implements EmbeddedRuntimeWorkerHost {
 	openError: unknown;
 	callImpl: (requestId: bigint, request: Uint8Array) => Promise<Uint8Array> = async requestId =>
 		completedResponse(requestId);
+	openImpl: (
+		libraryPath: string,
+		request: Uint8Array,
+	) => Promise<{ libraryPath: string; handle: bigint; response: Uint8Array }> = async libraryPath => ({
+		libraryPath,
+		handle: 41n,
+		response: openedResponse(),
+	});
 	cancelImpl: (requestId: bigint) => Promise<Uint8Array> = async requestId => cancelledResponse(requestId);
 
 	async probe(): Promise<void> {
@@ -127,12 +136,13 @@ class FakeEmbeddedHost implements EmbeddedRuntimeWorkerHost {
 
 	async open(
 		libraryPath: string,
-		_request: Uint8Array,
+		request: Uint8Array,
 	): Promise<{ libraryPath: string; handle: bigint; response: Uint8Array }> {
 		this.events.push(`open:${libraryPath}`);
+		this.openRequests.push(request);
 		this.openCount += 1;
 		if (this.openError !== undefined) throw this.openError;
-		return { libraryPath, handle: 41n, response: openedResponse() };
+		return this.openImpl(libraryPath, request);
 	}
 
 	waitForCalls(count: number): Promise<void> {
@@ -306,7 +316,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				adapter: "embedded",
 				embeddedStatus: validEmbeddedStatus,
 				params: { code: "fun main() {}", language: "kotlin" },
-				expected: "process",
+				expected: "embedded",
 			},
 			{
 				name: "auto without library",
@@ -327,14 +337,14 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
 				params: { code: "class A {}", language: "java" },
-				expected: "process",
+				expected: "embedded",
 			},
 			{
 				name: "embedded inferred Java file",
 				adapter: "embedded",
 				embeddedStatus: validEmbeddedStatus,
 				params: { path: "Main.java" },
-				expected: "process",
+				expected: "embedded",
 			},
 			{
 				name: "explicit embedded language overrides JVM-looking path",
@@ -348,7 +358,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
 				params: { path: "Main.kt" },
-				expected: "process",
+				expected: "embedded",
 			},
 		];
 
@@ -358,6 +368,58 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			const response = await selectedRun(item.adapter, processEndpoint, embedded, item.params);
 			expect(unwrapResponse<{ stdout: string }>(response).stdout, item.name).toBe(item.expected);
 		}
+	});
+
+	test("auto falls back to the process endpoint when embedded execution rejects a language", async () => {
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embedded = new StubEndpoint(
+			"embedded",
+			validEmbeddedStatus,
+			new RuntimeRpcError("internal", "unsupported embedded source language: java", {
+				failureCode: "unsupported-language",
+			}),
+		);
+		const response = await selectedRun("auto", processEndpoint, embedded, {
+			code: "class Main {}",
+			language: "java",
+		});
+
+		expect(unwrapResponse<{ stdout: string }>(response).stdout).toBe("process");
+		expect(embedded.requests.map(request => request.method)).toEqual(["runtime/status", "runtime/run"]);
+		expect(processEndpoint.requests.map(request => request.method)).toEqual(["runtime/run"]);
+	});
+
+	test("runs runtime/jvm run actions through the embedded endpoint", async () => {
+		const host = new FakeEmbeddedHost();
+		const endpoint = embeddedEndpoint(host);
+		const response = unwrapResponse<{
+			action: string;
+			phase: string;
+			language: string;
+			className: string;
+			stdout: string;
+		}>(
+			await endpoint.request(
+				rpcRequest(18, "runtime/jvm", {
+					action: "run",
+					language: "kotlin",
+					code: "data class Item(val value: Int)\nfun main() = println(Item(42).value)",
+				}),
+			),
+		);
+
+		expect(response).toMatchObject({
+			action: "run",
+			phase: "run",
+			language: "kotlin",
+			className: "MainKt",
+			stdout: "ok",
+		});
+		const call = new Message(host.callRequests[0], false).getRoot(EmbeddedCallRequest);
+		expect(call.invocation.invocation.cli.command.run.sourceLanguage).toBe(
+			EngineInvocation_CliInvocation_SourceLanguage.KOTLIN,
+		);
+		await endpoint.close();
 	});
 
 	test("explicit embedded and auto broken candidates never fall back for eligible runs", async () => {
@@ -845,6 +907,40 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 		expect(host.loadCount).toBe(1);
 		expect(host.openCount).toBe(1);
 		expect(host.callIds).toEqual([1n, 2n]);
+		const opened = new Message(host.openRequests[0], false).getRoot(EmbeddedOpenRequest);
+		expect(Array.from({ length: opened.languages.length }, (_, index) => opened.languages.get(index))).toEqual([
+			Language.JAVASCRIPT,
+			Language.TYPESCRIPT,
+			Language.PYTHON,
+			Language.JAVA,
+			Language.KOTLIN,
+		]);
+		await endpoint.close();
+	});
+	test("reopens with core languages when the library rejects optional JVM languages", async () => {
+		const host = new FakeEmbeddedHost();
+		host.openImpl = async (libraryPath, _request) => {
+			if (host.openRequests.length === 1) {
+				throw new RuntimeRpcError("internal", "unsupported embedded language: java", {
+					failureCode: "unsupported-language",
+				});
+			}
+			return { libraryPath, handle: 41n, response: openedResponse() };
+		};
+		const endpoint = embeddedEndpoint(host);
+
+		expect(
+			unwrapResponse<{ stdout: string }>(
+				await endpoint.request(rpcRequest(1, "runtime/run", { code: "console.log('ok')", language: "js" })),
+			).stdout,
+		).toBe("ok");
+		expect(host.openCount).toBe(2);
+		const fallback = new Message(host.openRequests[1], false).getRoot(EmbeddedOpenRequest);
+		expect(Array.from({ length: fallback.languages.length }, (_, index) => fallback.languages.get(index))).toEqual([
+			Language.JAVASCRIPT,
+			Language.TYPESCRIPT,
+			Language.PYTHON,
+		]);
 		await endpoint.close();
 	});
 
@@ -1237,6 +1333,28 @@ describe("EmbeddedRuntimeEndpoint lifecycle and validation", () => {
 			responseError(await endpoint.request(rpcRequest(2, "runtime/run", { code: "2", language: "js" }))).error
 				.message,
 		).toContain("control cancellation failed");
+		await endpoint.close();
+	});
+
+	test("an unsupported language response does not poison later supported execution", async () => {
+		const host = new FakeEmbeddedHost();
+		host.callImpl = async requestId =>
+			requestId === 1n
+				? failureResponse(requestId, WireFailureCode.UNSUPPORTED_LANGUAGE, "unsupported java")
+				: completedResponse(requestId, { stdout: "embedded-js" });
+		const endpoint = embeddedEndpoint(host);
+
+		expect(
+			responseError(
+				await endpoint.request(rpcRequest(1, "runtime/run", { code: "class Main {}", language: "java" })),
+			).error.data,
+		).toEqual({ failureCode: "unsupported-language" });
+		expect(
+			unwrapResponse<{ stdout: string }>(
+				await endpoint.request(rpcRequest(2, "runtime/run", { code: "console.log('ok')", language: "js" })),
+			).stdout,
+		).toBe("embedded-js");
+		expect(host.callIds).toEqual([1n, 2n]);
 		await endpoint.close();
 	});
 

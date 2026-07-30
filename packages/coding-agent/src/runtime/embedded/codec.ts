@@ -16,12 +16,12 @@ import {
 } from "./generated/invocation";
 
 export interface EmbeddedOpenConfig {
-	languages: Array<"js" | "ts" | "python">;
+	languages: Array<"js" | "ts" | "python" | "java" | "kotlin">;
 }
 
 export interface EmbeddedRunInvocation {
 	source: { type: "content"; code: string; name: string } | { type: "file"; path: string };
-	language: "js" | "ts" | "python";
+	language: "js" | "ts" | "python" | "java" | "kotlin";
 	args: string[];
 	cwd: string;
 	environment: Readonly<Record<string, string>>;
@@ -63,16 +63,22 @@ const WIRE_LANGUAGE: Record<EmbeddedLanguage, Language> = {
 	js: Language.JAVASCRIPT,
 	ts: Language.TYPESCRIPT,
 	python: Language.PYTHON,
+	java: Language.JAVA,
+	kotlin: Language.KOTLIN,
 };
 const WIRE_SOURCE_LANGUAGE: Record<EmbeddedLanguage, EngineInvocation_CliInvocation_SourceLanguage> = {
 	js: EngineInvocation_CliInvocation_SourceLanguage.JAVASCRIPT,
 	ts: EngineInvocation_CliInvocation_SourceLanguage.TYPESCRIPT,
 	python: EngineInvocation_CliInvocation_SourceLanguage.PYTHON,
+	java: EngineInvocation_CliInvocation_SourceLanguage.JAVA,
+	kotlin: EngineInvocation_CliInvocation_SourceLanguage.KOTLIN,
 };
 const INLINE_SOURCE_NAME: Record<EmbeddedLanguage, string> = {
 	js: "[eval].js",
 	ts: "[eval].ts",
 	python: "[eval].py",
+	java: "[eval].java",
+	kotlin: "[eval].kt",
 };
 const FATAL_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 

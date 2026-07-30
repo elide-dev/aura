@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ELIDE_VERSION, MINIMUM_RUNTIME_VERSION } from "../dist";
-import { deriveJvmMainClass, JVM_BYTECODE_RELEASE, jvmClasspath, jvmSourceFile } from "../jvm";
+import { deriveJvmMainClass, JVM_BYTECODE_RELEASE, jvmSourceFile } from "../jvm";
 import {
 	errorResponse,
 	type JvmLanguage,
@@ -491,6 +491,30 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		return params.cwd ?? process.cwd();
 	}
 
+	private async jvmRunClasspath(language: JvmLanguage, binaryPath: string): Promise<string> {
+		if (language === "java") return ".";
+		const kotlinRoot = path.resolve(path.dirname(binaryPath), "..", "lib", "resources", "kotlin");
+		try {
+			const versions = (await fs.readdir(kotlinRoot, { withFileTypes: true }))
+				.filter(entry => entry.isDirectory())
+				.sort((left, right) => right.name.localeCompare(left.name));
+			for (const version of versions) {
+				const lib = path.join(kotlinRoot, version.name, "lib");
+				try {
+					const libraries = await fs.readdir(lib);
+					if (libraries.includes("kotlin-stdlib.jar")) {
+						return `out${path.delimiter}${path.join(lib, "*")}`;
+					}
+				} catch {
+					// Try another installed Kotlin version.
+				}
+			}
+		} catch {
+			// Non-bundled runtimes may not expose adjacent resources.
+		}
+		return "out";
+	}
+
 	/**
 	 * Resolve the binary and open a workdir for a JVM flow. `fn` gets a `run`
 	 * bound to the workdir as its cwd — the JVM toolchain compiles and reads
@@ -562,7 +586,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
 			const { className, failure } = await this.compileJvm(wd, bin, run, "run", language, code, params.mainClass);
 			if (failure) return failure;
-			const result = await run([bin, "java", "--", "-cp", jvmClasspath(language), className]);
+			const result = await run([bin, "java", "--", "-cp", await this.jvmRunClasspath(language, bin), className]);
 			return { ...result, action: "run", phase: "run", language, className };
 		});
 	}

@@ -8,6 +8,7 @@ import { LocalRuntimeEndpoint } from "../src/runtime/transport/local";
 
 let dir: string;
 let fakeBin: string;
+let bundledBin: string;
 let failingJavac: string;
 let log: string;
 
@@ -40,6 +41,13 @@ beforeAll(async () => {
 	fakeBin = path.join(dir, "elide");
 	log = path.join(dir, "invocations.log");
 	await fs.writeFile(fakeBin, FAKE_BODY, { mode: 0o755 });
+	const bundledRoot = path.join(dir, "bundle");
+	bundledBin = path.join(bundledRoot, "bin", "elide");
+	const kotlinLib = path.join(bundledRoot, "lib", "resources", "kotlin", "2.4.0", "lib");
+	await fs.mkdir(path.dirname(bundledBin), { recursive: true });
+	await fs.mkdir(kotlinLib, { recursive: true });
+	await fs.writeFile(bundledBin, FAKE_BODY, { mode: 0o755 });
+	await fs.writeFile(path.join(kotlinLib, "kotlin-stdlib.jar"), "");
 	failingJavac = path.join(dir, "elide-badjavac");
 	await fs.writeFile(
 		failingJavac,
@@ -109,6 +117,15 @@ describe("runtime/jvm — argv per action", () => {
 		const r = await jvm({ action: "run", language: "kotlin", code: 'fun main() { println("hi") }' });
 		expect(r.className).toBe("MainKt");
 		expect(await invocations()).toEqual(["kotlinc -- Main.kt -cp . -d out", "java -- -cp out MainKt"]);
+	});
+
+	test("run adds the adjacent bundled Kotlin libraries to the runtime classpath", async () => {
+		await jvm({ action: "run", language: "kotlin", code: 'fun main() { println("hi") }' }, bundledBin);
+		const kotlinLib = path.join(dir, "bundle", "lib", "resources", "kotlin", "2.4.0", "lib", "*");
+		expect(await invocations()).toEqual([
+			"kotlinc -- Main.kt -cp . -d out",
+			`java -- -cp out${path.delimiter}${kotlinLib} MainKt`,
+		]);
 	});
 
 	test("an explicit mainClass names both the source file and the run target", async () => {

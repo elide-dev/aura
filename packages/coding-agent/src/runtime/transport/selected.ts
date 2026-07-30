@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import {
 	errorResponse,
 	okResponse,
@@ -11,7 +10,7 @@ import {
 	toRuntimeRpcError,
 } from "../protocol";
 import type { RuntimeEndpoint } from "../service";
-import { EmbeddedRuntimeEndpoint } from "./embedded";
+import { EmbeddedRuntimeEndpoint, isEmbeddedRunRequest } from "./embedded";
 import { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./local";
 
 export interface SelectedEndpointOptions extends LocalEndpointOptions {
@@ -60,7 +59,7 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 			return errorResponse(request.id, new RuntimeRpcError("internal", "Runtime endpoint is closed."));
 		}
 		if (request.method === "runtime/status") return this.#statusResponse(request);
-		if (request.method !== "runtime/run" || this.#adapter === "process" || isJvmRun(request.params)) {
+		if (!isEmbeddedRunRequest(request) || this.#adapter === "process") {
 			return this.#process.request(request, signal);
 		}
 		if (this.#adapter === "embedded") return this.#embedded.request(request, signal);
@@ -194,7 +193,13 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 				embeddedStatus.available || embeddedStatus.embeddedLibraryPath !== undefined
 					? this.#embedded
 					: this.#process;
-			void endpoint.request(queued.preflight.request, queued.signal).then(queued.resolve, error => {
+			void (async () => {
+				const response = await endpoint.request(queued.preflight.request, queued.signal);
+				if (endpoint === this.#embedded && isUnsupportedEmbeddedLanguage(response)) {
+					return this.#process.request(queued.preflight.request, queued.signal);
+				}
+				return response;
+			})().then(queued.resolve, error => {
 				queued.resolve(errorResponse(queued.preflight.request.id, toRuntimeRpcError(error)));
 			});
 		}
@@ -260,6 +265,17 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 		return response.result as RuntimeStatusResult;
 	}
 }
+
+function isUnsupportedEmbeddedLanguage(response: RuntimeRpcResponse): boolean {
+	if (!("error" in response)) return false;
+	const data = response.error.data;
+	return (
+		data !== null &&
+		typeof data === "object" &&
+		!Array.isArray(data) &&
+		(data as Record<string, unknown>).failureCode === "unsupported-language"
+	);
+}
 function snapshotRunRequest(request: RuntimeRpcRequest): RuntimeRpcRequest {
 	const params = request.params;
 	if (params === null || typeof params !== "object") return request;
@@ -279,14 +295,4 @@ function snapshotRunRequest(request: RuntimeRpcRequest): RuntimeRpcRequest {
 			cwd: raw.cwd === undefined ? process.cwd() : raw.cwd,
 		},
 	};
-}
-
-function isJvmRun(params: unknown): boolean {
-	if (params === null || typeof params !== "object" || Array.isArray(params)) return false;
-	const raw = params as Record<string, unknown>;
-	if (raw.language === "java" || raw.language === "kotlin") return true;
-	if (raw.language !== undefined) return false;
-	if (typeof raw.path !== "string") return false;
-	const extension = path.extname(raw.path).toLowerCase();
-	return extension === ".java" || extension === ".kt" || extension === ".kts";
 }

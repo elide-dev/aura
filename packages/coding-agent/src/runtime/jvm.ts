@@ -53,8 +53,3 @@ export function deriveJvmMainClass(language: JvmLanguage, code: string, override
 export function jvmSourceFile(language: JvmLanguage, className: string): string {
 	return language === "java" ? `${className}.java` : "Main.kt";
 }
-
-/** Where compiled classes land: Java compiles in place, Kotlin into `out`. */
-export function jvmClasspath(language: JvmLanguage): string {
-	return language === "java" ? "." : "out";
-}

@@ -158,9 +158,12 @@ re-appending this one.
   selected-service cache key, atomic swap/retirement/disposal ordering, and
   `RuntimeSettingsValues` adapter/library mapping; `service.ts` owns the idempotent
   endpoint-awaiting close boundary; `transport/selected.ts` implements the exact
-  process/embedded/auto routing and composed status matrix; `transport/embedded.ts`
-  owns validation, lazy open/reuse, serial execution, cancellation races, poisoning,
-  teardown, and postmortem fallback; `resolve.ts` owns regular-file validation shared
+  process/embedded/auto routing and composed status matrix, including optimistic
+  embedded Java/Kotlin dispatch with process fallback on an unsupported-language
+  response; `transport/local.ts` adds adjacent bundled Kotlin libraries to JVM run
+  classpaths; `transport/embedded.ts` owns validation, lazy open/reuse, serial
+  execution, cancellation races, poisoning, teardown, and postmortem fallback;
+  `resolve.ts` owns regular-file validation shared
   by binary and library resolution; and `src/runtime/embedded/` contains the
   exact-precedence shared-library resolver, handwritten embedded wire adapter, schema
   identity constants, the sole `bun:ffi` ABI owner, and the typed

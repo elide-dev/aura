@@ -35,11 +35,16 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 function createService(
-	options: { embeddedPath?: string; explicitPath?: string; env?: NodeJS.ProcessEnv } = {},
+	options: {
+		adapter?: "process" | "embedded" | "auto";
+		embeddedPath?: string;
+		explicitPath?: string;
+		env?: NodeJS.ProcessEnv;
+	} = {},
 ): RuntimeService {
 	return new RuntimeService(
 		new SelectedRuntimeEndpoint({
-			adapter: "embedded",
+			adapter: options.adapter ?? "embedded",
 			autoDownload: false,
 			embeddedPath: options.embeddedPath ?? embeddedPath,
 			explicitPath: options.explicitPath ?? processPath,
@@ -393,20 +398,42 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 		}
 	}, 120_000);
 
-	test("routes Java Kotlin and check through the process adapter", async () => {
-		const jvmCwd = await makeTempDir("aura-embedded-jvm-");
-		const javaPath = path.join(jvmCwd, "Main.java");
-		const kotlinPath = path.join(jvmCwd, "Main.kt");
-		await fs.writeFile(
-			javaPath,
-			'public class Main { public static void main(String[] args) { System.out.println("java-process"); } }\n',
-		);
-		await fs.writeFile(kotlinPath, 'fun main() { println("kotlin-process") }\n');
-		const java = await service.run({ path: javaPath, language: "java", cwd: jvmCwd });
-		expect(java).toMatchObject({ exitCode: 0, stdout: "java-process\n", killed: false });
+	test("runs Java and Kotlin through auto selection while check uses the process adapter", async () => {
+		const embeddedJvm = createService({ adapter: "auto" });
+		try {
+			const java = await embeddedJvm.jvm({
+				action: "run",
+				language: "java",
+				code: 'import java.util.List; public class Main { record Item(int value) {} public static void main(String[] args) { System.out.println("java-embedded:" + List.of(new Item(20), new Item(22)).stream().mapToInt(Item::value).sum()); } }',
+			});
+			expect(java).toMatchObject({
+				action: "run",
+				phase: "run",
+				language: "java",
+				className: "Main",
+				exitCode: 0,
+				stdout: "java-embedded:42\n",
+				killed: false,
+			});
 
-		const kotlin = await service.run({ path: kotlinPath, language: "kotlin", cwd: jvmCwd });
-		expect(kotlin).toMatchObject({ exitCode: 0, stdout: "kotlin-process\n", killed: false });
+			const kotlin = await embeddedJvm.jvm({
+				action: "run",
+				language: "kotlin",
+				code: 'data class Item(val value: Int)\nfun main() { println("kotlin-embedded:" + listOf(Item(20), Item(22)).sumOf { it.value }) }',
+			});
+			expect(kotlin).toMatchObject({
+				action: "run",
+				phase: "run",
+				language: "kotlin",
+				className: "MainKt",
+				exitCode: 0,
+				stdout: "kotlin-embedded:42\n",
+				killed: false,
+			});
+			expect((await embeddedJvm.status()).effectiveAdapter).toBe("embedded");
+		} finally {
+			await embeddedJvm.close();
+		}
 
 		const project = await makeTempDir("aura-embedded-check-");
 		await fs.writeFile(path.join(project, "package.json"), '{"name":"embedded-check","type":"module"}\n');

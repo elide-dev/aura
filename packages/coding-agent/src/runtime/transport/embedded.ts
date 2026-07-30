@@ -19,11 +19,13 @@ import {
 } from "../embedded/resolve";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../embedded/schema";
 import { cancelEmbeddedRequestUntilSettled, EmbeddedWorkerHost } from "../embedded/worker-core";
+import { deriveJvmMainClass } from "../jvm";
 import {
 	errorResponse,
 	okResponse,
 	RUNTIME_PROTOCOL_VERSION,
 	type RuntimeExecResult,
+	type RuntimeJvmResult,
 	RuntimeRpcError,
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
@@ -42,17 +44,22 @@ const INLINE_SOURCE_NAME: Record<EmbeddedRunInvocation["language"], string> = {
 	js: "[eval].js",
 	ts: "[eval].ts",
 	python: "[eval].py",
+	java: "[eval].java",
+	kotlin: "[eval].kt",
 };
 
 let nextPostmortemRegistration = 0;
 
+export interface EmbeddedOpenedRuntime {
+	libraryPath: string;
+	handle: bigint;
+	response: Uint8Array;
+}
+
 export interface EmbeddedRuntimeWorkerHost {
 	probe(): Promise<void>;
 	load(libraryPath: string): Promise<{ libraryPath: string; abiVersion: number; schemaHash: string }>;
-	open(
-		libraryPath: string,
-		request: Uint8Array,
-	): Promise<{ libraryPath: string; handle: bigint; response: Uint8Array }>;
+	open(libraryPath: string, request: Uint8Array): Promise<EmbeddedOpenedRuntime>;
 	call(requestId: bigint, request: Uint8Array): Promise<Uint8Array>;
 	cancel(requestId: bigint): Promise<Uint8Array>;
 	shutdown(): Promise<void>;
@@ -101,7 +108,7 @@ interface RunRequestSnapshotContext {
 const runRequestSnapshots = new WeakMap<object, RunRequestSnapshotContext>();
 
 function snapshotEmbeddedRunRequest(request: RuntimeRpcRequest, environment: NodeJS.ProcessEnv): RuntimeRpcRequest {
-	if (request.method !== "runtime/run") return request;
+	if (!isEmbeddedRunRequest(request)) return request;
 	const params = request.params;
 	if (params === null || typeof params !== "object") return request;
 	if (runRequestSnapshots.has(params)) return request;
@@ -115,9 +122,11 @@ function snapshotEmbeddedRunRequest(request: RuntimeRpcRequest, environment: Nod
 				const args = raw.args;
 				const stdin = raw.stdin;
 				return {
+					action: raw.action,
 					code: raw.code,
 					path: raw.path,
 					language: raw.language,
+					mainClass: raw.mainClass,
 					args: Array.isArray(args) ? [...args] : args,
 					stdin: stdin instanceof Uint8Array ? new Uint8Array(stdin) : stdin,
 					timeoutMs: raw.timeoutMs,
@@ -174,7 +183,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			if (request.method === "runtime/status") {
 				return okResponse(request.id, await this.#status());
 			}
-			if (request.method !== "runtime/run") {
+			if (!isEmbeddedRunRequest(request)) {
 				throw new RuntimeRpcError(
 					"invalid-params",
 					`Embedded runtime endpoint does not support ${request.method}.`,
@@ -183,7 +192,19 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 			if (signal?.aborted) throw new RuntimeRpcError("cancelled", CANCELLED_MESSAGE);
 			const snapshottedRequest = this.snapshotRunRequest(request);
 			const preparation = this.#preparedRun(snapshottedRequest.params);
-			return await this.#enqueue(snapshottedRequest.id, preparation, signal);
+			const response = await this.#enqueue(snapshottedRequest.id, preparation, signal);
+			if (snapshottedRequest.method !== "runtime/jvm" || "error" in response) return response;
+			const raw = snapshottedRequest.params as Record<string, unknown>;
+			const language = raw.language as "java" | "kotlin";
+			const result = response.result as RuntimeExecResult;
+			const decorated: RuntimeJvmResult = {
+				...result,
+				action: "run",
+				phase: "run",
+				language,
+				className: deriveJvmMainClass(language, raw.code as string),
+			};
+			return okResponse(snapshottedRequest.id, decorated);
 		} catch (error) {
 			return errorResponse(request.id, toRuntimeRpcError(error));
 		}
@@ -631,7 +652,7 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 					failureCode: callOutcome.response.code,
 				},
 			);
-			this.#poison(failure);
+			if (callOutcome.response.code !== EmbeddedFailureCode.UNSUPPORTED_LANGUAGE) this.#poison(failure);
 			throw failure;
 		}
 
@@ -647,10 +668,21 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 		if (this.#opened) return this.#opened;
 		this.#opened = (async () => {
 			try {
-				const opened = await this.#workerHost().open(
-					selection.resolved.libraryPath,
-					encodeOpenRequest({ languages: ["js", "ts", "python"] }),
-				);
+				const host = this.#workerHost();
+				let opened: EmbeddedOpenedRuntime;
+				try {
+					opened = await host.open(
+						selection.resolved.libraryPath,
+						encodeOpenRequest({ languages: ["js", "ts", "python", "java", "kotlin"] }),
+					);
+				} catch (error) {
+					const failure = toRuntimeRpcError(error);
+					if (!isUnsupportedLanguageFailure(failure)) throw failure;
+					opened = await host.open(
+						selection.resolved.libraryPath,
+						encodeOpenRequest({ languages: ["js", "ts", "python"] }),
+					);
+				}
 				if (opened.libraryPath !== selection.resolved.libraryPath) {
 					throw new RuntimeRpcError("internal", "Embedded runtime changed library identity while opening.");
 				}
@@ -682,18 +714,40 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 	}
 }
 
+function isUnsupportedLanguageFailure(error: RuntimeRpcError): boolean {
+	const data = error.data;
+	return (
+		data !== null &&
+		typeof data === "object" &&
+		!Array.isArray(data) &&
+		(data as Record<string, unknown>).failureCode === EmbeddedFailureCode.UNSUPPORTED_LANGUAGE
+	);
+}
+
 const encoder = new TextEncoder();
 
 function embeddedLanguage(value: unknown, sourcePath: string | undefined): EmbeddedRunInvocation["language"] {
 	if (value !== undefined) {
-		if (value === "js" || value === "ts" || value === "python") return value;
-		throw new RuntimeRpcError("invalid-params", "Embedded run language must be js, ts, or python.");
+		if (value === "js" || value === "ts" || value === "python" || value === "java" || value === "kotlin") {
+			return value;
+		}
+		throw new RuntimeRpcError("invalid-params", "Embedded run language must be js, ts, python, java, or kotlin.");
 	}
 	if (!sourcePath) return "ts";
 	const extension = path.extname(sourcePath).toLowerCase();
 	if (extension === ".py") return "python";
 	if (extension === ".js" || extension === ".mjs" || extension === ".cjs") return "js";
+	if (extension === ".java") return "java";
+	if (extension === ".kt" || extension === ".kts") return "kotlin";
 	return "ts";
+}
+
+export function isEmbeddedRunRequest(request: RuntimeRpcRequest): boolean {
+	if (request.method === "runtime/run") return true;
+	if (request.method !== "runtime/jvm") return false;
+	if (request.params === null || typeof request.params !== "object" || Array.isArray(request.params)) return false;
+	const raw = request.params as Record<string, unknown>;
+	return raw.action === "run" && (raw.language === "java" || raw.language === "kotlin") && raw.mainClass === undefined;
 }
 
 function snapshotEnvironment(environment: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> {

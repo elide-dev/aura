@@ -72,7 +72,7 @@ describe("embedded runtime protocol codec", () => {
 		expect(EMBEDDED_RUNTIME_SCHEMA_SHA256).toBe("8a6b5aa3d4fcc72fda099f9df9f519ca3edc89b2527bb864057a530836718e06");
 	});
 
-	test("encodes an open request with protocol v2 and requested languages in order", () => {
+	test("encodes an open request with protocol v2 and requested engine languages in order", () => {
 		const request = decodeOpen(encodeOpenRequest({ languages: ["python", "js", "ts"] }));
 
 		expect(request.protocolVersion).toBe(ProtocolVersion.V2);
@@ -130,6 +130,22 @@ describe("embedded runtime protocol codec", () => {
 			["EMPTY", ""],
 			["NO_COLOR", "1"],
 		]);
+	});
+
+	test("encodes inline Kotlin for the native run invocation", () => {
+		const invocation: EmbeddedRunInvocation = {
+			source: { type: "content", code: "fun main() = println(42)", name: "[eval].kt" },
+			language: "kotlin",
+			args: [],
+			cwd: "/workspace/project",
+			environment: { NO_COLOR: "1" },
+			stdin: new Uint8Array(),
+		};
+
+		const request = decodeCall(encodeRunRequest(43n, invocation));
+		const run = request.invocation.invocation.cli.command.run;
+		expect(run.sourceLanguage).toBe(EngineInvocation_CliInvocation_SourceLanguage.KOTLIN);
+		expect(run.sourceCode.code).toBe("fun main() = println(42)");
 	});
 
 	test("encodes an absolute file invocation without changing its path or argument order", () => {
