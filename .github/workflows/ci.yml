@@ -314,7 +314,22 @@ jobs:
                }
               }
               EOF
-              bun "$RUNNER_TEMP/smoke-addons.js" \
+              # This step is the gate on an immutable cache key, so it must run a
+              # real load — never skip. bun is baked into the omp-kata image and
+              # node ships with GitHub-hosted runners; self-heal like
+              # .github/actions/bun-install when a runner provides neither (keep
+              # the pin in sync with it and infra/runner.Dockerfile).
+              loader=""
+              for candidate in bun node; do
+                if command -v "$candidate" >/dev/null 2>&1; then loader=$candidate; break; fi
+              done
+              if [ -z "$loader" ]; then
+                echo "::warning::neither bun nor node on PATH; fetching bun to smoke the addons"
+                export BUN_INSTALL="${HOME}/.bun"
+                curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+                loader="${BUN_INSTALL}/bin/bun"
+              fi
+              "$loader" "$RUNNER_TEMP/smoke-addons.js" \
                 "$PWD/pi_natives.linux-x64-baseline.node" \
                 "$PWD/pi_natives.linux-x64-modern.node"
          - name: Look up native addon cache
