@@ -221,6 +221,21 @@ describe("SessionManager temp cwd session dirs", () => {
 
 describe("SessionManager legacy session migration persistence", () => {
 	let tempDir: string;
+	// These tests model the no-terminal-id resume path (`--continue` with no
+	// breadcrumb). A real terminal env (WT_SESSION, TMUX_PANE, …) would give
+	// `getTerminalId()` an id, so breadcrumbs get written/honored and
+	// `continueRecent` follows the fresh `/new` boundary instead of
+	// `findMostRecentSession` — scrub the fallback vars for a hermetic run.
+	const TERMINAL_ID_ENV_VARS = [
+		"ZELLIJ_PANE_ID",
+		"TMUX_PANE",
+		"CMUX_SURFACE_ID",
+		"KITTY_WINDOW_ID",
+		"WEZTERM_PANE",
+		"TERM_SESSION_ID",
+		"WT_SESSION",
+	] as const;
+	const savedTerminalEnv: Record<string, string | undefined> = {};
 
 	function makeAssistantMessage() {
 		return {
@@ -247,10 +262,19 @@ describe("SessionManager legacy session migration persistence", () => {
 	}
 
 	beforeEach(() => {
+		for (const key of TERMINAL_ID_ENV_VARS) {
+			savedTerminalEnv[key] = process.env[key];
+			delete process.env[key];
+		}
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-session-manager-legacy-"));
 	});
 
 	afterEach(() => {
+		for (const key of TERMINAL_ID_ENV_VARS) {
+			const value = savedTerminalEnv[key];
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
 		removeSyncWithRetries(tempDir);
 	});
 
