@@ -61,12 +61,14 @@ describe("AgentSession concurrent disposal", () => {
 		return session;
 	}
 
-	it("starts independent writers together and closes persistence after their barrier", async () => {
+	it("drains owned async jobs before the independent writers, then closes persistence after their barrier", async () => {
 		const owned = new AsyncJobManager({ maxRunningJobs: 1, retentionMs: 1_000, onJobComplete: () => {} });
 		const asyncGate = Promise.withResolvers<void>();
 		const hindsightGate = Promise.withResolvers<void>();
 		const mnemopiGate = Promise.withResolvers<void>();
 		const asyncStarted = Promise.withResolvers<void>();
+		const hindsightStarted = Promise.withResolvers<void>();
+		const mnemopiStarted = Promise.withResolvers<void>();
 		const order: string[] = [];
 		vi.spyOn(owned, "dispose").mockImplementation(async () => {
 			order.push("async:start");
@@ -80,6 +82,7 @@ describe("AgentSession concurrent disposal", () => {
 		const hindsight: HindsightSessionState = Object.create(HindsightSessionState.prototype);
 		vi.spyOn(hindsight, "flushRetainQueue").mockImplementation(async () => {
 			order.push("hindsight:start");
+			hindsightStarted.resolve();
 			await hindsightGate.promise;
 			order.push("hindsight:end");
 		});
@@ -89,6 +92,7 @@ describe("AgentSession concurrent disposal", () => {
 		const mnemopi: MnemopiSessionState = Object.create(MnemopiSessionState.prototype);
 		vi.spyOn(mnemopi, "dispose").mockImplementation(async () => {
 			order.push("mnemopi:start");
+			mnemopiStarted.resolve();
 			await mnemopiGate.promise;
 			order.push("mnemopi:end");
 		});
@@ -102,11 +106,20 @@ describe("AgentSession concurrent disposal", () => {
 
 		const dispose = current.dispose();
 		try {
+			// The owned job manager drains on its own first: descendant tasks share the
+			// root runtime without a lease, so their abort/settlement paths must not run
+			// alongside the rest of teardown (see #doDispose). Nothing else may have
+			// started while it is still gated.
 			await asyncStarted.promise;
 			await Promise.resolve();
-			expect(order).toContain("hindsight:start");
-			expect(order).toContain("mnemopi:start");
-			expect(order).not.toContain("async:end");
+			expect(order).toEqual(["async:start"]);
+			expect(persistenceClosed).toBe(false);
+
+			// Past that barrier the remaining writers do run together, and each holds
+			// its own gate — so both have started while neither has finished.
+			asyncGate.resolve();
+			await Promise.all([hindsightStarted.promise, mnemopiStarted.promise]);
+			expect(order).toContain("async:end");
 			expect(order).not.toContain("hindsight:end");
 			expect(order).not.toContain("mnemopi:end");
 			expect(persistenceClosed).toBe(false);
