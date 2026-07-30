@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,15 +19,14 @@ interface TemplateProbeResult {
 	assetsRemoved: number;
 }
 
-// Fork note: byte/char/sha pins re-derived from the fork's template —
-// tool-views.generated.js additionally carries the runtime tool renderers.
-const expectedTemplate: TemplateProbeResult = {
-	chars: 377_378,
-	bytes: 377_556,
-	sha256: "8aa18334f4d87df7ed93303a939e7d54e82926d9866bcb7c72b75561e1d5aeda",
-	stableCache: true,
-	assetsRemoved: 0,
-};
+// What these tests pin is that every context — source run, normal bundle,
+// compiled binary, cache-after-asset-removal — composes the *same* bytes as the
+// source template. The absolute size/sha cannot be hardcoded: one input,
+// tool-views.generated.js, is gitignored and re-emitted by `gen:tool-views` on
+// install, so its exact bytes track the ambient bun's codegen and differ
+// between a dev box and CI (that mismatch failed this suite). Derive the pin
+// from the composed source instead, and keep comparing all four contexts to it.
+let expectedTemplate: TemplateProbeResult;
 const assetDir = new URL("../src/export/html/", import.meta.url);
 const templateProbePath = path.resolve(import.meta.dir, "fixtures", "html-export-template-probe.ts");
 const heapProbePath = path.resolve(import.meta.dir, "fixtures", "html-export-static-import-heap-probe.ts");
@@ -93,6 +93,14 @@ async function runProbe(command: string[]): Promise<TemplateProbeResult> {
 }
 
 beforeAll(async () => {
+	const composed = composeExpectedTemplate();
+	expectedTemplate = {
+		chars: composed.length,
+		bytes: Buffer.byteLength(composed),
+		sha256: createHash("sha256").update(composed).digest("hex"),
+		stableCache: true,
+		assetsRemoved: 0,
+	};
 	fs.mkdirSync(unrelatedCwd);
 	const bundle = await Bun.build({
 		entrypoints: [templateProbePath],

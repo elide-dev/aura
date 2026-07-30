@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { buildSystemPrompt } from "../src/system-prompt";
 
 interface ProbeRunResult {
@@ -24,7 +25,12 @@ async function runProbeScenario(options: {
 		const cacheRoot = path.join(tempRoot, "cache");
 		const probeCountPath = path.join(tempRoot, "probe-count");
 		await fs.mkdir(binDir, { recursive: true });
-		await fs.mkdir(path.join(cacheRoot, "omp"), { recursive: true });
+		// XDG_CACHE_HOME only wins once $XDG_CACHE_HOME/<APP_NAME> exists (see the
+		// resolveIf logic in packages/utils/src/dirs.ts), so this dir is what keeps
+		// the scenario off the real profile's gpu_cache.json. Name it from APP_NAME
+		// rather than a literal: hardcoding "omp" silently stopped redirecting when
+		// the app was renamed, and the probe then read the host's actual GPU.
+		await fs.mkdir(path.join(cacheRoot, APP_NAME), { recursive: true });
 		const lspciPath = path.join(binDir, "lspci");
 		await Bun.write(
 			lspciPath,

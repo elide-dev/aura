@@ -11,18 +11,22 @@ import { provisionRuntime } from "../src/runtime/provision";
 const UNRESOLVABLE_HOST = "aura-runtime-does-not-exist.invalid";
 
 /**
- * Whether this host's resolver answers for `.invalid` anyway (NXDOMAIN-hijacking
- * networks). Probed at module scope, not in `beforeAll`, because `test.skipIf` is
- * evaluated when the test is registered — before any hook has run. The probe is
- * time-bounded so a wedged resolver cannot stall importing this file; a probe that
- * does not answer in time counts as "does not resolve", which is the case the test
- * below is written for anyway.
+ * Whether this host's resolver rejects `.invalid` *promptly* — the only condition
+ * under which "DNS failure, not the deadline, is what surfaces" can be asserted.
+ * Two other resolver behaviours make the case untestable here rather than broken:
+ * NXDOMAIN-hijacking networks (captive portals, some ISPs) answer with an address,
+ * and sandboxed/egress-restricted networks — the CI pods among them — blackhole the
+ * query so nothing comes back at all and the connect deadline legitimately wins.
+ * Probed at module scope, not in `beforeAll`, because `test.skipIf` is evaluated
+ * when the test is registered — before any hook has run. The probe is time-bounded
+ * so a wedged resolver cannot stall importing this file, and a probe that does not
+ * answer in time reads as "not prompt", i.e. skip.
  */
-const invalidNameResolves = await Promise.race([
+const invalidNameFailsFast = await Promise.race([
 	dns
 		.lookup(UNRESOLVABLE_HOST)
-		.then(() => true)
-		.catch(() => false),
+		.then(() => false)
+		.catch(() => true),
 	new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2_000).unref?.()),
 ]);
 
@@ -132,10 +136,11 @@ describe("runtime provisioning", () => {
 		expect((err as RuntimeRpcError).message).toMatch(/cannot reach|did not respond within 250ms/);
 	});
 
-	// Some networks (captive portals, ISP resolvers that hijack NXDOMAIN) answer for
-	// `.invalid` names, which would turn this case into a false failure about someone
-	// else's DNS. Probed once above; skipped rather than failed when that happens.
-	test.skipIf(invalidNameResolves)(
+	// Only meaningful where the resolver rejects `.invalid` quickly; a network that
+	// answers for it, or one that swallows the query until the connect deadline,
+	// would turn this into a false failure about someone else's DNS. Probed once
+	// above; skipped rather than failed when that happens.
+	test.skipIf(!invalidNameFailsFast)(
 		"an unresolvable host is reported as unreachable, not as a timeout",
 		async () => {
 			const err = await provisionRuntime({

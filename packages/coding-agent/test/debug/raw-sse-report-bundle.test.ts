@@ -6,7 +6,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-coding-agent/debug/raw-sse-buffer";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
-import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-test",
@@ -48,7 +48,11 @@ describe("raw SSE report bundle", () => {
 	it("includes captured raw SSE text and dropped-record disclosure", async () => {
 		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-raw-sse-report-"));
 		const xdgStateHome = path.join(cleanupRoot, "state");
-		await fs.mkdir(path.join(xdgStateHome, "omp"), { recursive: true });
+		// $XDG_STATE_HOME only takes effect once $XDG_STATE_HOME/<APP_NAME> exists
+		// (see dirs.ts resolveIf), so the dir name has to track APP_NAME — a literal
+		// stops redirecting the moment the app is renamed, silently sending the test
+		// at the real profile dir.
+		await fs.mkdir(path.join(xdgStateHome, APP_NAME), { recursive: true });
 		process.env.XDG_STATE_HOME = xdgStateHome;
 		setAgentDir(fallbackAgentDir);
 
