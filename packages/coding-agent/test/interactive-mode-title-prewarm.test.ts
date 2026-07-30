@@ -82,11 +82,17 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		else Bun.env.PI_NO_TITLE = previousNoTitle;
 	});
 
+	// The prewarm decision is deferred via setImmediate so the spawn never
+	// lands ahead of the first paint; init() can resolve before it fires.
+	// Queue a trailing immediate (FIFO) so the assertion runs after it.
+	const flushImmediates = () => new Promise<void>(resolve => setImmediate(resolve));
+
 	it("prewarms the configured local worker on startup for an unnamed session", async () => {
 		session.settings.set("providers.tinyModel", "lfm2-350m");
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
 		await mode.init();
+		await flushImmediates();
 
 		expect(prewarm).toHaveBeenCalledWith("lfm2-350m");
 	});
@@ -97,6 +103,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
 		await mode.init();
+		await flushImmediates();
 
 		expect(prewarm).not.toHaveBeenCalled();
 	});

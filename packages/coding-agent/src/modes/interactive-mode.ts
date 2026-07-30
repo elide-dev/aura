@@ -645,6 +645,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#voicePreviousShowHardwareCursor: boolean | null = null;
 	#voicePreviousUseTerminalCursor: boolean | null = null;
 	#resizeHandler?: () => void;
+	#prewarmImmediate?: NodeJS.Immediate;
 	#observerRegistry: SessionObserverRegistry;
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
@@ -1024,7 +1025,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// not be titled. Deferred via setImmediate so it runs AFTER the render
 		// callback requestRender(true) queued above (immediates are FIFO) — the
 		// spawn syscall never lands in the same loop turn ahead of the first paint.
-		setImmediate(() => {
+		this.#prewarmImmediate = setImmediate(() => {
+			this.#prewarmImmediate = undefined;
 			if (!$env.PI_NO_TITLE && !this.sessionManager.getSessionName()) {
 				tinyTitleClient.prewarm(this.settings.get("providers.tinyModel"));
 			}
@@ -3919,6 +3921,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		if (this.#prewarmImmediate) {
+			clearImmediate(this.#prewarmImmediate);
+			this.#prewarmImmediate = undefined;
+		}
 		if (this.loadingAnimation) {
 			this.#stopLoadingAnimation(false);
 		}
