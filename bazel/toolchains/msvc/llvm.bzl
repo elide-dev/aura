@@ -12,9 +12,22 @@ re-fetches after `bazel clean --expunge` or a .bzl edit only pay extraction.
 
 Checksums are the official llvm-project release assets, cross-checked against
 bazel-contrib/toolchains_llvm's distribution table.
+
+The linux release binaries link libxml2 dynamically (lld-link's Windows
+manifest merger), so `lld-link` refuses to start on any host without
+`libxml2.so.2` — including runner images new enough to ship only the 2.12+
+soname (`libxml2.so.16`). Rather than depend on the host, this rule builds a
+minimal libxml2 from a pinned source tarball into `lib/` and the @msvc_cc
+wrappers point LD_LIBRARY_PATH at it; see `_vendor_libxml2`.
 """
 
 _LLVM_VERSION = "20.1.7"
+
+# libxml2 vendored for the linux LLVM binaries (see the module docstring). 2.9.x
+# is the series carrying the `libxml2.so.2` soname the binaries were linked
+# against; the tarball is an immutable download.gnome.org release asset.
+_LIBXML2_VERSION = "2.9.14"
+_LIBXML2_SHA256 = "60d74a257d1ccec0475e749cba2f21559e48139efba6ff28224357c7c798dfee"
 
 # host key -> (release asset suffix, sha256)
 _LLVM_DISTS = {
@@ -72,14 +85,89 @@ filegroup(
     srcs = glob(["lib/clang/*/include/**"]),
 )
 
+# Vendored libxml2 (linux hosts only); the @msvc_cc wrappers add this dir to
+# LD_LIBRARY_PATH so lld-link resolves it instead of a host copy. Empty on
+# macOS hosts, which resolve libxml2.2.dylib from the system.
+filegroup(
+    name = "runtime_libs",
+    srcs = glob(
+        ["lib/*.so*"],
+        allow_empty = True,
+    ),
+)
+
 filegroup(
     name = "all",
     srcs = [
         ":bin",
         ":builtin_headers",
+        ":runtime_libs",
     ],
 )
 """
+
+def _run(rctx, args, what, working_directory = "", timeout = 1800):
+    res = rctx.execute(args, working_directory = working_directory, timeout = timeout)
+    if res.return_code != 0:
+        fail("bazel/toolchains/msvc: {} failed (exit {}):\n{}\n{}".format(
+            what,
+            res.return_code,
+            res.stdout,
+            res.stderr,
+        ))
+    return res
+
+def _vendor_libxml2(rctx):
+    """Builds a dependency-free libxml2.so.2 into lib/ for the LLVM binaries.
+
+    lld-link uses libxml2 for exactly 16 symbols, all in the Windows manifest
+    merger this toolchain never invokes — but they are load-time (DT_NEEDED),
+    so the library has to be there for lld-link to run at all. Distro libxml2
+    packages of this series link ICU, dragging libicuuc/libicudata along; a
+    source build with every optional feature off needs nothing but libc/libm.
+    Autotools (not CMake) because libtool is what stamps the plain
+    `libxml2.so.2` soname the LLVM binaries ask for.
+    """
+    rctx.report_progress("Building vendored libxml2 {} for the LLVM binaries".format(_LIBXML2_VERSION))
+    src = "libxml2-src"
+    rctx.download_and_extract(
+        url = "https://download.gnome.org/sources/libxml2/{}/libxml2-{}.tar.xz".format(
+            _LIBXML2_VERSION.rsplit(".", 1)[0],
+            _LIBXML2_VERSION,
+        ),
+        sha256 = _LIBXML2_SHA256,
+        stripPrefix = "libxml2-{}".format(_LIBXML2_VERSION),
+        output = src,
+    )
+    _run(rctx, [
+        "./configure",
+        "--disable-static",
+        "--without-icu",
+        "--without-lzma",
+        "--without-zlib",
+        "--without-python",
+        "--without-http",
+        "--without-ftp",
+        "--without-legacy",
+    ], "libxml2 configure", working_directory = src)
+
+    jobs = rctx.execute(["nproc"])
+    _run(
+        rctx,
+        ["make", "-j", jobs.stdout.strip() if jobs.return_code == 0 else "4"],
+        "libxml2 build",
+        working_directory = src,
+    )
+
+    # libtool leaves the real object in .libs/libxml2.so.<version> with
+    # SONAME=libxml2.so.2; install it under the soname the loader looks up.
+    _run(rctx, ["mkdir", "-p", "lib"], "libxml2 install (mkdir)")
+    _run(rctx, [
+        "cp",
+        "{}/.libs/libxml2.so.{}".format(src, _LIBXML2_VERSION),
+        "lib/libxml2.so.2",
+    ], "libxml2 install (cp)")
+    rctx.delete(src)
 
 def _llvm_msvc_tools_impl(rctx):
     key = _host_key(rctx)
@@ -117,6 +205,12 @@ def _llvm_msvc_tools_impl(rctx):
         for entry in verdir.readdir():
             if entry.basename != "include":
                 rctx.delete(entry)
+
+    # After pruning: the prune pass above keeps only lib/clang, so anything
+    # vendored into lib/ has to land afterwards. macOS hosts resolve
+    # libxml2.2.dylib from the system and need nothing here.
+    if key.startswith("linux-"):
+        _vendor_libxml2(rctx)
 
     rctx.file("BUILD.bazel", _BUILD.format(version = _LLVM_VERSION, host = key), executable = False)
 

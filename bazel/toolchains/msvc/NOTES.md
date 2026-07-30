@@ -107,7 +107,13 @@ exec hosts. Replaces cargo-xwin.
    expect VCRUNTIME140/api-ms-win-crt-* → `/MD`, no static CRT).
 2. LLVM 20.1.7 Linux-X64 binaries are built on a newish Ubuntu: confirm the
    kata runner image's glibc is ≥ 2.35-ish and has `libtinfo6`/`libstdc++6`
-   (usual LLVM release-binary runtime deps).
+   (usual LLVM release-binary runtime deps). `libxml2.so.2` is *not* among the
+   host requirements any more: the binaries need it (DT_NEEDED, from lld-link's
+   manifest merger) but distro packages of that soname pull ICU along and
+   images new enough to ship only `libxml2.so.16` broke lld-link outright
+   ("error while loading shared libraries"), so `llvm.bzl` builds a minimal
+   dependency-free `libxml2.so.2` into `lib/` and every @msvc_cc wrapper
+   prepends that dir to `LD_LIBRARY_PATH`.
 3. `ninja` + `cmake` must be on the audiopus_sys build-script PATH
    (`/usr/local/bin:/usr/bin:/bin`) on the kata image — same requirement the
    old ensure-cmake action satisfied for cargo-xwin.
@@ -115,7 +121,8 @@ exec hosts. Replaces cargo-xwin.
    "Clang with MSVC-like command-line", take `toolchain.cmake` (log shows the
    vs_link_exe --rc/--mt pointing into the wrapper dir), and produce opus.lib
    with /MD objects. If mt is ever asked to actually merge manifests, note
-   the official LLVM llvm-mt lacks libxml2 and would error — not hit today.
+   that the manifest merger is exactly the libxml2 consumer the vendored
+   `lib/libxml2.so.2` (see item 2) satisfies.
 5. tree-sitter grammar compiles via cc-rs: wrapper is picked up as `CC`
    (family detection needs the basename to contain `clang-cl` — it does).
 6. ring: no `nasm`/`perl` spawns in the build-script log; archive step uses
@@ -133,6 +140,9 @@ exec hosts. Replaces cargo-xwin.
   the newest release with archives for all four host tuples.
 - xwin version + manifest channel: `sysroot.bzl` (`_XWIN_VERSION` 0.6.5 — last
   release with darwin binaries; `_XWIN_MANIFEST_VERSION` "17").
+- Vendored libxml2: `llvm.bzl` (`_LIBXML2_VERSION`, `_LIBXML2_SHA256`). Stay on
+  the 2.9.x series — that is the one carrying the `libxml2.so.2` soname the
+  LLVM binaries link against.
 - Compile/link flags, include/libpath set, CRT choice: wrapper templates and
   `cc_toolchain_config` attrs in `cc.bzl`.
 - Static CRT if ever needed: build with the standard `static_link_msvcrt`
