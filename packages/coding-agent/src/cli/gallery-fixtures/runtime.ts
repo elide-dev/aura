@@ -83,22 +83,6 @@ export const runtimeFixtures: Record<string, GalleryFixture> = {
 		errorResult: execResult("no project manifest found in this directory\n(exit code 1)", { exitCode: 1 }),
 	},
 
-	jvm_run: {
-		label: "JVM Run",
-		streamingArgs: { language: "java", code: "public class Main { public static v" },
-		args: {
-			language: "java",
-			code: 'public class Main {\n  public static void main(String[] a) {\n    System.out.println("hi");\n  }\n}',
-		},
-		result: execResult("hi", { action: "run", phase: "run", language: "java", className: "Main" }),
-		errorResult: execResult("Main.java:3: error: ';' expected\n(exit code 1)", {
-			exitCode: 1,
-			action: "run",
-			phase: "compile",
-			language: "java",
-		}),
-	},
-
 	jvm_disassemble: {
 		label: "JVM Disassemble",
 		args: { language: "java", code: "public class Main { static int add(int a, int b) { return a + b; } }" },

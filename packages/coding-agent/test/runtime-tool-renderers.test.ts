@@ -71,7 +71,7 @@ describe("runtime tool renderers: registration", () => {
 		}
 	});
 
-	it("covers the five core runtime tools, the six JVM tools, and the two job tools", () => {
+	it("covers the five core runtime tools, the five specialized JVM tools, and the two job tools", () => {
 		expect([...RUNTIME_RENDERER_TOOL_NAMES].sort()).toEqual(
 			[
 				"build",
@@ -82,7 +82,6 @@ describe("runtime tool renderers: registration", () => {
 				"jvm_format",
 				"jvm_jar",
 				"jvm_javadoc",
-				"jvm_run",
 				"profile",
 				"project_advice",
 				"run",
@@ -207,16 +206,21 @@ describe("insights and profile", () => {
 });
 
 describe("jvm tools", () => {
-	it("shows the action and main class for jvm_run", () => {
-		expect(call("jvm_run", { language: "java", code: "class Main {}", mainClass: "Main" })).toContain("JVM Run");
-		expect(call("jvm_run", { language: "java", code: "class Main {}", mainClass: "Main" })).toContain("Main");
+	it("shows the main class for unified Java run", () => {
+		expect(call("run", { language: "java", code: "class Main {}", mainClass: "Main" })).toContain("Run");
 		const text = settled(
-			"jvm_run",
+			"run",
 			{
 				content: [{ type: "text", text: "hi" }],
-				details: exec({ action: "run", phase: "run", language: "java", className: "Main" }),
+				details: exec({
+					action: "run",
+					phase: "run",
+					language: "java",
+					className: "Main",
+					engine: "elide",
+				}),
 			},
-			{ language: "java", code: "class Main {}" },
+			{ language: "java", code: "class Main {}", mainClass: "Main" },
 		);
 		expect(text).toContain("Main");
 		expect(text).toContain("hi");
@@ -224,11 +228,17 @@ describe("jvm tools", () => {
 
 	it("reports the phase a failed JVM flow stopped at", () => {
 		const text = settled(
-			"jvm_run",
+			"run",
 			{
 				content: [{ type: "text", text: "Main.java:1: error: bad" }],
 				isError: true,
-				details: exec({ exitCode: 1, action: "run", phase: "compile", language: "java" }),
+				details: exec({
+					exitCode: 1,
+					action: "run",
+					phase: "compile",
+					language: "java",
+					engine: "elide",
+				}),
 			},
 			{ language: "java", code: "class Main {" },
 		);
@@ -452,7 +462,7 @@ describe("naming rule", () => {
 			call("insights", { code: "x" }),
 			call("profile", { mode: "cputracing", code: "x" }),
 			call("project_advice", {}),
-			call("jvm_run", { language: "java", code: "class Main {}" }),
+			call("run", { language: "java", code: "class Main {}" }),
 			call("jvm_deps", { path: "app.jar" }),
 			call("jvm_format", { language: "kotlin", code: "fun main(){}" }),
 			call("jvm_disassemble", { language: "java", code: "class Main {}" }),

@@ -8,7 +8,7 @@ const RUNTIME_TOOLS = ["run", "check", "build", "insights", "profile", "runtime_
 /** The two long-running flows, supervised by hub rather than by the runtime layer. */
 const LAUNCH_TOOLS = ["runtime_debug", "serve"] as const;
 
-const JVM_TOOLS = ["jvm_run", "jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps", "jvm_javadoc"] as const;
+const JVM_TOOLS = ["jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps", "jvm_javadoc"] as const;
 
 function stubSession(enabled: boolean): ToolSession {
 	return {
@@ -77,8 +77,9 @@ describe("runtime tool registry", () => {
 });
 
 describe("JVM tool registry", () => {
-	test("all six JVM tools are builtin names", () => {
+	test("the five specialized JVM tools are builtin names and jvm_run is removed", () => {
 		for (const name of JVM_TOOLS) expect(BUILTIN_TOOL_NAMES).toContain(name);
+		expect(BUILTIN_TOOL_NAMES).not.toContain("jvm_run");
 	});
 
 	test("no JVM tool name collides with a legacy alias", () => {
@@ -100,14 +101,12 @@ describe("JVM tool registry", () => {
 		}
 	});
 
-	test("descriptions never name the runtime product and say what a JVM tool runs on", async () => {
+	test("descriptions never name the runtime product", async () => {
 		for (const name of JVM_TOOLS) {
 			const tool = await BUILTIN_TOOLS[name](stubSession(true));
 			const text = `${tool?.description ?? ""} ${tool?.summary ?? ""} ${tool?.label ?? ""}`;
 			expect(text.toLowerCase()).not.toContain("elide");
 		}
-		const run = await BUILTIN_TOOLS.jvm_run(stubSession(true));
-		expect(run?.summary).toContain("embedded JVM");
 	});
 });
 

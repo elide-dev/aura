@@ -135,7 +135,6 @@ describe("doctor's tool-gate table matches the real registry", () => {
 				"jvm_format",
 				"jvm_jar",
 				"jvm_javadoc",
-				"jvm_run",
 				"profile",
 				// Read-only, but registered on the same gate: no runtime, no advice.
 				"project_advice",

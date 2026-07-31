@@ -1,6 +1,6 @@
 ---
 name: runtime
-description: Innate execution on the managed polyglot runtime — running JavaScript, TypeScript and Python with `run`, validating a project with `check`, producing artifacts with `build`, and choosing between those and `bash`/`eval`.
+description: Innate execution on the managed polyglot runtime — running JavaScript, TypeScript, Python, Java, and Kotlin with `run`, selecting execution engines, validating projects with `check`, and choosing between runtime tools and `bash`/`eval`.
 ---
 
 # The managed runtime
@@ -19,13 +19,16 @@ block.
 
 Provide **exactly one** source form:
 
-- Inline: `{ language: "ts" | "js" | "python", code: "…" }` — the source is
-  written to a temp file and executed. `language` defaults to `ts`.
+- Inline: `{ language: "ts" | "js" | "python" | "java" | "kotlin",
+  code: "…" }` — the source is written to a temp file and executed.
+  `language` defaults to `ts`.
 - Existing file: `{ path: "tools/report.py" }` — `language` is inferred from
-  the extension.
+  `.js`/`.ts`/`.py`/`.java`/`.kt` (including common module variants).
 
-Optional: `args`, `stdin`, `cwd` (defaults to the session directory),
-`timeoutMs`. The result carries stdout, stderr and the exit code.
+Optional: `engine`, `args`, `stdin`, `cwd` (defaults to the session directory),
+`timeoutMs`, and `mainClass` for Java/Kotlin. The result carries the resolved
+engine and language, stdout, stderr, exit code, and JVM phase/class metadata
+where applicable.
 
 **Path mode is not a convenience — it changes semantics.** An inline snippet
 runs from a scratch file, so relative imports, sibling modules and data files
@@ -40,10 +43,21 @@ variables, no imports, no open handles.
 Python is a CPython-compatible engine (3.12), not the host's `python3`. Host
 site-packages are not on the path; treat it as a clean interpreter.
 
+Engine routing:
+
+| Language | Default | Engine choice |
+| --- | --- | --- |
+| JavaScript / TypeScript | Bun | Bun or the embedded engine |
+| Python | Embedded | Embedded only |
+| Java / Kotlin | Embedded | Embedded only |
+Invalid language/engine pairs fail before execution. Java and Kotlin compile
+and run in a scratch workdir; `mainClass` overrides entrypoint derivation.
+Use `check` / `build` rather than `run` for multi-file JVM projects.
+
 ## `run` vs `bash` vs `eval`
 
-- `run` — you have a program in JS/TS/Python and want its output. This is the
-  default for "execute this code".
+- `run` — you have a self-contained JavaScript, TypeScript, Python, Java, or
+  Kotlin program and want its output. This is the default for direct execution.
 - `bash` — you have a *shell* task: invoking installed CLIs, pipelines, git,
   package managers, file plumbing.
 - `eval` — you want a **persistent kernel**: incremental exploration where state
@@ -53,9 +67,12 @@ site-packages are not on the path; treat it as a clean interpreter.
 
 ## Project-level tools
 
-- `check` — resolve dependencies and compile every source set **without**
-  emitting artifacts or executing user code. This is the fast "does the project
-  still hold together" gate to run after edits. Optional `cwd`, `timeoutMs`.
+- `check` — resolve dependencies and compile supported source sets through the
+  managed project build, without requesting deliverable artifacts. This is a
+  fast build-integrity gate, not a replacement for project-specific static
+  analysis: the runtime strips TypeScript types rather than running `tsc`, so
+  invoke the project's declared typecheck/check command when TypeScript type
+  correctness is the contract. Optional `cwd`, `timeoutMs`.
 - `build` — assemble artifacts. `targets` takes `:`-prefixed build targets with
   interleaved per-target options, passed through verbatim (e.g.
   `[":deps", "--fresh", ":compile"]`); omit it for the default build. Use

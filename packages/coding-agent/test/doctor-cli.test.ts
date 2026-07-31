@@ -278,6 +278,9 @@ describe("buildDoctorReport", () => {
 		const entries = section(report, "runtime").entries;
 		expect(entries.find(entry => entry.label === "adapter")?.detail).toBe("auto");
 		expect(entries.find(entry => entry.label === "effective adapter")?.detail).toBe("embedded");
+		expect(entries.find(entry => entry.label === "run engines")?.detail).toContain(
+			"JavaScript/TypeScript default to Bun",
+		);
 		expect(entries.find(entry => entry.label === "binary")?.detail).toBe("~/.aura/runtime/bin/runtime");
 		expect(entries.find(entry => entry.label === "embedded runtime library")?.detail).toBe(
 			"~/.aura/runtime/lib/libelide_embed.so",
@@ -506,7 +509,6 @@ describe("resolveToolGating", () => {
 		"build",
 		"insights",
 		"profile",
-		"jvm_run",
 		"jvm_disassemble",
 		"jvm_format",
 		"jvm_jar",
