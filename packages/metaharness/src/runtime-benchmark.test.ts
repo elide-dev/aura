@@ -4,18 +4,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	type AdapterBenchmarkRuntime,
+	type ArmLaunch,
 	type ArmSummary,
+	analyzeRuntimeComparison,
+	armRunnerArgs,
 	BASELINE_TOOLS,
 	buildArmLaunches,
 	countToolCalls,
+	countTrialToolCalls,
 	formatComparison,
 	measureAdapterCase,
 	packagedRuntimeBinaryForLibrary,
 	parseRuntimeBenchmarkCli,
-	RUNTIME_TOOLS,
 	runAdapterMicrobenchmarks,
 	summarizeAdapterSamples,
+	summarizeArm,
 	validateAdapterOutput,
+	writeRuntimeBenchmarkManifest,
 } from "./runtime-benchmark";
 import { RUNTIME_TASKS } from "./runtime-benchmark-suite";
 
@@ -30,16 +35,116 @@ function summary(arm: "baseline" | "runtime"): ArmSummary {
 		arm,
 		tasks: 12,
 		trials: 24,
+		completedTrials: 24,
 		pass: 18,
 		fail: 5,
 		error: 1,
 		costUsd: 1.2,
 		tokIn: 12000,
 		tokOut: 3000,
+		tokCache: 8000,
 		durationMs: 120000,
+		elapsedMs: 125000,
 		medianDurationMs: 10_000,
 		toolCalls: 80,
 		runtimeTasks: 0,
+		runtimeTrials: 0,
+		taskMeasurements: [],
+	};
+}
+
+interface ComparisonFixtureOptions {
+	durationRatio?: number;
+	tokenRatio?: number;
+	includeTokens?: boolean;
+	runtimeUsed?: (taskId: string) => boolean;
+	runtimePass?: (taskId: string) => boolean;
+}
+
+function comparisonSummaries(options: ComparisonFixtureOptions = {}): {
+	baseline: ArmSummary;
+	runtime: ArmSummary;
+} {
+	const durationRatio = options.durationRatio ?? 0.8;
+	const tokenRatio = options.tokenRatio ?? 0.9;
+	const includeTokens = options.includeTokens ?? true;
+	const runtimeUsed = options.runtimeUsed ?? (() => true);
+	const runtimePass = options.runtimePass ?? (() => true);
+	const baselineMeasurements = RUNTIME_TASKS.map(task => ({
+		taskId: task.id,
+		group: task.group,
+		trials: [
+			{
+				taskId: task.id,
+				trialName: `${task.id}-baseline`,
+				status: "pass" as const,
+				detail: "",
+				durationMs: 1_000,
+				tokIn: 100,
+				tokOut: 0,
+				tokCache: 0,
+				costUsd: 0,
+				toolCalls: 1,
+				runtimeUsed: false,
+			},
+		],
+	}));
+	const runtimeMeasurements = RUNTIME_TASKS.map(task => ({
+		taskId: task.id,
+		group: task.group,
+		trials: [
+			{
+				taskId: task.id,
+				trialName: `${task.id}-runtime`,
+				status: runtimePass(task.id) ? ("pass" as const) : ("fail" as const),
+				detail: "",
+				durationMs: 1_000 * durationRatio,
+				tokIn: includeTokens ? 100 * tokenRatio : 0,
+				tokOut: 0,
+				tokCache: 0,
+				costUsd: 0,
+				toolCalls: 1,
+				runtimeUsed: runtimeUsed(task.id),
+			},
+		],
+	}));
+	const runtimePasses = runtimeMeasurements.filter(task => task.trials[0].status === "pass").length;
+	const runtimeTrials = runtimeMeasurements.filter(task => task.trials[0].runtimeUsed).length;
+	return {
+		baseline: {
+			...summary("baseline"),
+			trials: RUNTIME_TASKS.length,
+			completedTrials: RUNTIME_TASKS.length,
+			pass: RUNTIME_TASKS.length,
+			fail: 0,
+			error: 0,
+			tokIn: RUNTIME_TASKS.length * 100,
+			tokOut: 0,
+			tokCache: 0,
+			durationMs: RUNTIME_TASKS.length * 1_000,
+			elapsedMs: RUNTIME_TASKS.length * 1_000,
+			medianDurationMs: 1_000,
+			runtimeTasks: 0,
+			runtimeTrials: 0,
+			taskMeasurements: baselineMeasurements,
+		},
+		runtime: {
+			...summary("runtime"),
+			trials: RUNTIME_TASKS.length,
+			completedTrials: RUNTIME_TASKS.length,
+			pass: runtimePasses,
+			fail: RUNTIME_TASKS.length - runtimePasses,
+			error: 0,
+			tokIn: includeTokens ? RUNTIME_TASKS.length * 100 * tokenRatio : 0,
+			tokOut: 0,
+			tokCache: 0,
+			durationMs: RUNTIME_TASKS.length * 1_000 * durationRatio,
+			elapsedMs: RUNTIME_TASKS.length * 1_000 * durationRatio,
+			medianDurationMs: 1_000 * durationRatio,
+			runtimeTasks: runtimeTrials,
+			runtimeTrials,
+			taskMeasurements: runtimeMeasurements,
+		},
 	};
 }
 describe("runtime benchmark orchestration", () => {
@@ -100,9 +205,88 @@ describe("runtime benchmark orchestration", () => {
 		expect(launches.filter(launch => launch.arm === "runtime")).toHaveLength(RUNTIME_TASKS.length);
 		expect(launches[0].args).toContain(`--agent-arg=${BASELINE_TOOLS.join(",")}`);
 		expect(launches.find(launch => launch.arm === "runtime")?.args).toContain(
-			`--agent-arg=${RUNTIME_TOOLS.join(",")}`,
+			`--agent-arg=${[...BASELINE_TOOLS, "run", "check", "build"].join(",")}`,
 		);
 		expect(launches.every(launch => launch.args.includes("--host-network"))).toBe(true);
+	});
+
+	it("mounts only task-relevant discoverable runtime tools", () => {
+		const launches = buildArmLaunches({
+			model: "openai-codex/gpt-5.6-sol",
+			thinking: "xhigh",
+			attempts: 1,
+			prefix: "rtbench",
+			jobsDir: "/tmp/jobs",
+			taskRoot: "/tmp/tasks",
+			gatewayUrl: "http://127.0.0.1:4000",
+			hostNetwork: true,
+			taskIds: ["project-validation", "instrumentation", "jvm-dependency-docs"],
+		});
+		const runtimeArgs = (taskId: string) =>
+			launches.find(launch => launch.arm === "runtime" && launch.taskId === taskId)?.args;
+		const essentials = [...BASELINE_TOOLS, "run", "check", "build"];
+
+		expect(runtimeArgs("project-validation")).toContain(`--agent-arg=${essentials.join(",")}`);
+		expect(runtimeArgs("project-validation")?.join(" ")).not.toContain("project_advice");
+		expect(runtimeArgs("instrumentation")).toContain(`--agent-arg=${[...essentials, "insights"].join(",")}`);
+		expect(runtimeArgs("jvm-dependency-docs")).toContain(
+			`--agent-arg=${[...essentials, "jvm_deps", "jvm_javadoc"].join(",")}`,
+		);
+	});
+
+	it("maps packaged runtime files into source-mounted task containers", () => {
+		const runtimeBinary = path.resolve(import.meta.dir, "../../../out/aura-elide-linux-x64/bin/elide");
+		const embeddedLib = path.resolve(import.meta.dir, "../../../out/aura-elide-linux-x64/lib/libelide_embed.so");
+		const launches = Reflect.apply(buildArmLaunches, undefined, [
+			{
+				model: "openai-codex/gpt-5.6-sol",
+				thinking: "xhigh",
+				attempts: 1,
+				prefix: "rtbench",
+				jobsDir: "/tmp/jobs",
+				taskRoot: "/tmp/tasks",
+				gatewayUrl: "http://127.0.0.1:4000",
+				hostNetwork: true,
+				taskIds: ["python-execution"],
+				runtimeBinary,
+				embeddedLib,
+			},
+		]) as ArmLaunch[];
+		for (const launch of launches) {
+			expect(launch.args).toContain("--env=AURA_RUNTIME_BIN=/opt/omp/src/out/aura-elide-linux-x64/bin/elide");
+			expect(launch.args).toContain(
+				"--env=AURA_RUNTIME_EMBEDDED_LIB=/opt/omp/src/out/aura-elide-linux-x64/lib/libelide_embed.so",
+			);
+			expect(launch.args).toContain("--env=AURA_RUNTIME_ADAPTER=auto");
+		}
+	});
+
+	it("skips completed arms and resumes interrupted arms on campaign resume", () => {
+		const launch: ArmLaunch = {
+			arm: "runtime",
+			taskId: "python-execution",
+			jobName: "pilot-runtime-python-execution",
+			args: ["--path=/tmp/tasks/python-execution"],
+		};
+		const jobsDir = "/tmp/jobs";
+
+		expect(
+			armRunnerArgs(launch, jobsDir, true, () => ({
+				nTotal: 2,
+				running: 0,
+				pending: 0,
+				finishedAt: Date.now(),
+			})),
+		).toBeNull();
+		expect(
+			armRunnerArgs(launch, jobsDir, true, () => ({
+				nTotal: 2,
+				running: 1,
+				pending: 1,
+				finishedAt: null,
+			})),
+		).toEqual(["--resume=/tmp/jobs/pilot-runtime-python-execution"]);
+		expect(armRunnerArgs(launch, jobsDir, false)).toEqual(launch.args);
 	});
 
 	it("balances matched task arms in deterministic AB/BA order", () => {
@@ -126,6 +310,27 @@ describe("runtime benchmark orchestration", () => {
 		]);
 	});
 
+	it("adds immutable historical binary launches without changing matched arm order", () => {
+		const historicalBinary = "/tmp/aura-linux-x64";
+		const launches = buildArmLaunches({
+			model: "openai-codex/gpt-5.6-sol",
+			thinking: "xhigh",
+			attempts: 1,
+			prefix: "rtbench",
+			jobsDir: "/tmp/jobs",
+			taskRoot: "/tmp/tasks",
+			gatewayUrl: "http://127.0.0.1:4000",
+			hostNetwork: true,
+			taskIds: ["python-execution"],
+			historicalBinary,
+		});
+
+		expect(launches.map(launch => launch.arm)).toEqual(["baseline", "runtime", "historical"]);
+		expect(launches[2].args).toContain(`--binary=${historicalBinary}`);
+		expect(launches[2].args).not.toContain("--install=source");
+		expect(launches[2].args).toContain(`--agent-arg=${BASELINE_TOOLS.join(",")}`);
+	});
+
 	it("counts each executed tool invocation once", () => {
 		const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-tool-count-"));
 		cleanups.push(jobDir);
@@ -142,22 +347,152 @@ describe("runtime benchmark orchestration", () => {
 		expect(countToolCalls(jobDir)).toEqual({ total: 1, runtimeUsed: true });
 	});
 
+	it("collects per-trial usage, duration, cache tokens, and runtime adoption", () => {
+		const jobsDir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-summary-"));
+		cleanups.push(jobsDir);
+		const jobDir = path.join(jobsDir, "rtbench-runtime-python-execution");
+		const trialName = "python-execution__attempt";
+		const trialDir = path.join(jobDir, trialName);
+		fs.mkdirSync(path.join(trialDir, "agent"), { recursive: true });
+		fs.writeFileSync(
+			path.join(trialDir, "result.json"),
+			JSON.stringify({
+				started_at: "2026-07-29T00:00:00.000Z",
+				finished_at: "2026-07-29T00:00:01.000Z",
+				agent_result: {
+					n_input_tokens: 100,
+					n_output_tokens: 20,
+					n_cache_tokens: 40,
+					cost_usd: 0.01,
+				},
+				verifier_result: { rewards: { reward: 1 } },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(trialDir, "agent", "omp.txt"),
+			`${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "run" })}\n`,
+		);
+
+		expect(countTrialToolCalls(jobDir, trialName)).toEqual({ total: 1, runtimeUsed: true });
+		const result = summarizeArm(jobsDir, "rtbench", "runtime", ["python-execution"], 1_250);
+		expect(result).toMatchObject({
+			trials: 1,
+			completedTrials: 1,
+			pass: 1,
+			tokIn: 100,
+			tokOut: 20,
+			tokCache: 40,
+			durationMs: 1_000,
+			elapsedMs: 1_250,
+			runtimeTrials: 1,
+			runtimeTasks: 1,
+		});
+		expect(result.taskMeasurements[0].trials[0]).toMatchObject({
+			trialName,
+			toolCalls: 1,
+			runtimeUsed: true,
+		});
+		fs.writeFileSync(
+			path.join(jobDir, "result.json"),
+			JSON.stringify({
+				started_at: "2026-07-29T00:00:00.000Z",
+				finished_at: "2026-07-29T00:00:02.500Z",
+				n_total_trials: 1,
+				stats: { n_running_trials: 0, n_pending_trials: 0 },
+			}),
+		);
+		expect(summarizeArm(jobsDir, "rtbench", "runtime", ["python-execution"]).elapsedMs).toBe(2_500);
+	});
+
+	it("passes deterministic paired gates for non-inferior outcomes and a 20% duration win", () => {
+		const { baseline, runtime } = comparisonSummaries();
+		const first = analyzeRuntimeComparison(baseline, runtime);
+		const second = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(first).toEqual(second);
+		expect(first.verdict).toBe("pass");
+		expect(first.passRateDifferencePp).toEqual({ point: 0, lower: 0, upper: 0 });
+		expect(first.durationRatio.point).toBeCloseTo(0.8);
+		expect(first.tokenRatio.point).toBeCloseTo(0.9);
+	});
+
+	it("bootstraps trials within each fixed task stratum", () => {
+		const { baseline, runtime } = comparisonSummaries();
+		for (const [index, baselineTask] of baseline.taskMeasurements.entries()) {
+			const runtimeTask = runtime.taskMeasurements[index];
+			const durationRatio = 0.6 + index * 0.04;
+			baselineTask.trials = Array.from({ length: 5 }, (_, trialIndex) => ({
+				...baselineTask.trials[0],
+				trialName: `${baselineTask.taskId}-baseline-${trialIndex}`,
+			}));
+			runtimeTask.trials = Array.from({ length: 5 }, (_, trialIndex) => ({
+				...runtimeTask.trials[0],
+				trialName: `${runtimeTask.taskId}-runtime-${trialIndex}`,
+				durationMs: baselineTask.trials[trialIndex].durationMs * durationRatio,
+			}));
+		}
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.durationRatio.lower).toBeCloseTo(result.durationRatio.point);
+		expect(result.durationRatio.upper).toBeCloseTo(result.durationRatio.point);
+	});
+
+	it("fails when effectiveness is established below the non-inferiority margin", () => {
+		const { baseline, runtime } = comparisonSummaries({ runtimePass: () => false });
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.verdict).toBe("fail");
+		expect(result.reasons).toContain("effectiveness is inferior at the -5 pp margin");
+	});
+
+	it("fails when the non-winning efficiency metric regresses beyond five percent", () => {
+		const { baseline, runtime } = comparisonSummaries({ durationRatio: 0.8, tokenRatio: 1.1 });
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.verdict).toBe("fail");
+		expect(result.reasons).toContain(
+			"no material efficiency win with the other metric inside the 5% regression bound",
+		);
+	});
+
+	it("returns inconclusive when token telemetry is missing", () => {
+		const { baseline, runtime } = comparisonSummaries({ includeTokens: false });
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.verdict).toBe("inconclusive");
+		expect(result.reasons).toContain("paired effectiveness or efficiency measurements are missing");
+	});
+
+	it("returns inconclusive below overall runtime adoption threshold", () => {
+		const usedTasks = new Set(RUNTIME_TASKS.slice(0, 9).map(task => task.id));
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => usedTasks.has(taskId) });
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.adoptionOverall).toBe(0.75);
+		expect(result.verdict).toBe("inconclusive");
+		expect(result.reasons).toContain("runtime adoption 75.0% is below 80%");
+	});
+
+	it("returns inconclusive when one capability group is below adoption threshold", () => {
+		const { baseline, runtime } = comparisonSummaries({
+			runtimeUsed: taskId => RUNTIME_TASKS.find(task => task.id === taskId)?.group !== "profiling",
+		});
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.adoptionOverall).toBeGreaterThanOrEqual(0.8);
+		expect(result.adoptionByGroup.profiling).toBe(0);
+		expect(result.verdict).toBe("inconclusive");
+		expect(result.reasons).toContain("runtime adoption is below 50% for: profiling");
+	});
+
 	it("formats the primary success, efficiency, and tool-use deltas", () => {
-		const baseline: ArmSummary = {
-			arm: "baseline",
-			tasks: 12,
-			trials: 24,
-			pass: 18,
-			fail: 5,
-			error: 1,
-			costUsd: 1.2,
-			tokIn: 12000,
-			tokOut: 3000,
-			durationMs: 120000,
-			medianDurationMs: 10_000,
-			toolCalls: 80,
-			runtimeTasks: 0,
-		};
+		const baseline = summary("baseline");
 		const runtime: ArmSummary = { ...baseline, arm: "runtime", pass: 21, fail: 3, error: 0, runtimeTasks: 8 };
 
 		const report = formatComparison("rtbench", baseline, runtime, []);
@@ -283,6 +618,75 @@ describe("runtime benchmark orchestration", () => {
 		expect(env.AURA_RUNTIME_EMBEDDED_LIB).toBe("/env/libelide_embed.so");
 	});
 
+	it("parses frozen revisions and requires an architecture-tagged historical binary", () => {
+		const parsed = parseRuntimeBenchmarkCli([
+			"--revision=current-revision",
+			"--source-patch-sha256=patch-sha256",
+			"--historical-revision=historical-revision",
+			"--historical-binary=/tmp/aura-linux-x64",
+		]);
+
+		expect(parsed.manifestRevision).toBe("current-revision");
+		expect(parsed.sourcePatchSha256).toBe("patch-sha256");
+		expect(parsed.historicalRevision).toBe("historical-revision");
+		expect(parsed.historicalBinary).toBe("/tmp/aura-linux-x64");
+		expect(() => parseRuntimeBenchmarkCli(["--historical-binary=/tmp/aura-linux-x64"])).toThrow(
+			"--historical-binary requires --historical-revision",
+		);
+		expect(() =>
+			parseRuntimeBenchmarkCli(["--historical-revision=historical-revision", "--historical-binary=/tmp/aura"]),
+		).toThrow("--historical-binary filename must identify the x64 architecture");
+	});
+
+	it("writes a frozen machine-readable benchmark manifest", async () => {
+		const jobsDir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-manifest-"));
+		cleanups.push(jobsDir);
+		const opts = parseRuntimeBenchmarkCli([
+			`--jobs-dir=${jobsDir}`,
+			"--prefix=manifest-test",
+			"--task=python-execution",
+			"--attempts=5",
+			"--revision=current-revision",
+			"--source-patch-sha256=patch-sha256",
+			"--historical-revision=historical-revision",
+		]);
+
+		const manifestPath = await writeRuntimeBenchmarkManifest(opts, "2026-07-29T00:00:00.000Z");
+		const manifest = await Bun.file(manifestPath).json();
+
+		expect(manifest).toMatchObject({
+			schemaVersion: 3,
+			prefix: "manifest-test",
+			startedAt: "2026-07-29T00:00:00.000Z",
+			revision: "current-revision",
+			sourcePatchSha256: "patch-sha256",
+			historicalRevision: "historical-revision",
+			model: "openai-codex/gpt-5.6-sol",
+			thinking: "xhigh",
+			attempts: 5,
+			taskIds: ["python-execution"],
+			tools: {
+				baseline: BASELINE_TOOLS,
+				runtimeByTask: {
+					"python-execution": [...BASELINE_TOOLS, "run", "check", "build"],
+				},
+				historical: BASELINE_TOOLS,
+			},
+		});
+		expect(manifest.taskHashes["python-execution"]).toMatch(/^[a-f0-9]{64}$/);
+		expect(manifest.verifierBun).toMatchObject({ version: Bun.version });
+		expect(manifest.verifierBun.sha256).toMatch(/^[a-f0-9]{64}$/);
+		expect(manifest.logicalCpuCount).toBeGreaterThan(0);
+	});
+
+	it("labels the historical control separately from the causal decision", () => {
+		const historical: ArmSummary = { ...summary("baseline"), arm: "historical" };
+
+		const report = formatComparison("rtbench", summary("baseline"), summary("runtime"), [], undefined, historical);
+
+		expect(report).toContain("## Historical whole-product control");
+		expect(report).toContain("is not part of the causal runtime-tools decision");
+	});
 	it("closes both independent adapter services when measurement fails", async () => {
 		const closed: string[] = [];
 		const runtime = (name: string): AdapterBenchmarkRuntime => ({

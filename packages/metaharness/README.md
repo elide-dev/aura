@@ -37,10 +37,32 @@ bun run bench:runtime
 ```
 
 The command materializes 12 deterministic Harbor tasks, runs paired arms with
-alternating AB/BA order, and writes
-`runs/harbor/_bench/<prefix>-runtime-comparison.md`. Both arms use the same
-model, reasoning level, task fixtures, and attempts; only the runtime tools are
-added to the second arm.
+alternating AB/BA order, and writes both a frozen launch manifest and comparison
+report:
+
+- `runs/harbor/_bench/<prefix>-runtime-manifest.json`
+- `runs/harbor/_bench/<prefix>-runtime-comparison.md`
+
+Both arms use the same model, reasoning level, task fixtures, and attempts; only
+the runtime tools are added to the second arm. The report pairs outcomes within
+task strata, uses a deterministic 10,000-sample task bootstrap for 95%
+confidence intervals, reports end-to-end arm time separately from trial time,
+and renders the pre-registered decision.
+The runtime arm always exposes the production-essential `run`, `check`, and
+`build` tools, then adds only the discoverable runtime tools applicable to the
+task (for example, `insights` for instrumentation or `jvm_disassemble` for
+bytecode inspection). The frozen manifest records the exact runtime tool list
+per task. This keeps the causal treatment realistic without charging every
+trial for unrelated debugger, profiler, JVM, server, and advisory tool schemas.
+
+Before any model trial, the orchestrator builds the generated TypeScript task
+image and runs its verifier against a deterministic valid solution. Every task
+image carries the exact Bun executable used to materialize the campaign at
+`/opt/runtime-benchmark/bin/bun`; it is on `PATH` for both arms and is
+independent of the agent install. The smoke covers `node:fs`, TypeScript syntax,
+top-level await, and the expected sorted BFS output. A smoke failure stops the
+campaign. The frozen manifest records this verifier Bun's version and SHA-256.
+
 
 An adapter decision run additionally compares independent process and embedded
 runtime services:
@@ -52,7 +74,10 @@ bun run bench:runtime --micro-only --micro-iterations 30 \
 ```
 
 The benchmark derives the packaged process executable from the library's
-sibling `bin/` directory. `--embedded-lib` takes precedence over
+sibling `bin/` directory. In agent mode, both artifacts must live inside the
+repository: source-mode Harbor launches map them into the read-only task
+container and set `AURA_RUNTIME_BIN`, `AURA_RUNTIME_EMBEDDED_LIB`, and the
+`auto` adapter explicitly. `--embedded-lib` takes precedence over
 `AURA_RUNTIME_EMBEDDED_LIB` for this benchmark only; it does not change the
 process rollout default. Without either value, the existing report is preserved
 and its adapter section states that comparison was skipped.
@@ -72,6 +97,66 @@ bun run bench:runtime --task python-execution --attempts 1
 bun run bench:runtime --agent-only
 bun run bench:runtime --micro-only --micro-iterations 30
 ```
+
+### Effectiveness proof workflow
+
+Use concurrency one (enforced by the orchestrator) and keep every launch setting
+fixed across comparable arms:
+
+```bash
+REPO_ROOT=$(pwd -P)
+REVISION=$(git rev-parse HEAD)
+SOURCE_PATCH_SHA256=$(git diff HEAD --binary | sha256sum | cut -d' ' -f1)
+HISTORICAL_REVISION=2adbb3538b8d7b7df6c09d7e7beefc60b59ce575
+RUNTIME_LIB="$REPO_ROOT/out/aura-elide-linux-x64/lib/libelide_embed.so"
+
+# One-task telemetry/auth/runtime preflight
+bun run bench:runtime --agent-only --task python-execution --attempts 2 --embedded-lib "$RUNTIME_LIB" \
+  --prefix runtime-effectiveness-preflight \
+  --revision "$REVISION" \
+  --source-patch-sha256 "$SOURCE_PATCH_SHA256" \
+  --historical-revision "$HISTORICAL_REVISION"
+
+# Complete pilot
+bun run bench:runtime --agent-only --attempts 2 --embedded-lib "$RUNTIME_LIB" \
+  --prefix runtime-effectiveness-pilot \
+  --revision "$REVISION" \
+  --source-patch-sha256 "$SOURCE_PATCH_SHA256" \
+  --historical-revision "$HISTORICAL_REVISION"
+
+# Resume the same frozen campaign after interruption; completed arms are skipped
+# and incomplete Harbor jobs retain their finished trials.
+bun run bench:runtime --agent-only --attempts 2 --embedded-lib "$RUNTIME_LIB" \
+  --prefix runtime-effectiveness-pilot \
+  --revision "$REVISION" \
+  --source-patch-sha256 "$SOURCE_PATCH_SHA256" \
+  --historical-revision "$HISTORICAL_REVISION" \
+  --resume
+
+# Five-attempt proof plus immutable historical control
+bun run bench:runtime --agent-only --attempts 5 --embedded-lib "$RUNTIME_LIB" \
+  --prefix runtime-effectiveness-proof \
+  --revision "$REVISION" \
+  --historical-revision "$HISTORICAL_REVISION" \
+  --source-patch-sha256 "$SOURCE_PATCH_SHA256" \
+  --historical-binary "$REPO_ROOT/runs/harbor/_bench/historical/aura-linux-x64"
+
+# Deterministic runtime overhead
+bun run bench:runtime --micro-only --micro-iterations 30 --embedded-lib "$RUNTIME_LIB" \
+  --prefix runtime-effectiveness-micro
+```
+
+The matched current-code decision passes only when:
+
+- the lower effectiveness confidence bound is above `-5` percentage points;
+- paired duration improves by at least 15% or tokens improve by at least 10%;
+- the non-winning efficiency metric regresses by no more than 5%;
+- no new systematic error class appears;
+- runtime adoption reaches 80% overall and 50% in every capability group.
+
+Missing telemetry, incomplete task pairs, or an interval crossing a gate is
+`INCONCLUSIVE`, not a pass. A historical binary adds a separately labeled
+whole-product control; it never changes the causal Bash-versus-runtime verdict.
 
 ## Server
 
