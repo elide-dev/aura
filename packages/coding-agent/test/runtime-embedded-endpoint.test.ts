@@ -416,8 +416,8 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		});
 
 		expect(unwrapResponse<{ stdout: string }>(response).stdout).toBe("process");
-		expect(embedded.requests.map(request => request.method)).toEqual(["runtime/status", "runtime/run"]);
-		expect(processEndpoint.requests.map(request => request.method)).toEqual(["runtime/run"]);
+		expect(embedded.requests.map(request => request.method)).toEqual(["runtime/status", "runtime/jvm"]);
+		expect(processEndpoint.requests.map(request => request.method)).toEqual(["runtime/jvm"]);
 	});
 
 	test("runs runtime/jvm run actions through the embedded endpoint", async () => {

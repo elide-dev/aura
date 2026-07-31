@@ -29,6 +29,7 @@ import {
 	type RuntimeStatusResult,
 } from "../protocol";
 import { provisionRuntime } from "../provision";
+import { pythonFileBootstrap } from "../python";
 import { managedVersionDir, type ResolvedRuntime, resolveRuntimeBinary } from "../resolve";
 import type { RuntimeEndpoint } from "../service";
 
@@ -491,8 +492,9 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		return params.cwd ?? process.cwd();
 	}
 
-	private async jvmRunClasspath(language: JvmLanguage, binaryPath: string): Promise<string> {
-		if (language === "java") return ".";
+	private async jvmRunClasspath(language: JvmLanguage, binaryPath: string, workdir?: string): Promise<string> {
+		const output = workdir === undefined ? "out" : path.join(workdir, "out");
+		if (language === "java") return workdir ?? ".";
 		const kotlinRoot = path.resolve(path.dirname(binaryPath), "..", "lib", "resources", "kotlin");
 		try {
 			const versions = (await fs.readdir(kotlinRoot, { withFileTypes: true }))
@@ -503,7 +505,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 				try {
 					const libraries = await fs.readdir(lib);
 					if (libraries.includes("kotlin-stdlib.jar")) {
-						return `out${path.delimiter}${path.join(lib, "*")}`;
+						return `${output}${path.delimiter}${path.join(lib, "*")}`;
 					}
 				} catch {
 					// Try another installed Kotlin version.
@@ -512,7 +514,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		} catch {
 			// Non-bundled runtimes may not expose adjacent resources.
 		}
-		return "out";
+		return output;
 	}
 
 	/**
@@ -527,13 +529,13 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		fn: (
 			wd: RuntimeWorkdir,
 			bin: string,
-			run: (argv: string[]) => Promise<RuntimeExecResult>,
+			run: (argv: string[], options?: RuntimeSpawnOptions) => Promise<RuntimeExecResult>,
 		) => Promise<RuntimeJvmResult>,
 	): Promise<RuntimeJvmResult> {
 		const { binaryPath } = await this.ensureBinary();
 		return withRuntimeWorkdir(
 			{ spawn: this.spawner(), signal, defaults: { timeoutMs: params.timeoutMs, env: this.jvmEnv() } },
-			wd => fn(wd, binaryPath, argv => wd.run(argv, { cwd: wd.dir })),
+			wd => fn(wd, binaryPath, (argv, options) => wd.run(argv, { ...options, cwd: options?.cwd ?? wd.dir })),
 		);
 	}
 
@@ -581,12 +583,47 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		return { language: params.language, code: params.code };
 	}
 
+	private async requireJvmRunSource(params: RuntimeJvmParams): Promise<{ language: JvmLanguage; code: string }> {
+		if (params.language === undefined) {
+			throw new RuntimeRpcError("invalid-params", "run requires `language` and code or path.");
+		}
+		if (params.code === undefined && params.path === undefined) {
+			throw new RuntimeRpcError("invalid-params", "run requires `language` and code or path.");
+		}
+		if (params.code !== undefined && params.path !== undefined) {
+			throw new RuntimeRpcError("invalid-params", "code and path are mutually exclusive.");
+		}
+		if (params.code !== undefined) return { language: params.language, code: params.code };
+		const sourcePath = path.resolve(this.jvmBaseCwd(params), params.path as string);
+		try {
+			return { language: params.language, code: await fs.readFile(sourcePath, "utf8") };
+		} catch {
+			throw new RuntimeRpcError("invalid-params", `Runtime source file does not exist: ${sourcePath}.`, {
+				path: sourcePath,
+			});
+		}
+	}
+
 	private async jvmRun(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
-		const { language, code } = this.requireJvmSource(params, "jvm_run requires `language` and `code`.");
+		const { language, code } = await this.requireJvmRunSource(params);
+		if (
+			params.args !== undefined &&
+			(!Array.isArray(params.args) || params.args.some(arg => typeof arg !== "string"))
+		) {
+			throw new RuntimeRpcError("invalid-params", "args must be an array of strings.");
+		}
+		if (params.stdin !== undefined && typeof params.stdin !== "string") {
+			throw new RuntimeRpcError("invalid-params", "stdin must be a string.");
+		}
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
 			const { className, failure } = await this.compileJvm(wd, bin, run, "run", language, code, params.mainClass);
 			if (failure) return failure;
-			const result = await run([bin, "java", "--", "-cp", await this.jvmRunClasspath(language, bin), className]);
+			const programCwd = params.cwd === undefined ? undefined : this.jvmBaseCwd(params);
+			const classpath = await this.jvmRunClasspath(language, bin, programCwd === undefined ? undefined : wd.dir);
+			const result = await run([bin, "java", "--", "-cp", classpath, className, ...(params.args ?? [])], {
+				cwd: programCwd,
+				stdin: params.stdin,
+			});
 			return { ...result, action: "run", phase: "run", language, className };
 		});
 	}
@@ -818,7 +855,13 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 				defaults: { stdin: params.stdin, timeoutMs: params.timeoutMs, cwd: params.cwd },
 			},
 			async wd => {
-				const guestFile = params.path ?? (await wd.write(`guest.${GUEST_EXT[language]}`, params.code ?? ""));
+				const guestFile =
+					params.path && language === "python"
+						? await wd.write(
+								"python-file.py",
+								pythonFileBootstrap(path.resolve(params.cwd ?? process.cwd(), params.path)),
+							)
+						: (params.path ?? (await wd.write(`guest.${GUEST_EXT[language]}`, params.code ?? "")));
 				return fn(binaryPath, guestFile, language, wd);
 			},
 		);

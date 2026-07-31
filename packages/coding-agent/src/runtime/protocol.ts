@@ -126,6 +126,10 @@ export interface RuntimeJvmParams {
 	code?: string;
 	/** Entrypoint/target class override; see `deriveJvmMainClass`. */
 	mainClass?: string;
+	/** Arguments passed to the Java/Kotlin program for `run`. */
+	args?: string[];
+	/** Standard input passed to the Java/Kotlin program for `run`. */
+	stdin?: string;
 	/** `jar` sub-mode: build a jar from source, or list an existing one. Default `create`. */
 	mode?: "create" | "inspect";
 	/** Destination written by `jar` (create) and `javadoc`, resolved against `cwd`. */
@@ -134,9 +138,9 @@ export interface RuntimeJvmParams {
 	overwrite?: boolean;
 	/** Existing jar to inspect (`jar`, mode `inspect`), resolved against `cwd`. */
 	jar?: string;
-	/** Existing `.class`/`.jar`/directory to analyze (`deps`), resolved against `cwd`. */
+	/** Source path for `run`, or existing `.class`/`.jar`/directory for `deps`; resolved against `cwd`. */
 	path?: string;
-	/** Base directory for `output`/`jar`/`path` resolution. Defaults to the endpoint process cwd. */
+	/** Base directory for path-bearing fields and the `run` program cwd. */
 	cwd?: string;
 	timeoutMs?: number;
 }

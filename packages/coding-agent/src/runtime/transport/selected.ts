@@ -67,12 +67,42 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 		if (request.method === "runtime/status") return this.#statusResponse(request);
 		if (request.method === "runtime/run") {
 			try {
-				const target = resolveRunTarget(request.params as RuntimeRunParams);
+				const params = request.params as RuntimeRunParams;
+				const target = resolveRunTarget(params);
 				if (target.engine === "bun") return this.#bun.request(request, signal);
+				const routedRequest: RuntimeRpcRequest =
+					target.language === "java" || target.language === "kotlin"
+						? {
+								...request,
+								method: "runtime/jvm",
+								params: {
+									action: "run",
+									language: target.language,
+									code: params.code,
+									path: params.path,
+									args: params.args,
+									stdin: params.stdin,
+									timeoutMs: params.timeoutMs,
+									cwd: params.cwd,
+									mainClass: params.mainClass,
+								},
+							}
+						: request;
+				const response = await this.#requestElide(routedRequest, signal);
+				if ("error" in response) return response;
+				return okResponse(request.id, {
+					...(response.result as Record<string, unknown>),
+					engine: "elide",
+					language: target.language,
+				});
 			} catch (error) {
 				return errorResponse(request.id, toRuntimeRpcError(error));
 			}
 		}
+		return this.#requestElide(request, signal);
+	}
+
+	#requestElide(request: RuntimeRpcRequest, signal?: AbortSignal): Promise<RuntimeRpcResponse> {
 		if (!isEmbeddedRunRequest(request) || this.#adapter === "process") {
 			return this.#process.request(request, signal);
 		}
