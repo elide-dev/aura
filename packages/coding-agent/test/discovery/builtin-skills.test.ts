@@ -268,7 +268,7 @@ describe("bundled runtime skill content", () => {
 		expect(byName.get("runtime")).toInclude("`build`");
 		expect(byName.get("insights")).toInclude("`insights`");
 		expect(byName.get("profiling")).toInclude("`profile`");
-		expect(byName.get("jvm")).toInclude("`jvm_run`");
+		expect(byName.get("jvm")).toInclude("`run`");
 		expect(byName.get("stateful-debugger")).toInclude("`runtime_debug`");
 	});
 

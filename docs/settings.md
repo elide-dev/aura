@@ -503,9 +503,8 @@ runtime:
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. Also settable per-run with `--runtime <path>`, which reports `source: flag` in `aura runtime status`. |
 | `runtime.version` | string | `""` | Managed runtime version to select instead of the pinned one, i.e. `~/.aura/runtime/<version>/`. Empty uses the pinned version. **Only the pinned version has a published sha256**, so an off-pin version is never downloaded: if that install is absent, the runtime reports missing with guidance rather than performing an unverified fetch. Install it yourself under that directory, or use `runtime.path`. |
 | `runtime.embeddedPath` | string | `""` | Explicit embedded runtime library path. A nonblank value is binding and takes precedence over `AURA_RUNTIME_EMBEDDED_LIB` and installed-library discovery. |
-| `runtime.allowShell` | boolean | `false` | Stop routing direct runtime-binary shell commands to the innate tools. See below. |
 
-The process adapter remains the default. In explicit `embedded` mode, an unavailable or incompatible embedded runtime library is an error rather than a silent process fallback. `auto` records both the requested adapter and the effective adapter in runtime status; it uses the process when no library is present, but does not hide a present library that fails compatibility checks.
+The process adapter remains the default. `AURA_RUNTIME_ADAPTER=process|embedded|auto` overrides `runtime.adapter` for one process, including `aura runtime status`; an invalid value is rejected. In explicit `embedded` mode, an unavailable or incompatible embedded runtime library is an error rather than a silent process fallback. `auto` records both the requested adapter and the effective adapter in runtime status; it uses the process when no library is present, but does not hide a present library that fails compatibility checks.
 
 Embedded library resolution checks a nonblank `runtime.embeddedPath`, then a nonblank `AURA_RUNTIME_EMBEDDED_LIB`, then the pinned managed runtime version's `lib` directory, and finally the `lib` directory adjacent to an already-resolved real runtime binary. Candidates must be regular files. Resolution never scans `PATH` for shared libraries.
 
@@ -535,40 +534,6 @@ bundled skill, author one of the same name in any normal skills directory — th
 bundled provider sits at the lowest skill priority, so yours wins. To drop one,
 list its name in `skills.ignoredSkills`.
 
-#### Runtime shell policy
-
-`bash` carries a group of interceptor rules that route direct shell invocation of the
-runtime binary to the innate tools, so the runtime is reached through one managed,
-version-pinned binary that returns structured results instead of through ad-hoc shell
-commands. `bunx`/`npx`/`pnpm dlx` forms under either package name are covered too, as
-are the usual lead-ins: `sudo`/`env`/`time` and env-assignment prefixes, `$(…)` and
-backtick command substitution, and compound-statement bodies
-(`for f in *; do … done`, `if …; then … fi`).
-
-Which tool a blocked command is pointed at depends on what is active. `run`, `check`,
-and `build` are always-on tools, so a bare invocation, `run …`, and `build …` name
-them directly. The `jvm_*` tools, `serve`, and `project_advice` are *discoverable* — absent
-from the tool schema until discovered — and an interceptor rule only ever names a tool that is
-currently registered. So a direct `jar …` invocation names `jvm_jar` once the JVM
-suite is active, and `project advice` names `project_advice`, and otherwise falls through to the generic guidance that names `run` and points at
-the rest of the suite. Either way the command is blocked; only the suggestion
-differs.
-
-This group is **on by default**, unlike the rest of `bashInterceptor`: the
-dedicated-tool nudges (`cat`/`grep`/`sed` → `read`/`grep`/`edit`) stay behind
-`bashInterceptor.enabled`, while the runtime rules are policy and apply regardless.
-They have their own two gates instead:
-
-- **`runtime.enabled`**, for free. A rule never fires when its target tool is not
-  registered, and the runtime tools are all registered behind `runtime.enabled` — so
-  turning the runtime off makes the whole group inert.
-- **The opt-out.** Set `runtime.allowShell: true` or export
-  `AURA_ALLOW_ELIDE_SHELL=1` (kept under that name for compatibility). Either one
-  drops just this group; every other interceptor rule is unaffected.
-
-This is routing enforcement, not a sandbox. Coverage is regex over the command
-string: it does not track quoting, and it does not see through `hub start`, a
-container, or an SSH hop.
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 

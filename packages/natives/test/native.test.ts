@@ -684,6 +684,10 @@ describe("pi-natives", () => {
 							{
 								command: 'bash -lc "set -m; sleep 30 & disown; sleep 30"',
 								cwd: testDir,
+								// `bash -l` sources $HOME profile scripts; a scratch HOME keeps
+								// a broken user profile from killing the shell before the
+								// sleeps run.
+								env: { ...(process.env as Record<string, string>), HOME: testDir },
 								timeoutMs: 150,
 								cols: 120,
 								rows: 40,

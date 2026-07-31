@@ -45,7 +45,6 @@ import { INSPECT_IMAGE_MODES } from "../utils/inspect-image-mode";
 import { isSearchProviderId, SEARCH_PROVIDER_ORDER } from "../web/search/types";
 import { withFileLock } from "./file-lock";
 import {
-	applyRuntimeShellOptOut,
 	type BashInterceptorRule,
 	type GroupPrefix,
 	type GroupTypeMap,
@@ -746,16 +745,9 @@ export class Settings {
 		return variants;
 	}
 
-	/**
-	 * Get bash interceptor rules (typed accessor for complex array config).
-	 *
-	 * This is where the rule set is assembled for the bash tool, so it is also
-	 * where the runtime shell opt-out lands: `runtime.allowShell` (or the compat
-	 * `AURA_ALLOW_ELIDE_SHELL=1`) drops the runtime-routing rules and leaves every
-	 * other rule in force.
-	 */
+	/** Get bash interceptor rules (typed accessor for complex array config). */
 	getBashInterceptorRules(): BashInterceptorRule[] {
-		return applyRuntimeShellOptOut(this.get("bashInterceptor.patterns"), this.get("runtime.allowShell"));
+		return this.get("bashInterceptor.patterns");
 	}
 
 	#modelRolesFromLayer(layer: RawSettings): Record<string, string> {

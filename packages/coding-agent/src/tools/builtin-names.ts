@@ -35,7 +35,6 @@ export const BUILTIN_TOOL_NAMES = [
 	// `runtime_debug`, not `debug`: `debug` is the interactive stepping debugger.
 	"runtime_debug",
 	"serve",
-	"jvm_run",
 	"jvm_disassemble",
 	"jvm_format",
 	"jvm_jar",

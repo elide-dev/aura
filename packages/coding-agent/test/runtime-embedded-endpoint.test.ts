@@ -287,7 +287,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "process JavaScript",
 				adapter: "process",
 				embeddedStatus: validEmbeddedStatus,
-				params: { code: "1", language: "js" },
+				params: { code: "1", language: "js", engine: "elide" },
 				expected: "process",
 			},
 			{
@@ -301,7 +301,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "embedded TypeScript",
 				adapter: "embedded",
 				embeddedStatus: validEmbeddedStatus,
-				params: { code: "1", language: "ts" },
+				params: { code: "1", language: "ts", engine: "elide" },
 				expected: "embedded",
 			},
 			{
@@ -322,14 +322,14 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "auto without library",
 				adapter: "auto",
 				embeddedStatus: noEmbeddedStatus,
-				params: { code: "1", language: "js" },
+				params: { code: "1", language: "js", engine: "elide" },
 				expected: "process",
 			},
 			{
 				name: "auto valid library",
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
-				params: { code: "1", language: "js" },
+				params: { code: "1", language: "js", engine: "elide" },
 				expected: "embedded",
 			},
 			{
@@ -350,7 +350,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "explicit embedded language overrides JVM-looking path",
 				adapter: "embedded",
 				embeddedStatus: validEmbeddedStatus,
-				params: { path: "Main.java", language: "js" },
+				params: { path: "Main.java", language: "js", engine: "elide" },
 				expected: "embedded",
 			},
 			{
@@ -370,6 +370,37 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		}
 	});
 
+	test("routes default JavaScript and TypeScript to Bun before adapter selection", async () => {
+		for (const language of ["js", "ts"] as const) {
+			const processEndpoint = new StubEndpoint("process", processStatus);
+			const embeddedEndpoint = new StubEndpoint("embedded", noEmbeddedStatus);
+			const bunEndpoint = new StubEndpoint("bun", processStatus);
+			const endpoint = new SelectedRuntimeEndpoint({
+				adapter: "embedded",
+				processEndpoint,
+				embeddedEndpoint,
+				bunEndpoint,
+			});
+			const response = await endpoint.request(rpcRequest(17, "runtime/run", { code: "1", language }));
+			expect(unwrapResponse<{ stdout: string }>(response).stdout).toBe("bun");
+			expect(processEndpoint.requests).toHaveLength(0);
+			expect(embeddedEndpoint.requests).toHaveLength(0);
+		}
+	});
+
+	test("rejects an invalid engine pair before calling any endpoint", async () => {
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embeddedEndpoint = new StubEndpoint("embedded", validEmbeddedStatus);
+		const bunEndpoint = new StubEndpoint("bun", processStatus);
+		const endpoint = new SelectedRuntimeEndpoint({ processEndpoint, embeddedEndpoint, bunEndpoint });
+		const response = await endpoint.request(
+			rpcRequest(17, "runtime/run", { code: "print(1)", language: "python", engine: "bun" }),
+		);
+		expect(responseError(response).error).toMatchObject({ code: "invalid-params" });
+		expect(processEndpoint.requests).toHaveLength(0);
+		expect(embeddedEndpoint.requests).toHaveLength(0);
+		expect(bunEndpoint.requests).toHaveLength(0);
+	});
 	test("auto falls back to the process endpoint when embedded execution rejects a language", async () => {
 		const processEndpoint = new StubEndpoint("process", processStatus);
 		const embedded = new StubEndpoint(
@@ -385,8 +416,8 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		});
 
 		expect(unwrapResponse<{ stdout: string }>(response).stdout).toBe("process");
-		expect(embedded.requests.map(request => request.method)).toEqual(["runtime/status", "runtime/run"]);
-		expect(processEndpoint.requests.map(request => request.method)).toEqual(["runtime/run"]);
+		expect(embedded.requests.map(request => request.method)).toEqual(["runtime/status", "runtime/jvm"]);
+		expect(processEndpoint.requests.map(request => request.method)).toEqual(["runtime/jvm"]);
 	});
 
 	test("runs runtime/jvm run actions through the embedded endpoint", async () => {
@@ -430,7 +461,11 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				brokenEmbeddedStatus,
 				new RuntimeRpcError("internal", "Embedded runtime ABI is incompatible."),
 			);
-			const response = await selectedRun(adapter, processEndpoint, embedded, { code: "1", language: "js" });
+			const response = await selectedRun(adapter, processEndpoint, embedded, {
+				code: "1",
+				language: "js",
+				engine: "elide",
+			});
 			expect(responseError(response).error.message).toContain("incompatible");
 			expect(processEndpoint.requests).toHaveLength(0);
 			expect(embedded.requests.map(request => request.method)).toEqual(
@@ -457,7 +492,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				});
 				expect(
 					unwrapResponse<{ stdout: string }>(
-						await auto.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+						await auto.request(rpcRequest(1, "runtime/run", { code: "1", language: "js", engine: "elide" })),
 					).stdout,
 				).toBe("process");
 				expect(autoProcess.requests.map(request => request.method)).toEqual(["runtime/run"]);
@@ -475,7 +510,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 					embeddedEndpoint: explicitEmbedded,
 				});
 				const response = responseError(
-					await explicit.request(rpcRequest(2, "runtime/run", { code: "1", language: "js" })),
+					await explicit.request(rpcRequest(2, "runtime/run", { code: "1", language: "js", engine: "elide" })),
 				);
 				expect(response.error.code).toBe("runtime-missing");
 				expect(response.error.message).toContain("embedded runtime library is unavailable");
@@ -501,7 +536,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		});
 
 		const autoRun = unwrapResponse<{ stdout: string }>(
-			await auto.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+			await auto.request(rpcRequest(1, "runtime/run", { code: "1", language: "js", engine: "elide" })),
 		);
 		expect(autoRun.stdout).toBe("process");
 		const autoStatus = unwrapResponse<RuntimeStatusResult>(
@@ -527,7 +562,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			embeddedEndpoint: explicitEmbedded,
 		});
 		const explicitRun = responseError(
-			await explicit.request(rpcRequest(2, "runtime/run", { code: "1", language: "js" })),
+			await explicit.request(rpcRequest(2, "runtime/run", { code: "1", language: "js", engine: "elide" })),
 		);
 		expect(explicitRun.error.code).toBe("runtime-missing");
 		expect(explicitRun.error.message).toContain("missing its embedded library");
@@ -569,7 +604,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				embeddedEndpoint: embeddedEndpoint(host),
 			});
 			const response = responseError(
-				await endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js" })),
+				await endpoint.request(rpcRequest(1, "runtime/run", { code: "1", language: "js", engine: "elide" })),
 			);
 			expect(response.error.message, item.name).toContain(item.message);
 			expect(processEndpoint.requests, item.name).toHaveLength(0);
@@ -646,20 +681,25 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			overrides?: Partial<ConstructorParameters<typeof EmbeddedRuntimeEndpoint>[0]>;
 		}> = [
 			{ name: "language", params: { code: "1", language: "ruby" } },
-			{ name: "both sources", params: { code: "1", path: "guest.js", language: "js" } },
-			{ name: "arguments", params: { code: "1", language: "js", args: ["ok", 2] } },
+			{ name: "both sources", params: { code: "1", path: "guest.js", language: "js", engine: "elide" } },
+			{ name: "arguments", params: { code: "1", language: "js", engine: "elide", args: ["ok", 2] } },
 			{
 				name: "environment",
-				params: { code: "1", language: "js" },
+				params: { code: "1", language: "js", engine: "elide" },
 				overrides: { env: { INVALID: 4 } as unknown as NodeJS.ProcessEnv },
 			},
-			{ name: "stdin", params: { code: "1", language: "js", stdin: 3 } },
-			{ name: "timeout", params: { code: "1", language: "js", timeoutMs: 0 } },
+			{ name: "stdin", params: { code: "1", language: "js", engine: "elide", stdin: 3 } },
+			{ name: "timeout", params: { code: "1", language: "js", engine: "elide", timeoutMs: 0 } },
 			{
 				name: "cwd",
-				params: { code: "1", language: "js", cwd: path.join(process.cwd(), `missing-${crypto.randomUUID()}`) },
+				params: {
+					code: "1",
+					language: "js",
+					engine: "elide",
+					cwd: path.join(process.cwd(), `missing-${crypto.randomUUID()}`),
+				},
 			},
-			{ name: "missing file", params: { path: missingSource, language: "js" } },
+			{ name: "missing file", params: { path: missingSource, language: "js", engine: "elide" } },
 		];
 
 		for (const item of invalidCases) {
@@ -693,8 +733,12 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			processEndpoint: new StubEndpoint("process", processStatus),
 			embeddedEndpoint: embedded,
 		});
-		const first = endpoint.request(rpcRequest(1, "runtime/run", { code: "first", language: "js", cwd: "/slow" }));
-		const second = endpoint.request(rpcRequest(2, "runtime/run", { code: "second", language: "js", cwd: "/fast" }));
+		const first = endpoint.request(
+			rpcRequest(1, "runtime/run", { code: "first", language: "js", engine: "elide", cwd: "/slow" }),
+		);
+		const second = endpoint.request(
+			rpcRequest(2, "runtime/run", { code: "second", language: "js", engine: "elide", cwd: "/fast" }),
+		);
 		await flushMicrotasks();
 		expect(host.callIds).toEqual([]);
 		firstPreparation.resolve();
@@ -726,7 +770,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		});
 		const controller = new AbortController();
 		const pending = endpoint.request(
-			rpcRequest(1, "runtime/run", { code: "1", language: "js", cwd: "/slow" }),
+			rpcRequest(1, "runtime/run", { code: "1", language: "js", engine: "elide", cwd: "/slow" }),
 			controller.signal,
 		);
 		await statStarted.promise;
@@ -765,11 +809,21 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			let closing: Promise<void> | undefined;
 			try {
 				const first = endpoint.request(
-					rpcRequest(1, "runtime/run", { code: "first", language: "js", cwd: "/slow" }),
+					rpcRequest(1, "runtime/run", {
+						code: "first",
+						language: "js",
+						engine: "elide",
+						cwd: "/slow",
+					}),
 				);
 				await firstPreparationStarted.promise;
 				const invalid = endpoint.request(
-					rpcRequest(2, "runtime/run", { code: "bad", path: "bad.js", language: "js" }),
+					rpcRequest(2, "runtime/run", {
+						code: "bad",
+						path: "bad.js",
+						language: "js",
+						engine: "elide",
+					}),
 					controller.signal,
 				);
 				if (removal === "aborted") controller.abort();
@@ -781,11 +835,11 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				const invalidResponse = responseError(await invalid);
 				if (removal === "closed") {
 					expect(responseError(firstResponse).error.code, removal).toBe("internal");
-					expect(invalidResponse.error.code, removal).toBe("internal");
+					expect(invalidResponse.error.code, removal).toBe("invalid-params");
 					expect(host.events, removal).toEqual([]);
 				} else {
 					expect(unwrapResponse<{ stdout: string }>(firstResponse).stdout, removal).toBe("ok");
-					expect(invalidResponse.error.code, removal).toBe(removal === "aborted" ? "cancelled" : "invalid-params");
+					expect(invalidResponse.error.code, removal).toBe("invalid-params");
 					expect(host.callIds, removal).toEqual([1n]);
 				}
 				await closing;

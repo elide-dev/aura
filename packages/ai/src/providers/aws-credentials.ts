@@ -88,6 +88,10 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 			inflight.delete(cacheKey);
 		}
 	})();
+	// The shared promise outlives any individual caller; if every waiter
+	// aborts, its eventual rejection would otherwise surface as an unhandled
+	// rejection. Active waiters still observe it through raceWithSignal.
+	promise.catch(() => {});
 	inflight.set(cacheKey, promise);
 	return raceWithSignal(promise, opts.signal);
 }

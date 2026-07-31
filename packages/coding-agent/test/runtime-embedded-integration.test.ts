@@ -100,12 +100,13 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 	}, 120_000);
 
 	test("runs inline JavaScript TypeScript and Python with exact stdout", async () => {
-		const javascript = await service.run({ code: "console.log('inline-js')", language: "js" });
+		const javascript = await service.run({ code: "console.log('inline-js')", language: "js", engine: "elide" });
 		expect(javascript).toMatchObject({ exitCode: 0, stdout: "inline-js\n", stderr: "", killed: false });
 
 		const typescript = await service.run({
 			code: "const answer: number = 42; console.log('inline-ts:' + answer)",
 			language: "ts",
+			engine: "elide",
 		});
 		expect(typescript).toMatchObject({ exitCode: 0, stdout: "inline-ts:42\n", stderr: "", killed: false });
 
@@ -146,13 +147,27 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 			'import { value } from "./value.ts";\nconsole.log("sibling:" + value);\nconsole.log("cwd:" + process.cwd());\n',
 		);
 
-		const result = await service.run({ path: entry, language: "ts", cwd: requestedCwd });
+		const result = await service.run({ path: entry, language: "ts", engine: "elide", cwd: requestedCwd });
 		expect(result).toMatchObject({
 			exitCode: 0,
 			stdout: `sibling:resolved\ncwd:${requestedCwd}\n`,
 			stderr: "",
 			killed: false,
 		});
+	}, 120_000);
+
+	test("preserves Python file identity across embedded and process adapters", async () => {
+		const directory = await makeTempDir("aura-embedded-python-file-");
+		const entry = path.join(directory, "main.py");
+		await fs.writeFile(entry, "from pathlib import Path\nprint(Path(__file__).resolve())\n");
+
+		const [embeddedPython, processPython] = await Promise.all([
+			service.run({ path: entry, language: "python", cwd: directory }),
+			processService.run({ path: entry, language: "python", cwd: directory }),
+		]);
+		for (const result of [embeddedPython, processPython]) {
+			expect(result).toMatchObject({ exitCode: 0, stdout: `${entry}\n`, stderr: "", killed: false });
+		}
 	}, 120_000);
 
 	test("matches process-adapter argv cwd environment stdin stdout and stderr", async () => {
@@ -208,19 +223,21 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 		);
 		await fs.writeFile(entry, 'import { mutate } from "./state.ts";\nconsole.log(mutate() + "," + mutate());\n');
 
-		const firstModuleRun = await service.run({ path: entry, language: "ts" });
+		const firstModuleRun = await service.run({ path: entry, language: "ts", engine: "elide" });
 		expect(firstModuleRun).toMatchObject({ exitCode: 0, stdout: "1,2\n", stderr: "", killed: false });
-		const secondModuleRun = await service.run({ path: entry, language: "ts" });
+		const secondModuleRun = await service.run({ path: entry, language: "ts", engine: "elide" });
 		expect(secondModuleRun).toMatchObject({ exitCode: 0, stdout: "1,2\n", stderr: "", killed: false });
 
 		const firstContext = await service.run({
 			code: "globalThis.__auraEmbeddedLeak = 'one'; console.log('first-context')",
 			language: "js",
+			engine: "elide",
 		});
 		expect(firstContext.stdout).toBe("first-context\n");
 		const secondContext = await service.run({
 			code: "if ('__auraEmbeddedLeak' in globalThis) throw new Error('global leaked'); console.log('isolated-context')",
 			language: "js",
+			engine: "elide",
 		});
 		expect(secondContext).toMatchObject({
 			exitCode: 0,
@@ -231,41 +248,50 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 	}, 120_000);
 
 	test("returns stable guest syntax and runtime errors without poisoning reuse", async () => {
-		const syntax = await service.run({ code: "const = broken", language: "js" });
+		const syntax = await service.run({ code: "const = broken", language: "js", engine: "elide" });
 		expect(syntax.exitCode).not.toBe(0);
 		expect(syntax.stderr).toContain("SyntaxError");
 		expect(syntax.stderr).not.toContain("\u001b[");
 
-		const runtime = await service.run({ code: "throw new TypeError('embedded-stable-error')", language: "js" });
+		const runtime = await service.run({
+			code: "throw new TypeError('embedded-stable-error')",
+			language: "js",
+			engine: "elide",
+		});
 		expect(runtime.exitCode).not.toBe(0);
 		expect(runtime.stderr).toMatch(/^TypeError: embedded-stable-error(?:\n|$)/);
 		expect(runtime.stderr).not.toContain("\u001b[");
 
-		const reuse = await service.run({ code: "console.log('reused-after-error')", language: "js" });
+		const reuse = await service.run({ code: "console.log('reused-after-error')", language: "js", engine: "elide" });
 		expect(reuse).toMatchObject({ exitCode: 0, stdout: "reused-after-error\n", stderr: "", killed: false });
 	}, 120_000);
 
 	test("times out an active call within a bound and reuses the runtime", async () => {
 		const startedAt = performance.now();
-		const timedOut = await service.run({ code: "while (true) {}", language: "js", timeoutMs: 1_000 });
+		const timedOut = await service.run({
+			code: "while (true) {}",
+			language: "js",
+			engine: "elide",
+			timeoutMs: 1_000,
+		});
 		expect(timedOut).toMatchObject({ exitCode: 1, stdout: "", stderr: "", killed: true });
 		expect(performance.now() - startedAt).toBeLessThan(15_000);
 
-		const reuse = await service.run({ code: "console.log('reused-after-timeout')", language: "js" });
+		const reuse = await service.run({ code: "console.log('reused-after-timeout')", language: "js", engine: "elide" });
 		expect(reuse).toMatchObject({ exitCode: 0, stdout: "reused-after-timeout\n", stderr: "", killed: false });
 	}, 120_000);
 
 	test("cancels an active call within a bound and reuses the runtime", async () => {
 		const controller = new AbortController();
 		const startedAt = performance.now();
-		const active = service.run({ code: "while (true) {}", language: "js" }, controller.signal);
+		const active = service.run({ code: "while (true) {}", language: "js", engine: "elide" }, controller.signal);
 		// Native execution has no test-only "entered call" hook; a short real delay lets the warmed engine enter the infinite guest.
 		await Bun.sleep(500);
 		controller.abort();
 		await expect(active).rejects.toMatchObject({ code: "cancelled" });
 		expect(performance.now() - startedAt).toBeLessThan(15_000);
 
-		const reuse = await service.run({ code: "console.log('reused-after-cancel')", language: "js" });
+		const reuse = await service.run({ code: "console.log('reused-after-cancel')", language: "js", engine: "elide" });
 		expect(reuse).toMatchObject({ exitCode: 0, stdout: "reused-after-cancel\n", stderr: "", killed: false });
 	}, 120_000);
 
@@ -278,13 +304,15 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 		let secondSettled = false;
 		let thirdSettled = false;
 		const completionOrder: string[] = [];
-		const first = service.run({ code: "while (true) {}", language: "js" }, firstController.signal).finally(() => {
-			firstSettled = true;
-		});
+		const first = service
+			.run({ code: "while (true) {}", language: "js", engine: "elide" }, firstController.signal)
+			.finally(() => {
+				firstSettled = true;
+			});
 		// Native execution has no test-only "entered call" hook; let the warmed engine enter before queueing two calls.
 		await Bun.sleep(500);
 		const second = service
-			.run({ code: "console.log('fifo-second')", language: "js" }, secondController.signal)
+			.run({ code: "console.log('fifo-second')", language: "js", engine: "elide" }, secondController.signal)
 			.then(result => {
 				completionOrder.push("second");
 				return result;
@@ -293,7 +321,7 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 				secondSettled = true;
 			});
 		const third = service
-			.run({ code: "console.log('fifo-third')", language: "js" }, thirdController.signal)
+			.run({ code: "console.log('fifo-third')", language: "js", engine: "elide" }, thirdController.signal)
 			.then(result => {
 				completionOrder.push("third");
 				return result;
@@ -354,7 +382,7 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 				`import { RuntimeService } from ${JSON.stringify(serviceUrl)};`,
 				`import { SelectedRuntimeEndpoint } from ${JSON.stringify(selectedUrl)};`,
 				`const service = new RuntimeService(new SelectedRuntimeEndpoint({ adapter: "embedded", embeddedPath: ${JSON.stringify(embeddedPath)}, explicitPath: ${JSON.stringify(processPath)}, autoDownload: false }));`,
-				`const result = await service.run({ code: "console.log('dispose-child')", language: "js" });`,
+				`const result = await service.run({ code: "console.log('dispose-child')", language: "js", engine: "elide" });`,
 				`if (result.stdout !== "dispose-child\\n") throw new Error("unexpected child output");`,
 				"await service.close();",
 				'process.stdout.write("disposed\\n");',
@@ -388,7 +416,9 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 			explicitPath: fakeProcess,
 		});
 		try {
-			await expect(missing.run({ code: "console.log('must-not-run')", language: "js" })).rejects.toMatchObject({
+			await expect(
+				missing.run({ code: "console.log('must-not-run')", language: "js", engine: "elide" }),
+			).rejects.toMatchObject({
 				code: "runtime-missing",
 				message: missingLibraryGuidance,
 			});

@@ -6,7 +6,6 @@ import { JvmDisassembleTool } from "../src/tools/jvm-disassemble";
 import { JvmFormatTool } from "../src/tools/jvm-format";
 import { JvmJarTool } from "../src/tools/jvm-jar";
 import { JvmJavadocTool } from "../src/tools/jvm-javadoc";
-import { JvmRunTool } from "../src/tools/jvm-run";
 
 const SESSION_CWD = "/work/project";
 
@@ -50,28 +49,6 @@ function textOf(result: { content: { type: string }[] }): string {
 }
 
 const SIGNAL = new AbortController().signal;
-
-describe("jvm_run", () => {
-	test("maps to the run action with the session cwd and renders the program's streams", async () => {
-		const { session, seen } = sessionReturning(
-			ok({ stdout: "hi\n", className: "Main", language: "java", action: "run", phase: "run" }),
-		);
-		const tool = JvmRunTool.createIf(session);
-		const out = await tool!.execute("id", { language: "java", code: "public class Main {}" }, SIGNAL);
-		expect(seen()).toEqual({ action: "run", language: "java", code: "public class Main {}", cwd: SESSION_CWD });
-		expect(textOf(out)).toBe("hi");
-		expect(out.details?.className).toBe("Main");
-	});
-
-	test("a failed compile surfaces the compiler's diagnostics and the exit code", async () => {
-		const { session } = sessionReturning(
-			ok({ exitCode: 1, stderr: "Main.java:1: error: ';' expected", phase: "compile" }),
-		);
-		const out = await JvmRunTool.createIf(session)!.execute("id", { language: "java", code: "bad" }, SIGNAL);
-		expect(textOf(out)).toContain("error: ';' expected");
-		expect(textOf(out)).toContain("(exit code 1)");
-	});
-});
 
 describe("jvm_disassemble", () => {
 	test("renders the javap listing on success", async () => {
@@ -233,7 +210,6 @@ describe("JVM tools without a runtime service", () => {
 			getRuntimeService: () => undefined,
 		} as unknown as ToolSession;
 		const tools = [
-			JvmRunTool.createIf(session)!,
 			JvmDisassembleTool.createIf(session)!,
 			JvmFormatTool.createIf(session)!,
 			JvmJarTool.createIf(session)!,

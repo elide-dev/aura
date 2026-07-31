@@ -269,6 +269,12 @@ function runtimeSelectionEntries(status: RuntimeStatusResult): DoctorEntry[] {
 	return entries;
 }
 
+const RUN_ENGINE_ENTRY: DoctorEntry = {
+	label: "run engines",
+	status: "ok",
+	detail: "JavaScript/TypeScript default to Bun; Python/Java/Kotlin use the embedded engine",
+};
+
 function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 	const protocol = protocolEntry(input);
 	if (!input.enabled) {
@@ -277,7 +283,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 				label: "state",
 				status: "warn",
 				detail:
-					"disabled (runtime.enabled = false) — the innate run/check/build/insights/profile and jvm_* tools do not register",
+					"disabled (runtime.enabled = false) — run/check/build/insights/profile and the five specialized jvm_* tools do not register",
 			},
 			protocol,
 		];
@@ -302,6 +308,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 				detail: `enabled, but unavailable${status.guidance ? ` — ${status.guidance}` : ""}`,
 			},
 			...selection,
+			RUN_ENGINE_ENTRY,
 			protocol,
 		];
 	}
@@ -312,6 +319,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 		entries.push({ label: "binary", status: "ok", detail: formatDisplayPath(status.binaryPath) });
 	}
 	if (status.source) entries.push({ label: "source", status: "ok", detail: status.source });
+	entries.push(RUN_ENGINE_ENTRY);
 	entries.push(...selection, protocol);
 	return entries;
 }
@@ -641,9 +649,8 @@ export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint",
  * drift test can enumerate it and compare against the real registry.
  */
 const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | undefined> = {
-	// RuntimeRunTool/CheckTool/BuildTool/InsightsTool/ProfileTool, the two launch
-	// tools (RuntimeDebugTool/RuntimeServeTool), the six Jvm*Tool classes, and
-	// RuntimeAdviceTool all gate on `runtime.enabled`.
+	// Runtime execution/check/build/analysis, the two launch tools, the five
+	// specialized Jvm*Tool classes, and RuntimeAdviceTool gate on `runtime.enabled`.
 	...Object.fromEntries(
 		[
 			"run",
@@ -653,7 +660,6 @@ const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | und
 			"profile",
 			"runtime_debug",
 			"serve",
-			"jvm_run",
 			"jvm_disassemble",
 			"jvm_format",
 			"jvm_jar",

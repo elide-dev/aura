@@ -10,11 +10,15 @@ import type { ToolSession } from ".";
 const runtimeRunSchema = type({
 	"code?": type("string").describe("inline source to execute (mutually exclusive with path)"),
 	"path?": type("string").describe("existing file to run; preserves project cwd/imports"),
-	"language?": type("'js' | 'ts' | 'python'").describe("language for inline code (default ts)"),
+	"language?": type("'js' | 'ts' | 'python' | 'java' | 'kotlin'").describe(
+		"language for inline code (default ts; inferred from path)",
+	),
+	"engine?": type("'bun' | 'elide'").describe("execution engine (js/ts default bun; other languages use elide)"),
 	"args?": type("string[]").describe("arguments passed to the program"),
 	"stdin?": type("string").describe("data piped to the program's stdin"),
 	"timeoutMs?": type("number").describe("kill the run after this many milliseconds"),
 	"cwd?": type("string").describe("working directory (defaults to the session cwd)"),
+	"mainClass?": type("string").describe("Java/Kotlin entrypoint class override"),
 });
 
 export type RuntimeRunToolParams = typeof runtimeRunSchema.infer;
@@ -27,7 +31,7 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 	readonly parameters = runtimeRunSchema;
 	readonly strict = true;
 	readonly loadMode = "essential" as const;
-	readonly summary = "Execute js/ts/python on the managed runtime";
+	readonly summary = "Execute JavaScript, TypeScript, Python, Java, or Kotlin";
 
 	constructor(private readonly session: ToolSession) {}
 

@@ -12,10 +12,10 @@
  * this seam?", which is what a future stdio-broker or in-process endpoint needs.
  *
  * v2 = the shared-workdir generation: one temp directory per request-handler
- * flow with a bound runner, so a single request can be several invocations
- * (compile → run). The multi-invocation methods ride this version.
+ * flow with a bound runner, so a single request can be several invocations.
+ * v3 = engine-aware unified run, including Java and Kotlin.
  */
-export const RUNTIME_PROTOCOL_VERSION = 2 as const;
+export const RUNTIME_PROTOCOL_VERSION = 3 as const;
 
 export type RuntimeMethod =
 	| "runtime/run"
@@ -30,7 +30,9 @@ export type RuntimeMethod =
 
 export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
 
-/** The two compiled guest languages, which take the JVM flows rather than `runtime/run`. */
+export type RunEngine = "bun" | "elide";
+
+/** The two compiled guest languages, also used by the specialized JVM flows. */
 export type JvmLanguage = "java" | "kotlin";
 
 export interface RuntimeRunParams {
@@ -40,10 +42,14 @@ export interface RuntimeRunParams {
 	path?: string;
 	/** Language for inline code (default "ts"); inferred from the extension in path mode. */
 	language?: RuntimeLanguage;
+	/** Execution engine. Defaults to Bun for JavaScript/TypeScript and Elide otherwise. */
+	engine?: RunEngine;
 	args?: string[];
 	stdin?: string;
 	timeoutMs?: number;
 	cwd?: string;
+	/** Java/Kotlin entrypoint override. Invalid for JavaScript, TypeScript, and Python. */
+	mainClass?: string;
 }
 
 export interface RuntimeInsightsParams extends RuntimeRunParams {
@@ -51,6 +57,51 @@ export interface RuntimeInsightsParams extends RuntimeRunParams {
 	insight?: string;
 	/** Existing insight script path. */
 	insightPath?: string;
+}
+
+export interface ResolvedRunTarget {
+	language: RuntimeLanguage;
+	engine: RunEngine;
+}
+
+const RUN_ENGINES: Record<RuntimeLanguage, readonly RunEngine[]> = {
+	js: ["bun", "elide"],
+	ts: ["bun", "elide"],
+	python: ["elide"],
+	java: ["elide"],
+	kotlin: ["elide"],
+};
+
+/** Resolve defaults and reject unsupported run combinations before endpoint side effects. */
+export function resolveRunTarget(params: RuntimeRunParams): ResolvedRunTarget {
+	if (params.code === undefined && params.path === undefined) {
+		throw new RuntimeRpcError("invalid-params", "run requires code (inline) or path (existing file).");
+	}
+	if (params.code !== undefined && params.path !== undefined) {
+		throw new RuntimeRpcError("invalid-params", "code and path are mutually exclusive.");
+	}
+	const language = params.language ?? (params.path === undefined ? "ts" : inferRunLanguage(params.path));
+	if (!Object.hasOwn(RUN_ENGINES, language)) {
+		throw new RuntimeRpcError("invalid-params", `Unsupported runtime language "${language}".`);
+	}
+	const engine = params.engine ?? (language === "js" || language === "ts" ? "bun" : "elide");
+	if (!RUN_ENGINES[language].includes(engine)) {
+		throw new RuntimeRpcError("invalid-params", `Engine "${engine}" does not support language "${language}".`);
+	}
+	if (params.mainClass !== undefined && language !== "java" && language !== "kotlin") {
+		throw new RuntimeRpcError("invalid-params", "mainClass is only valid for Java and Kotlin.");
+	}
+	return { language, engine };
+}
+
+function inferRunLanguage(file: string): RuntimeLanguage {
+	const extension = file.slice(file.lastIndexOf(".")).toLowerCase();
+	if (extension === ".js" || extension === ".mjs" || extension === ".cjs" || extension === ".jsx") return "js";
+	if (extension === ".ts" || extension === ".mts" || extension === ".cts" || extension === ".tsx") return "ts";
+	if (extension === ".py") return "python";
+	if (extension === ".java") return "java";
+	if (extension === ".kt" || extension === ".kts") return "kotlin";
+	throw new RuntimeRpcError("invalid-params", `Cannot infer a supported language from path "${file}".`);
 }
 
 export interface RuntimeProfileParams extends RuntimeRunParams {
@@ -75,6 +126,10 @@ export interface RuntimeJvmParams {
 	code?: string;
 	/** Entrypoint/target class override; see `deriveJvmMainClass`. */
 	mainClass?: string;
+	/** Arguments passed to the Java/Kotlin program for `run`. */
+	args?: string[];
+	/** Standard input passed to the Java/Kotlin program for `run`. */
+	stdin?: string;
 	/** `jar` sub-mode: build a jar from source, or list an existing one. Default `create`. */
 	mode?: "create" | "inspect";
 	/** Destination written by `jar` (create) and `javadoc`, resolved against `cwd`. */
@@ -83,9 +138,9 @@ export interface RuntimeJvmParams {
 	overwrite?: boolean;
 	/** Existing jar to inspect (`jar`, mode `inspect`), resolved against `cwd`. */
 	jar?: string;
-	/** Existing `.class`/`.jar`/directory to analyze (`deps`), resolved against `cwd`. */
+	/** Source path for `run`, or existing `.class`/`.jar`/directory for `deps`; resolved against `cwd`. */
 	path?: string;
-	/** Base directory for `output`/`jar`/`path` resolution. Defaults to the endpoint process cwd. */
+	/** Base directory for path-bearing fields and the `run` program cwd. */
 	cwd?: string;
 	timeoutMs?: number;
 }
@@ -233,6 +288,11 @@ export interface RuntimeExecResult {
 	stderr: string;
 	durationMs: number;
 	killed: boolean;
+}
+
+export interface RuntimeRunResult extends RuntimeExecResult {
+	engine: RunEngine;
+	language: RuntimeLanguage;
 }
 
 export type RuntimeAdapter = "process" | "embedded" | "auto";

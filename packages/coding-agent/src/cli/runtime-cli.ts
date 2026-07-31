@@ -8,6 +8,7 @@ import {
 	RuntimeService,
 	type RuntimeSettingsValues,
 	resolveRuntimeEndpointOptions,
+	runtimeAdapterFromEnvironment,
 	type SelectedEndpointOptions,
 	SelectedRuntimeEndpoint,
 } from "../runtime";
@@ -43,7 +44,7 @@ export function readRuntimeSettings(overrides: Partial<RuntimeSettingsValues> = 
 		autoDownload: overrides.autoDownload ?? settings.get("runtime.autoDownload"),
 		path: overrides.path ?? settings.get("runtime.path") ?? "",
 		version: overrides.version ?? settings.get("runtime.version") ?? "",
-		adapter: overrides.adapter ?? settings.get("runtime.adapter"),
+		adapter: overrides.adapter ?? runtimeAdapterFromEnvironment(settings.get("runtime.adapter")),
 		embeddedPath: overrides.embeddedPath ?? settings.get("runtime.embeddedPath") ?? "",
 	};
 }

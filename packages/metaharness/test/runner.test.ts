@@ -6,6 +6,7 @@ import {
 	buildHarborArgs,
 	buildHarborEnv,
 	buildResumeArgs,
+	buildSourceDepsInstallArgv,
 	collectForwardEnv,
 	parseArgs,
 	readTrials,
@@ -62,6 +63,32 @@ describe("generic agent-arg / env passthrough", () => {
 		expect(forwarded.SOME_FLAG).toBe("1");
 		expect(forwarded.OTHER).toBe("two words");
 	});
+
+	it("does not forward host-only config paths into task containers", () => {
+		const cfg = parseArgs(["--model", "anthropic/claude-opus-4-8"]);
+		const forwarded = Reflect.apply(collectForwardEnv, undefined, [
+			cfg,
+			{ PI_CONFIG_FILES: "/tmp/host-only.yml", PI_DIALECT: "keep-me" },
+		]) as Record<string, string>;
+
+		expect(forwarded.PI_CONFIG_FILES).toBeUndefined();
+		expect(forwarded.PI_DIALECT).toBe("keep-me");
+	});
+
+	it("removes host-only config paths from Harbor's inherited environment", () => {
+		const cfg = parseArgs(["--model", "anthropic/claude-opus-4-8"]);
+		const env = Reflect.apply(buildHarborEnv, undefined, [
+			cfg,
+			"/tmp/models.yml",
+			null,
+			"test",
+			null,
+			{ PI_CONFIG_FILES: "/tmp/host-only.yml", PI_DIALECT: "keep-me" },
+		]) as Record<string, string>;
+
+		expect(env.PI_CONFIG_FILES).toBeUndefined();
+		expect(env.PI_DIALECT).toBe("keep-me");
+	});
 });
 
 describe("install modes", () => {
@@ -92,6 +119,21 @@ describe("install modes", () => {
 		expect(cfg.install).toBe("local");
 		expect(cfg.build).toBe(false);
 	});
+});
+
+it("runs Docker source dependency installation as the host user", () => {
+	const argv = buildSourceDepsInstallArgv({
+		envType: "docker",
+		arch: "x64",
+		depsDir: "/tmp/deps",
+		bunVersion: "1.3.14",
+		script: "bun install",
+		uid: 1000,
+		gid: 1001,
+	});
+
+	expect(argv).toContain("--user");
+	expect(argv[argv.indexOf("--user") + 1]).toBe("1000:1001");
 });
 
 describe("parseArgs validation", () => {

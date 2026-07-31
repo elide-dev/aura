@@ -163,7 +163,9 @@ console.log(JSON.stringify({ id: TERMINAL_ID, imageProtocol: TERMINAL.imageProto
 	});
 
 	it("is Kitty-capable with true color but no OSC 8 hyperlinks", () => {
-		const warp = getTerminalInfo("warp");
+		// Pin platform/env: on a real WSL host the ambient env would trip the
+		// Windows carve-out and null out the image protocol.
+		const warp = getTerminalInfo("warp", "linux", {});
 		expect(warp.imageProtocol).toBe(ImageProtocol.Kitty);
 		expect(warp.trueColor).toBe(true);
 		expect(warp.hyperlinks).toBe(false);
@@ -176,9 +178,9 @@ console.log(JSON.stringify({ id: TERMINAL_ID, imageProtocol: TERMINAL.imageProto
 		const linux = getTerminalInfo("warp", "linux", {});
 		const windows = getTerminalInfo("warp", "win32", {});
 
-		expect(resolveWarpImageProtocol("darwin")).toBe(ImageProtocol.Kitty);
-		expect(resolveWarpImageProtocol("linux")).toBe(ImageProtocol.Kitty);
-		expect(resolveWarpImageProtocol("win32")).toBeNull();
+		expect(resolveWarpImageProtocol("darwin", {})).toBe(ImageProtocol.Kitty);
+		expect(resolveWarpImageProtocol("linux", {})).toBe(ImageProtocol.Kitty);
+		expect(resolveWarpImageProtocol("win32", {})).toBeNull();
 		expect(mac.imageProtocol).toBe(ImageProtocol.Kitty);
 		expect(linux.imageProtocol).toBe(ImageProtocol.Kitty);
 		expect(windows.imageProtocol).toBeNull();

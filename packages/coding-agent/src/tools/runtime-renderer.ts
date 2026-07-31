@@ -1,7 +1,7 @@
 /**
  * TUI renderers for the runtime tool family (`run`, `check`, `build`,
- * `insights`, `profile`, `project_advice`, the six `jvm_*` flows, and the two
- * hub-backed job tools `runtime_debug` / `serve`).
+ * `insights`, `profile`, `project_advice`, the five specialized `jvm_*` flows,
+ * and the two hub-backed job tools `runtime_debug` / `serve`).
  *
  * These are deliberately *thin*. The house style for an exec-shaped tool is a
  * status line plus a short output preview (`glob`, `hub`), and everything that
@@ -323,7 +323,7 @@ function jobResultFrame(fallback: (args: Args) => Frame) {
 
 const runCallFrame = (args: Args): Frame => ({
 	description: describeSource(args),
-	meta: [str(args, "language") ?? (str(args, "path") ? undefined : "ts")],
+	meta: [str(args, "language") ?? (str(args, "path") ? undefined : "ts"), str(args, "engine"), str(args, "mainClass")],
 });
 
 const debugCallFrame = (args: Args): Frame => ({
@@ -362,7 +362,7 @@ const jvmDepsCallFrame = (args: Args): Frame => {
 };
 
 const RUNTIME_RENDERER_SPECS: Record<string, RuntimeRendererSpec> = {
-	run: { title: "Run", describeCall: runCallFrame },
+	run: { title: "Run", describeCall: runCallFrame, describeResult: jvmResultFrame(runCallFrame) },
 
 	check: {
 		title: "Check",
@@ -398,8 +398,6 @@ const RUNTIME_RENDERER_SPECS: Record<string, RuntimeRendererSpec> = {
 		title: "Project Advice",
 		describeCall: args => ({ description: path.basename(str(args, "cwd") ?? getProjectDir()) }),
 	},
-
-	jvm_run: { title: "JVM Run", describeCall: jvmRunCallFrame, describeResult: jvmResultFrame(jvmRunCallFrame) },
 
 	jvm_disassemble: {
 		title: "JVM Disassemble",

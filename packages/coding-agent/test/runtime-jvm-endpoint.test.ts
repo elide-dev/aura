@@ -2,9 +2,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RuntimeJvmParams, RuntimeJvmResult } from "../src/runtime/protocol";
+import type { RuntimeJvmParams, RuntimeJvmResult, RuntimeRunResult } from "../src/runtime/protocol";
 import { createRequest, type RuntimeRpcError, unwrapResponse } from "../src/runtime/protocol";
 import { LocalRuntimeEndpoint } from "../src/runtime/transport/local";
+import { SelectedRuntimeEndpoint } from "../src/runtime/transport/selected";
 
 let dir: string;
 let fakeBin: string;
@@ -29,6 +30,7 @@ if [ "$1" = "javac" ]; then
   done
 fi
 if [ "$1" = "kotlinc" ]; then mkdir -p out && touch out/MainKt.class; fi
+if [ "$1" = "java" ]; then IFS= read -r input || true; printf 'STDIN:%s\\n' "$input" >> "$AURA_FAKE_LOG"; fi
 if [ "$1" = "jar" ]; then
   case "$*" in *--create*) : > aura-out.jar ;; esac
 fi
@@ -133,6 +135,47 @@ describe("runtime/jvm — argv per action", () => {
 		expect(await invocations()).toEqual(["javac -- --release 17 Entry.java", "java -- -cp . Entry"]);
 	});
 
+	test("run accepts program arguments and stdin without feeding them to the compiler", async () => {
+		await jvm({ action: "run", language: "java", code: JAVA_HELLO, args: ["one", "two"], stdin: "payload\n" });
+		expect(await invocations()).toEqual(["javac -- --release 17 Main.java", "java -- -cp . Main one two"]);
+		expect(await fs.readFile(log, "utf8")).toContain("STDIN:payload");
+	});
+
+	test("unified run reads a Java source path and reports the resolved engine", async () => {
+		const source = path.join(dir, "FromFile.java");
+		await fs.writeFile(
+			source,
+			'public class FromFile { public static void main(String[] args) { System.out.println("file"); } }',
+		);
+		const local = endpoint();
+		const selected = new SelectedRuntimeEndpoint({
+			adapter: "process",
+			processEndpoint: local,
+			embeddedEndpoint: local,
+			bunEndpoint: local,
+		});
+		const result = unwrapResponse<RuntimeRunResult & RuntimeJvmResult>(
+			await selected.request(
+				createRequest("runtime/run", {
+					path: source,
+					language: "java",
+					args: ["value"],
+					stdin: "input\n",
+				}),
+			),
+		);
+		expect(result).toMatchObject({
+			action: "run",
+			phase: "run",
+			className: "FromFile",
+			engine: "elide",
+			language: "java",
+		});
+		const calls = await invocations();
+		expect(calls[0]).toBe("javac -- --release 17 FromFile.java");
+		expect(calls[1]).toEndWith(" FromFile value");
+		await selected.close();
+	});
 	test("disassemble javaps the compiled class", async () => {
 		const r = await jvm({ action: "disassemble", language: "java", code: JAVA_HELLO });
 		expect(r.phase).toBe("disassemble");
@@ -526,7 +569,7 @@ describe("runtime/jvm — shared behaviour", () => {
 
 	test("missing language or code is invalid-params per action", async () => {
 		expect((await jvmError({ action: "run", code: JAVA_HELLO })).message).toBe(
-			"jvm_run requires `language` and `code`.",
+			"run requires `language` and code or path.",
 		);
 		expect((await jvmError({ action: "disassemble", language: "java" })).message).toBe(
 			"jvm_disassemble requires `language` and `code`.",

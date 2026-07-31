@@ -58,7 +58,6 @@ import { JvmDisassembleTool } from "./jvm-disassemble";
 import { JvmFormatTool } from "./jvm-format";
 import { JvmJarTool } from "./jvm-jar";
 import { JvmJavadocTool } from "./jvm-javadoc";
-import { JvmRunTool } from "./jvm-run";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
@@ -448,7 +447,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	profile: RuntimeProfileTool.createIf,
 	runtime_debug: RuntimeDebugTool.createIf,
 	serve: RuntimeServeTool.createIf,
-	jvm_run: JvmRunTool.createIf,
 	jvm_disassemble: JvmDisassembleTool.createIf,
 	jvm_format: JvmFormatTool.createIf,
 	jvm_jar: JvmJarTool.createIf,

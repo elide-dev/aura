@@ -219,10 +219,14 @@ function shellQuote(value: string): string {
 
 function workspaceTestCommand(pkg: string, parallel: number, options: { extraArgs?: string[] } = {}): TestCommand {
 	const { extraArgs = [] } = options;
+	// parallel=0 means plain serial `bun test` — no worker isolation at all.
+	// Bun 1.4 canaries segfault in `--parallel` worker mode (any width, even 1)
+	// on the packages/ai suite; the serial path is stable there.
+	const parallelArgs = parallel > 0 ? [`--parallel=${parallel}`] : [];
 	return {
 		label: pkg,
 		cwd: pkg,
-		command: ["bun", "test", `--parallel=${parallel}`, ...extraArgs],
+		command: ["bun", "test", ...parallelArgs, ...extraArgs],
 	};
 }
 
@@ -387,7 +391,12 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// shares one progress stream and one failure report.
 		case "local-ts":
 			return [
-				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
+				// packages/ai runs serial locally: bun 1.4 canaries segfault in
+				// `--parallel` worker mode on this suite at any width. CI's pinned
+				// bun 1.3 keeps the parallel path in the `workspace` bucket.
+				...fastWorkspacePackages.map(pkg =>
+					workspaceTestCommand(pkg, pkg === "packages/ai" ? 0 : 8, { extraArgs: onlyFailuresArgs }),
+				),
 				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				...(await commandsForMode("coding-agent-heavy")),
@@ -826,7 +835,14 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			let result = await runAttempt(testCommand);
 			// Bun-crash retry: a 128+signal exit means the runtime died (GC
 			// segfault/abort), not that tests failed — rerun in a fresh heap.
-			while (!result.timedOut && BUN_CRASH_EXITS[result.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+			// A crashed *worker* (bun test --parallel isolate mode) surfaces as
+			// parent exit 1 with a crash banner in the output; detect that too so
+			// nondeterministic runtime faults get the same fresh-process retry.
+			const isBunCrash = (r: { exitCode: number; output: string }): boolean =>
+				BUN_CRASH_EXITS[r.exitCode] ||
+				(r.exitCode !== 0 &&
+					/a test worker process crashed with|panic\(main thread\)|oh no: Bun has crashed/.test(r.output));
+			while (!result.timedOut && isBunCrash(result) && attempt < MAX_CHUNK_ATTEMPTS) {
 				attempt += 1;
 				process.stdout.write(
 					`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,

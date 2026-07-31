@@ -407,6 +407,10 @@ describe("hindsightBackend first-turn injection", () => {
 			"hindsight.mentalModelsEnabled": true,
 		});
 		const session = makeFakeSession({ sessionId: "s-ttl" });
+		// Keep the test hermetic: bank bootstrap fires a real createBank call,
+		// and auto-seed (default-on) POSTs createMentalModel for missing seeds.
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
+		vi.spyOn(HindsightApi.prototype, "createMentalModel").mockResolvedValue({} as never);
 		// Initial start may issue its own listMentalModels (read-only by default);
 		// stub it to return nothing so the initial snippet is undefined.
 		const listSpy = vi.spyOn(HindsightApi.prototype, "listMentalModels").mockResolvedValue({ items: [] } as never);

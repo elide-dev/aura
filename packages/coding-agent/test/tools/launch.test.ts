@@ -103,10 +103,15 @@ async function startPtyDaemonWithShell(shell: string, initialMarker: string, exp
 			client.close();
 		}
 	`;
+	// A scratch HOME keeps the PTY login shell from sourcing the real user's
+	// ~/.profile — rc files with non-POSIX syntax would kill the shell (and the
+	// daemon) before it prints the ready marker.
+	const homeDir = await tempDir("omp-daemon-shell-home-");
 	const child = Bun.spawn([process.execPath, "--eval", runner], {
 		cwd: path.resolve(import.meta.dir, "../.."),
 		env: {
 			...process.env,
+			HOME: homeDir,
 			SHELL: shell,
 			OMP_TEST_SHELL_MARKER: initialMarker,
 		},

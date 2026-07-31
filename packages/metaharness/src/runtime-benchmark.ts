@@ -11,31 +11,38 @@ import {
 	RuntimeService,
 } from "../../coding-agent/src/runtime";
 import { isRegularFile as isRuntimeRegularFile, runtimeBinaryNames } from "../../coding-agent/src/runtime/resolve";
-import { readBenchmarkSnapshot } from "./benchmarks";
-import { materializeRuntimeTasks, RUNTIME_TASKS } from "./runtime-benchmark-suite";
+import { type JobInfo, readJobResult, readTrials, SOURCE_SRC_MOUNT, type TrialStatus } from "./runner";
+import {
+	BENCHMARK_BUN_VERSION,
+	materializeRuntimeTasks,
+	RUNTIME_TASKS,
+	type RuntimeCapabilityGroup,
+	smokeTypeScriptTaskVerifier,
+} from "./runtime-benchmark-suite";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
-const RUNTIME_TOOL_NAMES = new Set([
-	"run",
-	"check",
-	"build",
-	"insights",
-	"profile",
-	"jvm_run",
-	"jvm_disassemble",
-	"jvm_format",
-	"jvm_jar",
-	"jvm_deps",
-	"jvm_javadoc",
-	"project_advice",
-]);
+const RUNTIME_TOOL_NAMES: Record<string, true> = {
+	run: true,
+	check: true,
+	build: true,
+	insights: true,
+	profile: true,
+	runtime_debug: true,
+	serve: true,
+	jvm_disassemble: true,
+	jvm_format: true,
+	jvm_jar: true,
+	jvm_deps: true,
+	jvm_javadoc: true,
+	project_advice: true,
+};
 
 export const BASELINE_TOOLS = ["read", "write", "edit", "bash", "grep", "glob"];
-export const RUNTIME_TOOLS = [...BASELINE_TOOLS, ...RUNTIME_TOOL_NAMES];
+export const ESSENTIAL_RUNTIME_TOOLS = [...BASELINE_TOOLS, "run", "check", "build"];
 
-export type BenchmarkArm = "baseline" | "runtime";
+export type BenchmarkArm = "baseline" | "runtime" | "historical";
 
 export interface ArmLaunchOptions {
 	model: string;
@@ -47,6 +54,9 @@ export interface ArmLaunchOptions {
 	gatewayUrl: string;
 	hostNetwork: boolean;
 	taskIds: string[];
+	historicalBinary?: string;
+	runtimeBinary?: string;
+	embeddedLib?: string;
 }
 
 export interface ArmLaunch {
@@ -56,20 +66,61 @@ export interface ArmLaunch {
 	args: string[];
 }
 
+export interface RuntimeTrialMeasurement {
+	taskId: string;
+	trialName: string;
+	status: TrialStatus;
+	detail: string;
+	durationMs: number;
+	tokIn: number;
+	tokOut: number;
+	tokCache: number;
+	costUsd: number;
+	toolCalls: number;
+	runtimeUsed: boolean;
+}
+
+export interface RuntimeTaskMeasurement {
+	taskId: string;
+	group: RuntimeCapabilityGroup;
+	trials: RuntimeTrialMeasurement[];
+}
+
 export interface ArmSummary {
 	arm: BenchmarkArm;
 	tasks: number;
 	trials: number;
+	completedTrials: number;
 	pass: number;
 	fail: number;
 	error: number;
 	costUsd: number;
 	tokIn: number;
 	tokOut: number;
+	tokCache: number;
 	durationMs: number;
+	elapsedMs: number;
 	medianDurationMs: number;
 	toolCalls: number;
 	runtimeTasks: number;
+	runtimeTrials: number;
+	taskMeasurements: RuntimeTaskMeasurement[];
+}
+
+export interface ConfidenceInterval {
+	point: number;
+	lower: number;
+	upper: number;
+}
+
+export interface RuntimeComparisonAnalysis {
+	passRateDifferencePp: ConfidenceInterval;
+	durationRatio: ConfidenceInterval;
+	tokenRatio: ConfidenceInterval;
+	adoptionOverall: number;
+	adoptionByGroup: Record<RuntimeCapabilityGroup, number>;
+	verdict: "pass" | "fail" | "inconclusive";
+	reasons: string[];
 }
 
 export interface MicroResult {
@@ -145,6 +196,25 @@ export interface RuntimeBenchmarkCliOptions {
 	microIterations: number;
 	mode: "all" | "agent" | "micro";
 	embeddedLib: string | undefined;
+	manifestRevision: string | undefined;
+	sourcePatchSha256: string | undefined;
+	historicalRevision: string | undefined;
+	historicalBinary: string | undefined;
+	resume: boolean;
+}
+
+function sourceMountedRuntimePath(hostPath: string): string {
+	const relative = path.relative(REPO_ROOT, path.resolve(hostPath));
+	if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+		throw new Error(`Runtime benchmark artifact must be inside the source-mounted repository: ${hostPath}`);
+	}
+	return path.posix.join(SOURCE_SRC_MOUNT, ...relative.split(path.sep));
+}
+
+export function runtimeToolsForTask(taskId: string): string[] {
+	const task = RUNTIME_TASKS.find(candidate => candidate.id === taskId);
+	if (!task) throw new Error(`unknown runtime task: ${taskId}`);
+	return [...ESSENTIAL_RUNTIME_TOOLS, ...task.runtimeTools];
 }
 
 export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
@@ -152,7 +222,7 @@ export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
 	for (const [index, taskId] of opts.taskIds.entries()) {
 		const armOrder: BenchmarkArm[] = index % 2 === 0 ? ["baseline", "runtime"] : ["runtime", "baseline"];
 		for (const arm of armOrder) {
-			const tools = arm === "baseline" ? BASELINE_TOOLS : RUNTIME_TOOLS;
+			const tools = arm === "runtime" ? runtimeToolsForTask(taskId) : BASELINE_TOOLS;
 			const jobName = `${opts.prefix}-${arm}-${taskId}`;
 			const args = [
 				`--path=${path.join(opts.taskRoot, taskId)}`,
@@ -168,6 +238,36 @@ export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
 				"--agent-arg=--tools",
 				`--agent-arg=${tools.join(",")}`,
 			];
+			if (opts.runtimeBinary || opts.embeddedLib) {
+				if (!opts.runtimeBinary || !opts.embeddedLib) {
+					throw new Error("Runtime benchmark agent launches require both process and embedded runtime artifacts.");
+				}
+				args.push(
+					`--env=AURA_RUNTIME_BIN=${sourceMountedRuntimePath(opts.runtimeBinary)}`,
+					`--env=AURA_RUNTIME_EMBEDDED_LIB=${sourceMountedRuntimePath(opts.embeddedLib)}`,
+					"--env=AURA_RUNTIME_ADAPTER=auto",
+				);
+			}
+			if (opts.hostNetwork) args.push("--host-network");
+			launches.push({ arm, taskId, jobName, args });
+		}
+		if (opts.historicalBinary) {
+			const arm: BenchmarkArm = "historical";
+			const jobName = `${opts.prefix}-${arm}-${taskId}`;
+			const args = [
+				`--path=${path.join(opts.taskRoot, taskId)}`,
+				`--binary=${opts.historicalBinary}`,
+				`--model=${opts.model}`,
+				`--thinking=${opts.thinking}`,
+				`--attempts=${opts.attempts}`,
+				"--tasks=1",
+				"--concurrency=1",
+				`--jobs-dir=${opts.jobsDir}`,
+				`--gateway-url=${opts.gatewayUrl}`,
+				`--job-name=${jobName}`,
+				"--agent-arg=--tools",
+				`--agent-arg=${BASELINE_TOOLS.join(",")}`,
+			];
 			if (opts.hostNetwork) args.push("--host-network");
 			launches.push({ arm, taskId, jobName, args });
 		}
@@ -175,62 +275,126 @@ export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
 	return launches;
 }
 
-export function countToolCalls(jobDir: string): { total: number; runtimeUsed: boolean } {
+export function armRunnerArgs(
+	launch: ArmLaunch,
+	jobsDir: string,
+	resume: boolean,
+	readResult: (jobDir: string) => JobInfo | null = readJobResult,
+): string[] | null {
+	if (!resume) return launch.args;
+	const jobDir = path.join(jobsDir, launch.jobName);
+	const result = readResult(jobDir);
+	if (result?.finishedAt !== null && result?.finishedAt !== undefined) return null;
+	if (result || fs.existsSync(path.join(jobDir, "config.json"))) return [`--resume=${jobDir}`];
+	return launch.args;
+}
+
+export function countTrialToolCalls(jobDir: string, trialName: string): { total: number; runtimeUsed: boolean } {
 	let total = 0;
 	let runtimeUsed = false;
-	for (const entry of fs.readdirSync(jobDir, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const transcriptPath = path.join(jobDir, entry.name, "agent", "omp.txt");
-		if (!fs.existsSync(transcriptPath)) continue;
-		for (const line of fs.readFileSync(transcriptPath, "utf8").split("\n")) {
-			if (!line.startsWith("{")) continue;
-			try {
-				const event = JSON.parse(line) as { type?: string; toolName?: string };
-				if (event.type !== "tool_execution_start" || !event.toolName) continue;
-				total++;
-				if (RUNTIME_TOOL_NAMES.has(event.toolName)) runtimeUsed = true;
-			} catch {
-				// A transcript may end with a partial JSON line after interruption.
-			}
+	const transcriptPath = path.join(jobDir, trialName, "agent", "omp.txt");
+	if (!fs.existsSync(transcriptPath)) return { total, runtimeUsed };
+	for (const line of fs.readFileSync(transcriptPath, "utf8").split("\n")) {
+		if (!line.startsWith("{")) continue;
+		try {
+			const event = JSON.parse(line) as { type?: string; toolName?: string };
+			if (event.type !== "tool_execution_start" || !event.toolName) continue;
+			total++;
+			if (RUNTIME_TOOL_NAMES[event.toolName]) runtimeUsed = true;
+		} catch {
+			// A transcript may end with a partial JSON line after interruption.
 		}
 	}
 	return { total, runtimeUsed };
 }
 
-export function summarizeArm(jobsDir: string, prefix: string, arm: BenchmarkArm, taskIds: string[]): ArmSummary {
+export function countToolCalls(jobDir: string): { total: number; runtimeUsed: boolean } {
+	let total = 0;
+	let runtimeUsed = false;
+	for (const trial of readTrials(jobDir)) {
+		const tools = countTrialToolCalls(jobDir, trial.name);
+		total += tools.total;
+		runtimeUsed ||= tools.runtimeUsed;
+	}
+	return { total, runtimeUsed };
+}
+
+export function summarizeArm(
+	jobsDir: string,
+	prefix: string,
+	arm: BenchmarkArm,
+	taskIds: string[],
+	elapsedMs?: number,
+): ArmSummary {
 	const durations: number[] = [];
+	const groups = Object.fromEntries(RUNTIME_TASKS.map(task => [task.id, task.group])) as Record<
+		string,
+		RuntimeCapabilityGroup
+	>;
 	const summary: ArmSummary = {
 		arm,
 		tasks: taskIds.length,
 		trials: 0,
+		completedTrials: 0,
 		pass: 0,
 		fail: 0,
 		error: 0,
 		costUsd: 0,
 		tokIn: 0,
 		tokOut: 0,
+		tokCache: 0,
 		durationMs: 0,
+		elapsedMs: elapsedMs ?? 0,
 		toolCalls: 0,
 		medianDurationMs: 0,
 		runtimeTasks: 0,
+		runtimeTrials: 0,
+		taskMeasurements: [],
 	};
 	for (const taskId of taskIds) {
+		const group = groups[taskId];
+		if (!group) throw new Error(`unknown runtime task: ${taskId}`);
 		const jobDir = path.join(jobsDir, `${prefix}-${arm}-${taskId}`);
-		const snapshot = readBenchmarkSnapshot("harbor", jobDir);
-		if (snapshot.done !== snapshot.total)
-			throw new Error(`${prefix}-${arm}-${taskId} has ${snapshot.done}/${snapshot.total} decided trials`);
-		summary.trials += snapshot.total;
-		summary.pass += snapshot.pass;
-		summary.fail += snapshot.fail;
-		summary.error += snapshot.error;
-		summary.costUsd += snapshot.costUsd;
-		summary.tokIn += snapshot.tokIn;
-		summary.tokOut += snapshot.tokOut;
-		durations.push(...snapshot.traces.map(trace => trace.durationMs));
-		summary.durationMs += snapshot.traces.reduce((sum, trace) => sum + trace.durationMs, 0);
-		const tools = countToolCalls(jobDir);
-		summary.toolCalls += tools.total;
-		if (tools.runtimeUsed) summary.runtimeTasks++;
+		if (elapsedMs === undefined) {
+			const job = readJobResult(jobDir);
+			if (job?.startedAt !== null && job?.startedAt !== undefined && job.finishedAt !== null) {
+				summary.elapsedMs += Math.max(0, job.finishedAt - job.startedAt);
+			}
+		}
+		const trials = readTrials(jobDir);
+		if (trials.some(trial => trial.status === "running"))
+			throw new Error(`${prefix}-${arm}-${taskId} has undecided trials`);
+		const measurements = trials.map(trial => {
+			const tools = countTrialToolCalls(jobDir, trial.name);
+			return {
+				taskId,
+				trialName: trial.name,
+				status: trial.status,
+				detail: trial.detail,
+				durationMs: trial.durationMs,
+				tokIn: trial.tokIn,
+				tokOut: trial.tokOut,
+				tokCache: trial.tokCache,
+				costUsd: trial.costUsd,
+				toolCalls: tools.total,
+				runtimeUsed: tools.runtimeUsed,
+			} satisfies RuntimeTrialMeasurement;
+		});
+		summary.taskMeasurements.push({ taskId, group, trials: measurements });
+		summary.trials += measurements.length;
+		summary.completedTrials += measurements.length;
+		summary.pass += measurements.filter(trial => trial.status === "pass").length;
+		summary.fail += measurements.filter(trial => trial.status === "fail").length;
+		summary.error += measurements.filter(trial => trial.status === "error").length;
+		summary.costUsd += measurements.reduce((sum, trial) => sum + trial.costUsd, 0);
+		summary.tokIn += measurements.reduce((sum, trial) => sum + trial.tokIn, 0);
+		summary.tokOut += measurements.reduce((sum, trial) => sum + trial.tokOut, 0);
+		summary.tokCache += measurements.reduce((sum, trial) => sum + trial.tokCache, 0);
+		summary.durationMs += measurements.reduce((sum, trial) => sum + trial.durationMs, 0);
+		summary.toolCalls += measurements.reduce((sum, trial) => sum + trial.toolCalls, 0);
+		summary.runtimeTrials += measurements.filter(trial => trial.runtimeUsed).length;
+		if (measurements.some(trial => trial.runtimeUsed)) summary.runtimeTasks++;
+		durations.push(...measurements.map(trial => trial.durationMs));
 	}
 	summary.medianDurationMs = durations.length === 0 ? 0 : median(durations);
 	return summary;
@@ -244,15 +408,284 @@ function signed(value: number, suffix: string): string {
 	return `${value >= 0 ? "+" : ""}${value.toFixed(1)}${suffix}`;
 }
 
+interface TaskComparison {
+	taskId: string;
+	group: RuntimeCapabilityGroup;
+	baselinePassRate: number;
+	runtimePassRate: number;
+	durationRatio: number;
+	tokenRatio: number;
+	baselineTrials: readonly RuntimeTrialMeasurement[];
+	runtimeTrials: readonly RuntimeTrialMeasurement[];
+}
+
+const BOOTSTRAP_SAMPLES = 10_000;
+const BOOTSTRAP_SEED = 0xa17a2026;
+const EFFECTIVENESS_MARGIN_PP = -5;
+const DURATION_WIN_RATIO = 0.85;
+const TOKEN_WIN_RATIO = 0.9;
+const MAX_OTHER_REGRESSION_RATIO = 1.05;
+const MIN_OVERALL_ADOPTION = 0.8;
+const MIN_GROUP_ADOPTION = 0.5;
+
+function mean(values: readonly number[]): number {
+	return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function geometricMean(values: readonly number[]): number {
+	return Math.exp(mean(values.map(Math.log)));
+}
+
+function seededRandom(seed: number): () => number {
+	let state = seed;
+	return () => {
+		state |= 0;
+		state = (state + 0x6d2b79f5) | 0;
+		let value = Math.imul(state ^ (state >>> 15), 1 | state);
+		value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+		return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+	};
+}
+
+function distributionQuantile(values: readonly number[], quantile: number): number {
+	if (values.length === 0) return Number.NaN;
+	if (values.some(value => !Number.isFinite(value))) return Number.NaN;
+	const sorted = values.toSorted((a, b) => a - b);
+	const rank = (sorted.length - 1) * quantile;
+	const lower = Math.floor(rank);
+	const upper = Math.ceil(rank);
+	if (lower === upper) return sorted[lower];
+	return sorted[lower] + (sorted[upper] - sorted[lower]) * (rank - lower);
+}
+
+function interval(point: number, samples: number[]): ConfidenceInterval {
+	return {
+		point,
+		lower: distributionQuantile(samples, 0.025),
+		upper: distributionQuantile(samples, 0.975),
+	};
+}
+
+function taskComparisons(baseline: ArmSummary, runtime: ArmSummary): TaskComparison[] {
+	const baselineByTask = Object.fromEntries(baseline.taskMeasurements.map(task => [task.taskId, task])) as Record<
+		string,
+		RuntimeTaskMeasurement
+	>;
+	const comparisons: TaskComparison[] = [];
+	for (const runtimeTask of runtime.taskMeasurements) {
+		const baselineTask = baselineByTask[runtimeTask.taskId];
+		if (
+			!baselineTask ||
+			baselineTask.trials.length === 0 ||
+			baselineTask.trials.length !== runtimeTask.trials.length
+		) {
+			continue;
+		}
+		const baselineDuration = mean(baselineTask.trials.map(trial => trial.durationMs));
+		const runtimeDuration = mean(runtimeTask.trials.map(trial => trial.durationMs));
+		const baselineTokens = baselineTask.trials.reduce((sum, trial) => sum + trial.tokIn + trial.tokOut, 0);
+		const runtimeTokens = runtimeTask.trials.reduce((sum, trial) => sum + trial.tokIn + trial.tokOut, 0);
+		comparisons.push({
+			taskId: runtimeTask.taskId,
+			group: runtimeTask.group,
+			baselinePassRate:
+				baselineTask.trials.filter(trial => trial.status === "pass").length / baselineTask.trials.length,
+			runtimePassRate:
+				runtimeTask.trials.filter(trial => trial.status === "pass").length / runtimeTask.trials.length,
+			durationRatio: baselineDuration > 0 ? runtimeDuration / baselineDuration : Number.NaN,
+			tokenRatio: baselineTokens > 0 && runtimeTokens > 0 ? runtimeTokens / baselineTokens : Number.NaN,
+			baselineTrials: baselineTask.trials,
+			runtimeTrials: runtimeTask.trials,
+		});
+	}
+	return comparisons;
+}
+
+function bootstrapComparisons(comparisons: readonly TaskComparison[]): {
+	pass: ConfidenceInterval;
+	duration: ConfidenceInterval;
+	tokens: ConfidenceInterval;
+} {
+	if (comparisons.length === 0) {
+		const invalid = { point: Number.NaN, lower: Number.NaN, upper: Number.NaN };
+		return { pass: invalid, duration: invalid, tokens: invalid };
+	}
+	const durationRatios = comparisons.map(comparison => comparison.durationRatio);
+	const tokenRatios = comparisons.map(comparison => comparison.tokenRatio);
+	if (
+		durationRatios.some(ratio => !Number.isFinite(ratio) || ratio <= 0) ||
+		tokenRatios.some(ratio => !Number.isFinite(ratio) || ratio <= 0)
+	) {
+		const invalid = { point: Number.NaN, lower: Number.NaN, upper: Number.NaN };
+		return { pass: invalid, duration: invalid, tokens: invalid };
+	}
+	const passPoint = mean(
+		comparisons.map(comparison => (comparison.runtimePassRate - comparison.baselinePassRate) * 100),
+	);
+	const durationPoint = geometricMean(durationRatios);
+	const tokenPoint = geometricMean(tokenRatios);
+	const passSamples: number[] = [];
+	const durationSamples: number[] = [];
+	const tokenSamples: number[] = [];
+	const random = seededRandom(BOOTSTRAP_SEED);
+	for (let iteration = 0; iteration < BOOTSTRAP_SAMPLES; iteration++) {
+		const passDifferences: number[] = [];
+		const sampledDurationRatios: number[] = [];
+		const sampledTokenRatios: number[] = [];
+		for (const comparison of comparisons) {
+			let baselinePasses = 0;
+			let runtimePasses = 0;
+			let baselineDuration = 0;
+			let runtimeDuration = 0;
+			let baselineTokens = 0;
+			let runtimeTokens = 0;
+			const trialCount = comparison.baselineTrials.length;
+			for (let index = 0; index < trialCount; index++) {
+				const baselineTrial = comparison.baselineTrials[Math.floor(random() * trialCount)];
+				const runtimeTrial = comparison.runtimeTrials[Math.floor(random() * trialCount)];
+				if (baselineTrial.status === "pass") baselinePasses++;
+				if (runtimeTrial.status === "pass") runtimePasses++;
+				baselineDuration += baselineTrial.durationMs;
+				runtimeDuration += runtimeTrial.durationMs;
+				baselineTokens += baselineTrial.tokIn + baselineTrial.tokOut;
+				runtimeTokens += runtimeTrial.tokIn + runtimeTrial.tokOut;
+			}
+			passDifferences.push(((runtimePasses - baselinePasses) / trialCount) * 100);
+			sampledDurationRatios.push(runtimeDuration / baselineDuration);
+			sampledTokenRatios.push(runtimeTokens / baselineTokens);
+		}
+		passSamples.push(mean(passDifferences));
+		durationSamples.push(geometricMean(sampledDurationRatios));
+		tokenSamples.push(geometricMean(sampledTokenRatios));
+	}
+	return {
+		pass: interval(passPoint, passSamples),
+		duration: interval(durationPoint, durationSamples),
+		tokens: interval(tokenPoint, tokenSamples),
+	};
+}
+
+function runtimeAdoption(runtime: ArmSummary): {
+	overall: number;
+	byGroup: Record<RuntimeCapabilityGroup, number>;
+} {
+	const counts: Record<RuntimeCapabilityGroup, { completed: number; used: number }> = {
+		execution: { completed: 0, used: 0 },
+		project: { completed: 0, used: 0 },
+		debugging: { completed: 0, used: 0 },
+		profiling: { completed: 0, used: 0 },
+		jvm: { completed: 0, used: 0 },
+	};
+	for (const task of runtime.taskMeasurements) {
+		counts[task.group].completed += task.trials.length;
+		counts[task.group].used += task.trials.filter(trial => trial.runtimeUsed).length;
+	}
+	const byGroup = Object.fromEntries(
+		Object.entries(counts).map(([group, count]) => [group, count.completed === 0 ? 0 : count.used / count.completed]),
+	) as Record<RuntimeCapabilityGroup, number>;
+	return {
+		overall: runtime.completedTrials === 0 ? 0 : runtime.runtimeTrials / runtime.completedTrials,
+		byGroup,
+	};
+}
+
+function newSystematicErrors(baseline: ArmSummary, runtime: ArmSummary): string[] {
+	const baselineErrors = new Set(
+		baseline.taskMeasurements.flatMap(task =>
+			task.trials.filter(trial => trial.status === "error").map(trial => trial.detail),
+		),
+	);
+	const runtimeCounts: Record<string, number> = {};
+	for (const detail of runtime.taskMeasurements.flatMap(task =>
+		task.trials.filter(trial => trial.status === "error").map(trial => trial.detail),
+	)) {
+		runtimeCounts[detail] = (runtimeCounts[detail] ?? 0) + 1;
+	}
+	return Object.entries(runtimeCounts)
+		.filter(([detail, count]) => detail !== "" && count >= 2 && !baselineErrors.has(detail))
+		.map(([detail]) => detail)
+		.toSorted();
+}
+
+export function analyzeRuntimeComparison(baseline: ArmSummary, runtime: ArmSummary): RuntimeComparisonAnalysis {
+	const comparisons = taskComparisons(baseline, runtime);
+	const bootstrapped = bootstrapComparisons(comparisons);
+	const adoption = runtimeAdoption(runtime);
+	const systematicErrors = newSystematicErrors(baseline, runtime);
+	const reasons: string[] = [];
+	let establishedFailure = false;
+	let unresolved = false;
+	if (comparisons.length !== baseline.tasks || comparisons.length !== runtime.tasks) {
+		reasons.push(`paired task coverage is ${comparisons.length}/${Math.max(baseline.tasks, runtime.tasks)}`);
+		unresolved = true;
+	}
+	if (!Number.isFinite(bootstrapped.pass.lower)) {
+		reasons.push("paired effectiveness or efficiency measurements are missing");
+		unresolved = true;
+	} else if (bootstrapped.pass.upper <= EFFECTIVENESS_MARGIN_PP) {
+		reasons.push(`effectiveness is inferior at the ${EFFECTIVENESS_MARGIN_PP} pp margin`);
+		establishedFailure = true;
+	} else if (bootstrapped.pass.lower <= EFFECTIVENESS_MARGIN_PP) {
+		reasons.push(`effectiveness interval crosses the ${EFFECTIVENESS_MARGIN_PP} pp margin`);
+		unresolved = true;
+	}
+	const durationWin = bootstrapped.duration.upper <= DURATION_WIN_RATIO;
+	const tokenWin = bootstrapped.tokens.upper <= TOKEN_WIN_RATIO;
+	const durationSafe = bootstrapped.duration.upper <= MAX_OTHER_REGRESSION_RATIO;
+	const tokenSafe = bootstrapped.tokens.upper <= MAX_OTHER_REGRESSION_RATIO;
+	if (!(durationWin && tokenSafe) && !(tokenWin && durationSafe)) {
+		reasons.push("no material efficiency win with the other metric inside the 5% regression bound");
+		if (
+			(durationWin && bootstrapped.tokens.lower > MAX_OTHER_REGRESSION_RATIO) ||
+			(tokenWin && bootstrapped.duration.lower > MAX_OTHER_REGRESSION_RATIO) ||
+			(bootstrapped.duration.lower > MAX_OTHER_REGRESSION_RATIO &&
+				bootstrapped.tokens.lower > MAX_OTHER_REGRESSION_RATIO)
+		)
+			establishedFailure = true;
+		else unresolved = true;
+	}
+	if (systematicErrors.length > 0) {
+		reasons.push(`new systematic runtime errors: ${systematicErrors.join(", ")}`);
+		establishedFailure = true;
+	}
+	if (adoption.overall < MIN_OVERALL_ADOPTION) {
+		reasons.push(`runtime adoption ${(adoption.overall * 100).toFixed(1)}% is below 80%`);
+		unresolved = true;
+	}
+	const lowGroups = Object.entries(adoption.byGroup)
+		.filter(([, rate]) => rate < MIN_GROUP_ADOPTION)
+		.map(([group]) => group);
+	if (lowGroups.length > 0) {
+		reasons.push(`runtime adoption is below 50% for: ${lowGroups.join(", ")}`);
+		unresolved = true;
+	}
+	return {
+		passRateDifferencePp: bootstrapped.pass,
+		durationRatio: bootstrapped.duration,
+		tokenRatio: bootstrapped.tokens,
+		adoptionOverall: adoption.overall,
+		adoptionByGroup: adoption.byGroup,
+		verdict: establishedFailure ? "fail" : unresolved ? "inconclusive" : "pass",
+		reasons,
+	};
+}
+
+function formatConfidenceInterval(value: ConfidenceInterval, suffix = ""): string {
+	if (![value.point, value.lower, value.upper].every(Number.isFinite)) return "unavailable";
+	return `${value.point.toFixed(3)}${suffix} [95% CI ${value.lower.toFixed(3)}, ${value.upper.toFixed(3)}]`;
+}
+
 export function formatComparison(
 	prefix: string,
 	baseline: ArmSummary,
 	runtime: ArmSummary,
 	micro: MicroResult[],
 	adapter: AdapterMicrobenchmarkOutcome = { kind: "skipped", message: ADAPTER_MICROBENCHMARK_SKIPPED },
+	historical?: ArmSummary,
 ): string {
 	const basePass = percentage(baseline.pass, baseline.trials);
 	const runtimePass = percentage(runtime.pass, runtime.trials);
+	const analysis = analyzeRuntimeComparison(baseline, runtime);
 	const rows = [
 		["Pass rate", `${basePass.toFixed(1)}%`, `${runtimePass.toFixed(1)}%`, signed(runtimePass - basePass, " pp")],
 		["Errors", String(baseline.error), String(runtime.error), signed(runtime.error - baseline.error, "")],
@@ -268,8 +701,20 @@ export function formatComparison(
 			`${(runtime.medianDurationMs / 1000).toFixed(1)}s`,
 			signed((runtime.medianDurationMs - baseline.medianDurationMs) / 1000, "s"),
 		],
+		[
+			"End-to-end arm time",
+			`${(baseline.elapsedMs / 1000).toFixed(1)}s`,
+			`${(runtime.elapsedMs / 1000).toFixed(1)}s`,
+			signed((runtime.elapsedMs - baseline.elapsedMs) / 1000, "s"),
+		],
 		["Input tokens", String(baseline.tokIn), String(runtime.tokIn), signed(runtime.tokIn - baseline.tokIn, "")],
 		["Output tokens", String(baseline.tokOut), String(runtime.tokOut), signed(runtime.tokOut - baseline.tokOut, "")],
+		[
+			"Cache tokens",
+			String(baseline.tokCache),
+			String(runtime.tokCache),
+			signed(runtime.tokCache - baseline.tokCache, ""),
+		],
 		[
 			"Tool calls",
 			String(baseline.toolCalls),
@@ -282,6 +727,12 @@ export function formatComparison(
 			`${runtime.runtimeTasks}/${runtime.tasks}`,
 			"—",
 		],
+		[
+			"Runtime-used trials",
+			`${baseline.runtimeTrials}/${baseline.completedTrials}`,
+			`${runtime.runtimeTrials}/${runtime.completedTrials}`,
+			"—",
+		],
 	];
 	const lines = [
 		`# Runtime capability benchmark — ${prefix}`,
@@ -289,7 +740,68 @@ export function formatComparison(
 		"| Metric | Bash baseline | Runtime | Delta |",
 		"|---|---:|---:|---:|",
 		...rows.map(row => `| ${row.join(" | ")} |`),
+		"",
+		"## Pre-registered decision",
+		"",
+		`**${analysis.verdict.toUpperCase()}**`,
+		"",
+		"| Paired effect | Estimate |",
+		"|---|---:|",
+		`| Pass-rate difference | ${formatConfidenceInterval(analysis.passRateDifferencePp, " pp")} |`,
+		`| Runtime/Bash duration | ${formatConfidenceInterval(analysis.durationRatio, "×")} |`,
+		`| Runtime/Bash tokens | ${formatConfidenceInterval(analysis.tokenRatio, "×")} |`,
+		"",
+		`Runtime adoption: ${(analysis.adoptionOverall * 100).toFixed(1)}% overall.`,
+		"",
+		...Object.entries(analysis.adoptionByGroup).map(([group, rate]) => `- ${group}: ${(rate * 100).toFixed(1)}%`),
+		"",
+		...(analysis.reasons.length === 0
+			? ["All pre-registered gates hold."]
+			: analysis.reasons.map(reason => `- ${reason}`)),
 	];
+	if (baseline.taskMeasurements.length > 0 && runtime.taskMeasurements.length > 0) {
+		const baselineByTask = Object.fromEntries(baseline.taskMeasurements.map(task => [task.taskId, task])) as Record<
+			string,
+			RuntimeTaskMeasurement
+		>;
+		lines.push(
+			"",
+			"## Task matrix",
+			"",
+			"| Task | Group | Bash pass | Runtime pass | Duration ratio | Token ratio | Runtime adoption |",
+			"|---|---|---:|---:|---:|---:|---:|",
+		);
+		for (const runtimeTask of runtime.taskMeasurements) {
+			const baselineTask = baselineByTask[runtimeTask.taskId];
+			if (!baselineTask) continue;
+			const baselineDuration = mean(baselineTask.trials.map(trial => trial.durationMs));
+			const runtimeDuration = mean(runtimeTask.trials.map(trial => trial.durationMs));
+			const baselineTokens = baselineTask.trials.reduce((sum, trial) => sum + trial.tokIn + trial.tokOut, 0);
+			const runtimeTokens = runtimeTask.trials.reduce((sum, trial) => sum + trial.tokIn + trial.tokOut, 0);
+			lines.push(
+				`| ${runtimeTask.taskId} | ${runtimeTask.group} | ${percentage(baselineTask.trials.filter(trial => trial.status === "pass").length, baselineTask.trials.length).toFixed(1)}% | ${percentage(runtimeTask.trials.filter(trial => trial.status === "pass").length, runtimeTask.trials.length).toFixed(1)}% | ${(runtimeDuration / baselineDuration).toFixed(3)}× | ${(runtimeTokens / baselineTokens).toFixed(3)}× | ${percentage(runtimeTask.trials.filter(trial => trial.runtimeUsed).length, runtimeTask.trials.length).toFixed(1)}% |`,
+			);
+		}
+	}
+	if (historical) {
+		lines.push(
+			"",
+			"## Historical whole-product control",
+			"",
+			"The historical arm changes code revision and is not part of the causal runtime-tools decision.",
+			"",
+			"| Metric | Historical Bash control |",
+			"|---|---:|",
+			`| Pass rate | ${percentage(historical.pass, historical.trials).toFixed(1)}% |`,
+			`| Errors | ${historical.error} |`,
+			`| Median trial time | ${(historical.medianDurationMs / 1000).toFixed(1)}s |`,
+			`| End-to-end arm time | ${(historical.elapsedMs / 1000).toFixed(1)}s |`,
+			`| Input tokens | ${historical.tokIn} |`,
+			`| Output tokens | ${historical.tokOut} |`,
+			`| Cache tokens | ${historical.tokCache} |`,
+			`| Cost | $${historical.costUsd.toFixed(3)} |`,
+		);
+	}
 	if (micro.length > 0) {
 		lines.push(
 			"",
@@ -808,6 +1320,80 @@ export async function packagedRuntimeBinaryForLibrary(
 	throw new Error(`No packaged runtime binary found in ${binaryDir} for embedded library ${libraryPath}.`);
 }
 
+export async function writeRuntimeBenchmarkManifest(
+	opts: RuntimeBenchmarkCliOptions,
+	startedAt: string,
+): Promise<string> {
+	const taskHashes: Record<string, string> = {};
+	for (const task of RUNTIME_TASKS.filter(task => opts.taskIds.includes(task.id))) {
+		taskHashes[task.id] = new Bun.CryptoHasher("sha256").update(JSON.stringify(task)).digest("hex");
+	}
+	const runtimeEnvironment: Record<string, string> = {};
+	for (const key of [
+		"AURA_RUNTIME_BIN",
+		"AURA_RUNTIME_EMBEDDED_LIB",
+		"AURA_RUNTIME_ADAPTER",
+		"AURA_RUNTIME_VERSION",
+	]) {
+		const value = process.env[key];
+		if (value) runtimeEnvironment[key] = value;
+	}
+	let historicalBinarySha256: string | undefined;
+	if (opts.historicalBinary) {
+		const bytes = await Bun.file(opts.historicalBinary).bytes();
+		historicalBinarySha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+	}
+	const verifierBunSha256 = new Bun.CryptoHasher("sha256")
+		.update(await Bun.file(process.execPath).bytes())
+		.digest("hex");
+	const cpus = os.cpus();
+	const manifestPath = path.join(opts.jobsDir, "_bench", `${opts.prefix}-runtime-manifest.json`);
+	await Bun.write(
+		manifestPath,
+		`${JSON.stringify(
+			{
+				schemaVersion: 3,
+				prefix: opts.prefix,
+				startedAt,
+				revision: opts.manifestRevision,
+				sourcePatchSha256: opts.sourcePatchSha256,
+				historicalRevision: opts.historicalRevision,
+				historicalBinary: opts.historicalBinary,
+				historicalBinarySha256,
+				model: opts.model,
+				thinking: opts.thinking,
+				attempts: opts.attempts,
+				taskIds: opts.taskIds,
+				taskHashes,
+				tools: {
+					baseline: BASELINE_TOOLS,
+					runtimeByTask: Object.fromEntries(opts.taskIds.map(taskId => [taskId, runtimeToolsForTask(taskId)])),
+					historical: BASELINE_TOOLS,
+				},
+				jobsDir: opts.jobsDir,
+				gatewayUrl: opts.gatewayUrl,
+				hostNetwork: opts.hostNetwork,
+				microIterations: opts.microIterations,
+				mode: opts.mode,
+				embeddedLib: opts.embeddedLib,
+				runtimeEnvironment,
+				bunVersion: Bun.version,
+				verifierBun: {
+					version: BENCHMARK_BUN_VERSION,
+					sha256: verifierBunSha256,
+				},
+				platform: process.platform,
+				architecture: process.arch,
+				cpuModel: cpus[0]?.model ?? "unknown",
+				logicalCpuCount: cpus.length,
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	return manifestPath;
+}
+
 export function parseRuntimeBenchmarkCli(
 	argv: string[],
 	env: NodeJS.ProcessEnv = process.env,
@@ -825,6 +1411,11 @@ export function parseRuntimeBenchmarkCli(
 		microIterations: 5,
 		mode: "all",
 		embeddedLib: envEmbeddedLib || undefined,
+		manifestRevision: undefined,
+		sourcePatchSha256: undefined,
+		historicalRevision: undefined,
+		historicalBinary: undefined,
+		resume: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const [flag, inline] = argv[i].split("=", 2);
@@ -854,12 +1445,27 @@ export function parseRuntimeBenchmarkCli(
 			case "--micro-iterations":
 				opts.microIterations = Number(take());
 				break;
+			case "--revision":
+				opts.manifestRevision = take().trim() || undefined;
+				break;
+			case "--source-patch-sha256":
+				opts.sourcePatchSha256 = take().trim() || undefined;
+				break;
+			case "--historical-revision":
+				opts.historicalRevision = take().trim() || undefined;
+				break;
+			case "--historical-binary":
+				opts.historicalBinary = path.resolve(take());
+				break;
 			case "--embedded-lib": {
 				const embeddedLib = take().trim();
 				if (embeddedLib === "") throw new Error("--embedded-lib must be a non-empty path");
 				opts.embeddedLib = embeddedLib;
 				break;
 			}
+			case "--resume":
+				opts.resume = true;
+				break;
 			case "--agent-only":
 				opts.mode = "agent";
 				break;
@@ -879,26 +1485,52 @@ export function parseRuntimeBenchmarkCli(
 		throw new Error("--attempts must be a positive integer");
 	if (!Number.isSafeInteger(opts.microIterations) || opts.microIterations < 1)
 		throw new Error("--micro-iterations must be a positive integer");
+	if (opts.historicalBinary && !opts.historicalRevision)
+		throw new Error("--historical-binary requires --historical-revision");
+	if (opts.historicalBinary && !/(?:x64|x86[_-]?64|amd64)/i.test(path.basename(opts.historicalBinary)))
+		throw new Error("--historical-binary filename must identify the x64 architecture");
 	return opts;
 }
 
 async function main(): Promise<void> {
 	const opts = parseRuntimeBenchmarkCli(process.argv.slice(2));
+	const startedAt = new Date().toISOString();
 	const taskRoot = path.join(opts.jobsDir, "_bench", opts.prefix, "tasks");
 	let micro: MicroResult[] = [];
+	const elapsedByArm: Record<BenchmarkArm, number> = { baseline: 0, runtime: 0, historical: 0 };
 	if (opts.mode !== "micro") {
 		await materializeRuntimeTasks(taskRoot);
-		const launches = buildArmLaunches({ ...opts, taskRoot });
+		const manifestPath = path.join(opts.jobsDir, "_bench", `${opts.prefix}-runtime-manifest.json`);
+		process.stdout.write("Verifying generated TypeScript task image...\n");
+		await smokeTypeScriptTaskVerifier(taskRoot);
+		process.stdout.write("TypeScript task verifier smoke: passed\n");
+		if (!opts.resume || !fs.existsSync(manifestPath)) await writeRuntimeBenchmarkManifest(opts, startedAt);
+		process.stdout.write(`Runtime benchmark manifest: ${manifestPath}\n`);
+		const runtimeBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
+		const launches = buildArmLaunches({ ...opts, taskRoot, runtimeBinary });
 		for (const [index, launch] of launches.entries()) {
-			process.stdout.write(`[${index + 1}/${launches.length}] ${launch.arm} · ${launch.taskId}\n`);
-			const proc = Bun.spawn(["bun", "src/runner.ts", ...launch.args], {
+			const runnerArgs = armRunnerArgs(launch, opts.jobsDir, opts.resume);
+			if (runnerArgs === null) {
+				process.stdout.write(`[${index + 1}/${launches.length}] ${launch.arm} · ${launch.taskId} (complete)\n`);
+				continue;
+			}
+			process.stdout.write(
+				`[${index + 1}/${launches.length}] ${launch.arm} · ${launch.taskId}${runnerArgs === launch.args ? "" : " (resume)"}\n`,
+			);
+			const launchStartedAt = performance.now();
+			const proc = Bun.spawn(["bun", "src/runner.ts", ...runnerArgs], {
 				cwd: PKG_DIR,
 				stdout: "inherit",
 				stderr: "inherit",
 			});
 			const exitCode = await proc.exited;
 			if (exitCode !== 0) throw new Error(`${launch.jobName} exited ${exitCode}`);
+			elapsedByArm[launch.arm] += performance.now() - launchStartedAt;
 		}
+	}
+	if (opts.mode === "micro") {
+		const manifestPath = await writeRuntimeBenchmarkManifest(opts, startedAt);
+		process.stdout.write(`Runtime benchmark manifest: ${manifestPath}\n`);
 	}
 	if (opts.mode !== "agent") micro = await runMicrobenchmarks(opts.microIterations);
 	let adapter: AdapterMicrobenchmarkOutcome = { kind: "skipped", message: ADAPTER_MICROBENCHMARK_SKIPPED };
@@ -911,7 +1543,6 @@ async function main(): Promise<void> {
 				iterations: opts.microIterations,
 				processBinaryPath: await packagedRuntimeBinaryForLibrary(opts.embeddedLib),
 				embeddedLibraryPath: opts.embeddedLib,
-				env: process.env,
 			}),
 		};
 	}
@@ -919,23 +1550,54 @@ async function main(): Promise<void> {
 		arm,
 		tasks: 0,
 		trials: 0,
+		completedTrials: 0,
 		pass: 0,
 		fail: 0,
 		error: 0,
 		costUsd: 0,
 		tokIn: 0,
 		tokOut: 0,
+		tokCache: 0,
 		durationMs: 0,
+		elapsedMs: 0,
 		toolCalls: 0,
 		medianDurationMs: 0,
 		runtimeTasks: 0,
+		runtimeTrials: 0,
+		taskMeasurements: [],
 	});
 	const baseline =
-		opts.mode === "micro" ? empty("baseline") : summarizeArm(opts.jobsDir, opts.prefix, "baseline", opts.taskIds);
+		opts.mode === "micro"
+			? empty("baseline")
+			: summarizeArm(
+					opts.jobsDir,
+					opts.prefix,
+					"baseline",
+					opts.taskIds,
+					opts.resume ? undefined : elapsedByArm.baseline,
+				);
 	const runtime =
-		opts.mode === "micro" ? empty("runtime") : summarizeArm(opts.jobsDir, opts.prefix, "runtime", opts.taskIds);
+		opts.mode === "micro"
+			? empty("runtime")
+			: summarizeArm(
+					opts.jobsDir,
+					opts.prefix,
+					"runtime",
+					opts.taskIds,
+					opts.resume ? undefined : elapsedByArm.runtime,
+				);
+	const historical =
+		opts.mode === "micro" || !opts.historicalBinary
+			? undefined
+			: summarizeArm(
+					opts.jobsDir,
+					opts.prefix,
+					"historical",
+					opts.taskIds,
+					opts.resume ? undefined : elapsedByArm.historical,
+				);
 	const reportPath = path.join(opts.jobsDir, "_bench", `${opts.prefix}-runtime-comparison.md`);
-	await Bun.write(reportPath, formatComparison(opts.prefix, baseline, runtime, micro, adapter));
+	await Bun.write(reportPath, formatComparison(opts.prefix, baseline, runtime, micro, adapter, historical));
 	process.stdout.write(`Runtime benchmark report: ${reportPath}\n`);
 }
 

@@ -1,5 +1,6 @@
 import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import {
@@ -32,6 +33,7 @@ import {
 	type RuntimeStatusResult,
 	toRuntimeRpcError,
 } from "../protocol";
+import { pythonFileBootstrap } from "../python";
 import { isRegularFile, type ResolvedRuntime, resolveRuntimeBinary } from "../resolve";
 import type { RuntimeEndpoint } from "../service";
 
@@ -79,6 +81,7 @@ export interface EmbeddedEndpointOptions {
 interface PreparedRun {
 	invocation: EmbeddedRunInvocation;
 	timeoutMs: number | undefined;
+	pythonSourcePath?: string;
 }
 
 interface QueuedRun {
@@ -202,7 +205,12 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				action: "run",
 				phase: "run",
 				language,
-				className: deriveJvmMainClass(language, raw.code as string),
+				className:
+					typeof raw.code === "string"
+						? deriveJvmMainClass(language, raw.code)
+						: language === "kotlin"
+							? "MainKt"
+							: path.basename(raw.path as string, path.extname(raw.path as string)),
 			};
 			return okResponse(snapshottedRequest.id, decorated);
 		} catch (error) {
@@ -477,6 +485,8 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				environment,
 				stdin,
 			},
+			pythonSourcePath:
+				language === "python" && typeof sourcePath === "string" ? path.resolve(cwd, sourcePath) : undefined,
 			timeoutMs,
 		};
 	}
@@ -556,6 +566,21 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 	}
 
 	async #execute(prepared: PreparedRun, signal: AbortSignal | undefined): Promise<RuntimeExecResult> {
+		if (!prepared.pythonSourcePath) return this.#executePrepared(prepared, signal);
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aura-python-file-"));
+		try {
+			const wrapperPath = path.join(directory, "main.py");
+			await fs.writeFile(wrapperPath, pythonFileBootstrap(prepared.pythonSourcePath));
+			return await this.#executePrepared(
+				{ ...prepared, invocation: { ...prepared.invocation, source: { type: "file", path: wrapperPath } } },
+				signal,
+			);
+		} finally {
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	}
+
+	async #executePrepared(prepared: PreparedRun, signal: AbortSignal | undefined): Promise<RuntimeExecResult> {
 		if (this.#poisoned) throw this.#poisoned;
 		const selection = await this.#resolveSelection();
 		if (selection.kind !== "ready") throw selection.error;

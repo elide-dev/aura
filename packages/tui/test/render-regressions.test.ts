@@ -1,4 +1,9 @@
 process.env.PI_TUI_SCROLLBACK_REBUILD = "true";
+// These regressions assert the generic (non-ConPTY) paint path. On a real WSL
+// host the inherited WSL_* vars flip `isConPTYHosted()` and change viewport /
+// scrollback-rebuild behavior, so scrub them for a hermetic run.
+delete process.env.WSL_DISTRO_NAME;
+delete process.env.WSL_INTEROP;
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {

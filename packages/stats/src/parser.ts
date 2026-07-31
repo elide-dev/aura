@@ -459,7 +459,14 @@ export async function listSessionFolders(): Promise<string[]> {
 export async function listSessionFiles(folderPath: string): Promise<string[]> {
 	try {
 		const entries = await fs.readdir(folderPath, { recursive: true, withFileTypes: true });
-		return entries.filter(e => e.isFile() && e.name.endsWith(".jsonl")).map(e => path.join(e.parentPath, e.name));
+		// Sort lexically: session files are `<timestamp>_<id>.jsonl`, so this is
+		// chronological and parents sync before their forks — the fork-dedup
+		// guard in `insertMessageStats` is first-write-wins, and raw readdir
+		// order is filesystem-dependent.
+		return entries
+			.filter(e => e.isFile() && e.name.endsWith(".jsonl"))
+			.map(e => path.join(e.parentPath, e.name))
+			.sort();
 	} catch {
 		return [];
 	}

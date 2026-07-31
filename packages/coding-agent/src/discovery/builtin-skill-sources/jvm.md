@@ -1,27 +1,28 @@
 ---
 name: jvm
-description: Java and Kotlin on the embedded JVM through the `jvm_*` tools — compile-and-run, disassemble, format, jar, jdeps and javadoc, plus the main-class derivation and output guards that decide whether a call succeeds.
+description: Java and Kotlin execution through `run` plus embedded JVM tooling for disassembly, formatting, jars, dependencies, and Javadoc — including main-class derivation and output guards.
 ---
 
 # The embedded JVM toolchain
 
-The `jvm_*` tools compile and run Java and Kotlin on an embedded JDK. Every one
-of them compiles into a **scratch directory** — your project is not a build
-directory and is not touched, except by the two tools that explicitly write an
-artifact (`jvm_jar` with `action: "create"`, and `jvm_javadoc`).
+`run` compiles and executes Java and Kotlin on the embedded JVM. The five
+specialized `jvm_*` tools disassemble, format, package, inspect dependencies,
+and generate Javadoc. Compilation happens in a **scratch directory** — your
+project is not a build directory and is not touched, except by the two tools
+that explicitly write an artifact (`jvm_jar` with `action: "create"`, and
+`jvm_javadoc`).
 
-Compilation always starts from inline `code`; only the two read-only inspection
-modes take an existing artifact (`jvm_jar` with `action: "inspect"`, and
-`jvm_deps` with `path`). There is no "compile this project directory" mode here:
-these tools exercise a snippet, show how something compiles, or produce one
-artifact. To build an existing project, use `check` / `build` (see
-`skill://runtime`).
+Execution accepts inline `code` or a standalone `.java` / `.kt` `path`.
+Specialized compilation starts from inline `code`; only the two read-only
+inspection modes take an existing artifact (`jvm_jar` with `action: "inspect"`,
+and `jvm_deps` with `path`). There is no whole-project execution mode; use
+`check` / `build` for multi-file projects (see `skill://runtime`).
 
 ## The tools
 
 | Tool | Use it for |
 | --- | --- |
-| `jvm_run` | Compile and run a snippet; get its stdout. |
+| `run` with Java or Kotlin `language` | Compile and run inline source or a standalone file; get stdout. |
 | `jvm_disassemble` | `javap -c` bytecode — see constant folding, string concat, boxing, lambda desugaring. |
 | `jvm_format` | Google Java Format / ktfmt. Returns the formatted text; **does not** write it back. |
 | `jvm_jar` | `action: "create"` builds a jar from source; `action: "inspect"` lists an existing one. |
@@ -41,7 +42,7 @@ artifact. To build an existing project, use `check` / `build` (see
 
 ## Main-class derivation — the usual failure
 
-`jvm_run`, `jvm_disassemble`, `jvm_deps` and `jvm_jar` all pick an entrypoint the
+`run`, `jvm_disassemble`, `jvm_deps` and `jvm_jar` all pick an entrypoint the
 same way, and getting it wrong is the most common reason a call fails with a
 correct-looking program:
 
@@ -74,8 +75,8 @@ reason: the compiler is the embedded one, but the `java` that runs the result
 may be an older host JVM (CI images commonly pin 17), and newer bytecode on an
 older JVM dies with `UnsupportedClassVersionError`.
 
-So: **write `jvm_run` source against Java 17 APIs.** Records, sealed types,
-switch expressions and text blocks are fine. Anything added after 17 is not, and
+So: write Java `run` source against Java 17 APIs. Records, sealed types, switch
+expressions and text blocks are fine. Anything added after 17 is not, and
 the failure will surface as a compile error rather than as a version complaint.
 
 A compile error comes back exactly as the compiler reported it and the program

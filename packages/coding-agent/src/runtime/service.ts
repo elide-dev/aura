@@ -14,6 +14,7 @@ import {
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
 	type RuntimeRunParams,
+	type RuntimeRunResult,
 	type RuntimeSpawnParams,
 	type RuntimeStatusResult,
 	unwrapResponse,
@@ -39,7 +40,7 @@ export class RuntimeService {
 		return unwrapResponse<T>(await this.endpoint.request(createRequest(method, params), signal));
 	}
 
-	run(params: RuntimeRunParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
+	run(params: RuntimeRunParams, signal?: AbortSignal): Promise<RuntimeRunResult> {
 		return this.#call("runtime/run", params, signal);
 	}
 	check(params: RuntimeCheckParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
