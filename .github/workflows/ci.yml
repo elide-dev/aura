@@ -2,7 +2,7 @@ name: CI
 
 on:
    push:
-      branches: [main]
+      branches: [main, aura]
       paths:
          - "packages/**"
          - "crates/**"
@@ -20,7 +20,7 @@ on:
          - "rustfmt.toml"
          - ".github/**"
    pull_request:
-      branches: [main]
+      branches: [main, aura]
       paths:
          - "packages/**"
          - "crates/**"
