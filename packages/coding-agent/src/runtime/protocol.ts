@@ -81,6 +81,9 @@ export function resolveRunTarget(params: RuntimeRunParams): ResolvedRunTarget {
 		throw new RuntimeRpcError("invalid-params", "code and path are mutually exclusive.");
 	}
 	const language = params.language ?? (params.path === undefined ? "ts" : inferRunLanguage(params.path));
+	if (!Object.hasOwn(RUN_ENGINES, language)) {
+		throw new RuntimeRpcError("invalid-params", `Unsupported runtime language "${language}".`);
+	}
 	const engine = params.engine ?? (language === "js" || language === "ts" ? "bun" : "elide");
 	if (!RUN_ENGINES[language].includes(engine)) {
 		throw new RuntimeRpcError("invalid-params", `Engine "${engine}" does not support language "${language}".`);
@@ -281,10 +284,11 @@ export interface RuntimeExecResult {
 	stderr: string;
 	durationMs: number;
 	killed: boolean;
-	/** Engine that executed this request, present for unified `run` results. */
-	engine?: RunEngine;
-	/** Resolved source language, present for unified `run` results. */
-	language?: RuntimeLanguage;
+}
+
+export interface RuntimeRunResult extends RuntimeExecResult {
+	engine: RunEngine;
+	language: RuntimeLanguage;
 }
 
 export type RuntimeAdapter = "process" | "embedded" | "auto";

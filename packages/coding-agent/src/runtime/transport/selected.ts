@@ -6,10 +6,13 @@ import {
 	RuntimeRpcError,
 	type RuntimeRpcRequest,
 	type RuntimeRpcResponse,
+	type RuntimeRunParams,
 	type RuntimeStatusResult,
+	resolveRunTarget,
 	toRuntimeRpcError,
 } from "../protocol";
 import type { RuntimeEndpoint } from "../service";
+import { BunRuntimeEndpoint } from "./bun";
 import { EmbeddedRuntimeEndpoint, isEmbeddedRunRequest } from "./embedded";
 import { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./local";
 
@@ -18,6 +21,7 @@ export interface SelectedEndpointOptions extends LocalEndpointOptions {
 	embeddedPath?: string;
 	processEndpoint?: RuntimeEndpoint;
 	embeddedEndpoint?: RuntimeEndpoint;
+	bunEndpoint?: RuntimeEndpoint;
 }
 
 interface AutoRunPreflight {
@@ -36,6 +40,7 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 	readonly #adapter: RuntimeAdapter;
 	readonly #process: RuntimeEndpoint;
 	readonly #embedded: RuntimeEndpoint;
+	readonly #bun: RuntimeEndpoint;
 	readonly #autoQueue: QueuedAutoRun[] = [];
 	#autoDrain: Promise<void> | undefined;
 	#closing = false;
@@ -52,6 +57,7 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 				env: options.env,
 				resolveRuntime: options.resolve,
 			});
+		this.#bun = options.bunEndpoint ?? new BunRuntimeEndpoint({ env: options.env });
 	}
 
 	async request(request: RuntimeRpcRequest, signal?: AbortSignal): Promise<RuntimeRpcResponse> {
@@ -59,6 +65,14 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 			return errorResponse(request.id, new RuntimeRpcError("internal", "Runtime endpoint is closed."));
 		}
 		if (request.method === "runtime/status") return this.#statusResponse(request);
+		if (request.method === "runtime/run") {
+			try {
+				const target = resolveRunTarget(request.params as RuntimeRunParams);
+				if (target.engine === "bun") return this.#bun.request(request, signal);
+			} catch (error) {
+				return errorResponse(request.id, toRuntimeRpcError(error));
+			}
+		}
 		if (!isEmbeddedRunRequest(request) || this.#adapter === "process") {
 			return this.#process.request(request, signal);
 		}
@@ -81,7 +95,7 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 
 	async #closeEndpoints(): Promise<void> {
 		if (this.#autoDrain) await Promise.allSettled([this.#autoDrain]);
-		const endpoints = this.#process === this.#embedded ? [this.#process] : [this.#process, this.#embedded];
+		const endpoints = [...new Set([this.#process, this.#embedded, this.#bun])];
 		const results = await Promise.allSettled(endpoints.map(endpoint => endpoint.close?.() ?? Promise.resolve()));
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
