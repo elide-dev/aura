@@ -3,7 +3,6 @@ import { renderFormula } from "./ci-update-brew-formula";
 
 const SUMS = {
 	"aura-darwin-arm64": "darwin_arm64_sha",
-	"aura-darwin-x64": "darwin_x64_sha",
 	"aura-linux-arm64": "linux_arm64_sha",
 	"aura-linux-x64": "linux_x64_sha",
 };
@@ -17,8 +16,8 @@ describe("renderFormula", () => {
 	// `bin.install nil => "aura"` raises (issue #2398).
 	it("attaches `using: :nounzip` to every per-platform url stanza", () => {
 		const matches = formula.match(/using: :nounzip/g) ?? [];
-		expect(matches).toHaveLength(4);
-		for (const arch of ["aura-darwin-arm64", "aura-darwin-x64", "aura-linux-arm64", "aura-linux-x64"]) {
+		expect(matches).toHaveLength(3);
+		for (const arch of ["aura-darwin-arm64", "aura-linux-arm64", "aura-linux-x64"]) {
 			expect(formula).toMatch(
 				new RegExp(
 					`url "https://github\\.com/[^"]+/${arch}",\\s+using: :nounzip\\s+sha256 "${SUMS[arch as keyof typeof SUMS]}"`,
@@ -38,6 +37,19 @@ describe("renderFormula", () => {
 		// outside the `with_env` block.
 		const blockless = formula.replace(/with_env\(HOME: buildpath\) do[\s\S]*?end/, "");
 		expect(blockless).not.toMatch(/generate_completions_from_executable/);
+	});
+
+	// The release pipeline builds darwin-arm64 only, so the macOS block must not
+	// carry an on_intel branch — one would render a url for an asset the release
+	// never uploads and 404 mid-install.
+	it("ships no Intel macOS branch", () => {
+		const macBlock = formula.match(/on_macos do[\s\S]*?\n {2}end/)?.[0] ?? "";
+		expect(macBlock).toContain("on_arm do");
+		// Match the Ruby block opener, not the bare token — the block carries a
+		// comment explaining the omission, which mentions `on_intel` by name.
+		expect(macBlock).not.toMatch(/^\s*on_intel do$/m);
+		// No url or sha may reference a darwin-x64 asset.
+		expect(formula).not.toMatch(/(?:url|sha256)\s+"[^"]*darwin-x64/);
 	});
 
 	it("emits the expected per-asset sha256 next to each url", () => {

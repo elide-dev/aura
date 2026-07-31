@@ -170,7 +170,7 @@ Every coordinate action in a batch maps through the same frame returned by the p
 
 | Target | Native surface |
 |---|---|
-| `darwin-x64`, `darwin-arm64` | Bounded macOS `screencapture` service capture, Quartz `CGEvent` pointer events, native input. Screen Recording preflight; Accessibility required operationally. |
+| `darwin-arm64` | Bounded macOS `screencapture` service capture, Quartz `CGEvent` pointer events, native input. Screen Recording preflight; Accessibility required operationally. |
 | `linux-x64`, `linux-arm64` (glibc and musl) | Pure-Rust X11 backend bundled in the core addon: `x11rb` RustConnection capture (RandR monitors, `GetImage`) and XTest input with keysym mapping. No GUI system libraries linked; the X protocol is spoken over the display socket. |
 | `win32-x64` | xcap capture, native input, `SendInput` absolute movement over the virtual desktop. |
 | Other targets | Native package loader rejects unsupported platform tag. |

@@ -47,10 +47,21 @@ export interface GenerateNpmPackagesInput {
 	tags?: readonly string[];
 }
 
+/**
+ * Platform leaves the release pipeline publishes. Drives the natives core's
+ * `optionalDependencies` (ci-release-publish.ts) and the trusted-publisher
+ * links (setup-npm-trust.ts), so adding a tag here without a CI job that
+ * actually builds it publishes an empty package.
+ *
+ * `darwin-x64` is intentionally absent: Intel macOS is retired. The bazel
+ * `darwin-x64-baseline` target still exists so the addon can be built from
+ * source, but nothing builds or publishes it in CI. Keep this list in step
+ * with `SUPPORTED_PLATFORMS` (packages/natives/native/loader-state.js) and
+ * `SUPPORTED_NATIVE_TAGS` (packages/coding-agent/src/cli/update-cli.ts).
+ */
 export const LEAF_TARGETS: readonly LeafTarget[] = [
 	{ tag: "linux-x64", os: "linux", cpu: "x64" },
 	{ tag: "linux-arm64", os: "linux", cpu: "arm64" },
-	{ tag: "darwin-x64", os: "darwin", cpu: "x64" },
 	{ tag: "darwin-arm64", os: "darwin", cpu: "arm64" },
 	{ tag: "win32-x64", os: "win32", cpu: "x64" },
 ];

@@ -33,6 +33,12 @@
  *      `baseline` when the resolved variant is `modern`, so the failing
  *      "baseline-only file list" from the report cannot reappear under that
  *      verdict.
+ *
+ * The release pipeline no longer builds or publishes `darwin-x64`, but this
+ * suite deliberately keeps the tag: `getAddonFilenames` is tag-agnostic, so
+ * these cases still pin the generic x64 variant-ordering contract that
+ * `linux-x64` and `win32-x64` depend on, and rewriting the tag would falsify
+ * the issue-3238 narrative above.
  */
 import { describe, expect, it } from "bun:test";
 import { getAddonFilenames, selectCpuVariant } from "../native/loader-state.js";

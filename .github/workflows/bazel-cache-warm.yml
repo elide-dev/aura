@@ -70,7 +70,6 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               - { os: macos-15-intel, target: darwin-x64-baseline, scope: release-darwin-x64 }
                - { os: macos-14, target: darwin-arm64, scope: release-darwin-arm64 }
       runs-on: ${{ matrix.os }}
       steps:

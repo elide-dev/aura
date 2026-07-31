@@ -72,15 +72,14 @@ export function renderFormula(version: string, sums: Record<string, string>): st
   license "MIT"
 
   on_macos do
+    # Apple silicon only: the release pipeline stopped building darwin-x64.
+    # Homebrew on an Intel Mac gets a "does not provide a bottle/binary"
+    # failure from the missing on_intel branch, which is the honest outcome —
+    # a stale darwin-x64 url would 404 mid-install instead.
     on_arm do
       url "https://github.com/${REPO}/releases/download/v#{version}/aura-darwin-arm64",
           using: :nounzip
       sha256 "${sums["aura-darwin-arm64"]}"
-    end
-    on_intel do
-      url "https://github.com/${REPO}/releases/download/v#{version}/aura-darwin-x64",
-          using: :nounzip
-      sha256 "${sums["aura-darwin-x64"]}"
     end
   end
 
@@ -117,7 +116,7 @@ async function main(): Promise<void> {
 	const version = tag.replace(/^v/, "");
 	const assets = await fetchAssets(tag);
 
-	const targets = ["aura-darwin-arm64", "aura-darwin-x64", "aura-linux-arm64", "aura-linux-x64"];
+	const targets = ["aura-darwin-arm64", "aura-linux-arm64", "aura-linux-x64"];
 	const sums: Record<string, string> = {};
 	for (const name of targets) sums[name] = sha256For(assets, name);
 

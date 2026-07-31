@@ -243,7 +243,7 @@ describe("update-cli bun install command", () => {
 		// file and aborted at validateLoadedBindings with `The .node file on
 		// disk is from a different release than this loader`. See
 		// https://github.com/can1357/oh-my-pi/issues/1824.
-		for (const tag of ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64"]) {
+		for (const tag of ["linux-x64", "linux-arm64", "darwin-arm64", "win32-x64"]) {
 			const args = buildBunInstallArgs("15.9.0", tag);
 			expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
 			expect(args).toContain(`@oh-my-pi/pi-natives-${tag}@15.9.0`);
@@ -259,6 +259,16 @@ describe("update-cli bun install command", () => {
 		const args = buildBunInstallArgs("15.9.0", "linux-arm");
 		expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
 		expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
+	});
+
+	it("treats darwin-x64 as unsupported now that Intel macOS is retired", () => {
+		// The release pipeline no longer builds or publishes darwin-x64, so an
+		// Intel Mac must not request `@oh-my-pi/pi-natives-darwin-x64` — that
+		// version does not exist and bun would report EBADPLATFORM instead of
+		// the clearer "no matching version" for the core package.
+		const args = buildBunInstallArgs("15.9.0", "darwin-x64");
+		expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
+		expect(args).not.toContain("@oh-my-pi/pi-natives-darwin-x64@15.9.0");
 	});
 
 	it("derives global node_modules from supported bun global locations", () => {
