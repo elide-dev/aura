@@ -4,6 +4,7 @@ import {
 	disableCachedRuntimeService,
 	disposeCachedRuntimeService,
 	getOrCreateRuntimeService,
+	RUNTIME_PROTOCOL_VERSION,
 	resetRuntimeServiceForTests,
 } from "../src/runtime";
 
@@ -205,7 +206,7 @@ describe("getOrCreateRuntimeService", () => {
 		await releaseFirst();
 		await releaseFirst();
 		expect(close).not.toHaveBeenCalled();
-		expect(await service.status()).toMatchObject({ protocolVersion: 2 });
+		expect(await service.status()).toMatchObject({ protocolVersion: RUNTIME_PROTOCOL_VERSION });
 
 		await releaseSecond();
 		expect(close).toHaveBeenCalledTimes(1);

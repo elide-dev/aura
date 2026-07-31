@@ -20,7 +20,7 @@ export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, Ru
 	readonly parameters = runtimeCheckSchema;
 	readonly strict = true;
 	readonly loadMode = "essential" as const;
-	readonly summary = "Validate the project: resolve deps and compile without artifacts";
+	readonly summary = "Validate supported project sources without producing deliverable artifacts";
 
 	constructor(private readonly session: ToolSession) {}
 

@@ -373,7 +373,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 	test("routes default JavaScript and TypeScript to Bun before adapter selection", async () => {
 		for (const language of ["js", "ts"] as const) {
 			const processEndpoint = new StubEndpoint("process", processStatus);
-			const embeddedEndpoint = new StubEndpoint("embedded", validEmbeddedStatus);
+			const embeddedEndpoint = new StubEndpoint("embedded", noEmbeddedStatus);
 			const bunEndpoint = new StubEndpoint("bun", processStatus);
 			const endpoint = new SelectedRuntimeEndpoint({
 				adapter: "embedded",

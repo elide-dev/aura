@@ -122,6 +122,7 @@ import {
 	type RuntimeServiceScope,
 	type RuntimeSettingsValues,
 	resolveRuntimeEndpointOptions,
+	runtimeAdapterFromEnvironment,
 } from "./runtime";
 import {
 	collectEnvSecrets,
@@ -3657,7 +3658,7 @@ export function readRuntimeSettingsValues(settings: Settings): RuntimeSettingsVa
 		autoDownload: settings.get("runtime.autoDownload"),
 		path: settings.get("runtime.path") ?? "",
 		version: settings.get("runtime.version") ?? "",
-		adapter: settings.get("runtime.adapter"),
+		adapter: runtimeAdapterFromEnvironment(settings.get("runtime.adapter")),
 		embeddedPath: settings.get("runtime.embeddedPath") ?? "",
 	};
 }

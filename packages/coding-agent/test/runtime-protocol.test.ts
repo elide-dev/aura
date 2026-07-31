@@ -3,9 +3,9 @@ import {
 	createRequest,
 	errorResponse,
 	okResponse,
-	resolveRunTarget,
 	RUNTIME_PROTOCOL_VERSION,
 	RuntimeRpcError,
+	resolveRunTarget,
 	unwrapResponse,
 } from "../src/runtime/protocol";
 
@@ -42,17 +42,38 @@ describe("runtime protocol", () => {
 
 	describe("run target resolution", () => {
 		test.each([
-			[{ code: "console.log(1)", language: "js" }, { language: "js", engine: "bun" }],
-			[{ code: "console.log(1)", language: "ts" }, { language: "ts", engine: "bun" }],
-			[{ code: "print(1)", language: "python" }, { language: "python", engine: "elide" }],
-			[{ code: "class Main {}", language: "java" }, { language: "java", engine: "elide" }],
-			[{ code: "fun main() {}", language: "kotlin" }, { language: "kotlin", engine: "elide" }],
+			[
+				{ code: "console.log(1)", language: "js" },
+				{ language: "js", engine: "bun" },
+			],
+			[
+				{ code: "console.log(1)", language: "ts" },
+				{ language: "ts", engine: "bun" },
+			],
+			[
+				{ code: "print(1)", language: "python" },
+				{ language: "python", engine: "elide" },
+			],
+			[
+				{ code: "class Main {}", language: "java" },
+				{ language: "java", engine: "elide" },
+			],
+			[
+				{ code: "fun main() {}", language: "kotlin" },
+				{ language: "kotlin", engine: "elide" },
+			],
 			[{ path: "src/task.mts" }, { language: "ts", engine: "bun" }],
 			[{ path: "src/task.py" }, { language: "python", engine: "elide" }],
 			[{ path: "src/Main.java" }, { language: "java", engine: "elide" }],
 			[{ path: "src/main.kt" }, { language: "kotlin", engine: "elide" }],
-			[{ code: "console.log(1)", language: "js", engine: "elide" }, { language: "js", engine: "elide" }],
-			[{ code: "console.log(1)", language: "ts", engine: "elide" }, { language: "ts", engine: "elide" }],
+			[
+				{ code: "console.log(1)", language: "js", engine: "elide" },
+				{ language: "js", engine: "elide" },
+			],
+			[
+				{ code: "console.log(1)", language: "ts", engine: "elide" },
+				{ language: "ts", engine: "elide" },
+			],
 		] as const)("resolves %j", (params, expected) => {
 			expect(resolveRunTarget(params)).toEqual(expected);
 		});

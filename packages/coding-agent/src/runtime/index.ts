@@ -217,6 +217,19 @@ export interface RuntimeSettingsValues {
 	embeddedPath: string;
 }
 
+export function runtimeAdapterFromEnvironment(
+	configured: RuntimeAdapter,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): RuntimeAdapter {
+	const value = env.AURA_RUNTIME_ADAPTER?.trim();
+	if (!value) return configured;
+	if (value === "process" || value === "embedded" || value === "auto") return value;
+	throw new RuntimeRpcError(
+		"invalid-params",
+		`AURA_RUNTIME_ADAPTER must be process, embedded, or auto; received ${JSON.stringify(value)}.`,
+	);
+}
+
 /**
  * Map runtime settings onto selected endpoint options. Returns `undefined` when
  * the runtime is disabled, which is the signal to expose no service at all.

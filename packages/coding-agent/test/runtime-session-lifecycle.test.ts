@@ -15,6 +15,7 @@ import {
 	disposeCachedRuntimeService,
 	errorResponse,
 	getOrCreateRuntimeService,
+	RUNTIME_PROTOCOL_VERSION,
 	type RuntimeEndpoint,
 	RuntimeRpcError,
 	RuntimeService,
@@ -316,7 +317,7 @@ describe("runtime ownership in AgentSession disposal", () => {
 		const second = await createTopLevelSdkSession(undefined, settings, scope);
 
 		await first.dispose();
-		expect(await runtime.status()).toMatchObject({ protocolVersion: 2 });
+		expect(await runtime.status()).toMatchObject({ protocolVersion: RUNTIME_PROTOCOL_VERSION });
 		await second.dispose();
 		await expect(runtime.status()).rejects.toMatchObject({ message: "Runtime service is closed." });
 	});
@@ -329,7 +330,7 @@ describe("runtime ownership in AgentSession disposal", () => {
 
 		await first.dispose();
 		await expect(firstRuntime.status()).rejects.toMatchObject({ message: "Runtime service is closed." });
-		expect(await secondRuntime.status()).toMatchObject({ protocolVersion: 2 });
+		expect(await secondRuntime.status()).toMatchObject({ protocolVersion: RUNTIME_PROTOCOL_VERSION });
 		await second.dispose();
 		await expect(secondRuntime.status()).rejects.toMatchObject({ message: "Runtime service is closed." });
 	});
@@ -367,7 +368,7 @@ describe("runtime ownership in AgentSession disposal", () => {
 
 		await nested.dispose();
 		await subagent.dispose();
-		expect(await rootRuntime.status()).toMatchObject({ protocolVersion: 2 });
+		expect(await rootRuntime.status()).toMatchObject({ protocolVersion: RUNTIME_PROTOCOL_VERSION });
 		await root.dispose();
 		await expect(rootRuntime.status()).rejects.toMatchObject({ message: "Runtime service is closed." });
 	});
@@ -430,7 +431,7 @@ describe("runtime ownership in AgentSession disposal", () => {
 			expect(scopedRuntime(requireRuntimeScope(child))).toBe(runtime);
 		}
 		await Promise.all(children.map(child => child.dispose()));
-		expect(await runtime.status()).toMatchObject({ protocolVersion: 2 });
+		expect(await runtime.status()).toMatchObject({ protocolVersion: RUNTIME_PROTOCOL_VERSION });
 		await root.dispose();
 		await expect(runtime.status()).rejects.toMatchObject({ message: "Runtime service is closed." });
 	});

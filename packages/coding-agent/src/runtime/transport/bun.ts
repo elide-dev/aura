@@ -4,16 +4,8 @@ import * as path from "node:path";
 import { ptree } from "@oh-my-pi/pi-utils";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../../subprocess/worker-client";
 import { BUN_RUN_WORKER_ARG } from "../bun-run-entry";
-import {
-	errorResponse,
-	okResponse,
-	RuntimeRpcError,
-	type RuntimeRpcRequest,
-	type RuntimeRpcResponse,
-	type RuntimeRunParams,
-	resolveRunTarget,
-	toRuntimeRpcError,
-} from "../protocol";
+import type { RuntimeExecResult, RuntimeRpcRequest, RuntimeRpcResponse, RuntimeRunParams } from "../protocol";
+import { errorResponse, okResponse, RuntimeRpcError, resolveRunTarget, toRuntimeRpcError } from "../protocol";
 import type { RuntimeEndpoint } from "../service";
 
 export interface BunRuntimeEndpointOptions {
@@ -95,5 +87,26 @@ export class BunRuntimeEndpoint implements RuntimeEndpoint {
 			if (value !== undefined) overlay[key] = value;
 		}
 		return workerEnvFromParent({ ...overlay, NO_COLOR: "1" });
+	}
+}
+
+/** Distribution smoke probe for source, bundled, and compiled CLI worker re-entry. */
+export async function smokeTestBunRunWorker(): Promise<void> {
+	const endpoint = new BunRuntimeEndpoint();
+	const response = await endpoint.request({
+		jsonrpc: "2.0",
+		id: 1,
+		method: "runtime/run",
+		params: {
+			code: "const answer: number = await Promise.resolve(42); console.log('bun-worker:' + answer);",
+			language: "ts",
+		},
+	});
+	if ("error" in response) throw new Error(`Bun run worker smoke failed: ${response.error.message}`);
+	const result = response.result as RuntimeExecResult;
+	if (result.exitCode !== 0 || result.stdout !== "bun-worker:42\n" || result.stderr !== "") {
+		throw new Error(
+			`Bun run worker smoke returned exit=${result.exitCode}, stdout=${JSON.stringify(result.stdout)}, stderr=${JSON.stringify(result.stderr)}`,
+		);
 	}
 }

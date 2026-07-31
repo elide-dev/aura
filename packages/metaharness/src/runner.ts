@@ -30,7 +30,7 @@ const CODING_AGENT_DIR = path.join(REPO_ROOT, "packages", "coding-agent");
 const AGENT_IMPORT_PATH = "omp_local:OmpLocal";
 
 /** Container-side mount points for `--install source` (must match omp_local.py defaults). */
-const SOURCE_SRC_MOUNT = "/opt/omp/src";
+export const SOURCE_SRC_MOUNT = "/opt/omp/src";
 const SOURCE_BIN_MOUNT = "/opt/omp/bin";
 
 /** Host address containers see on Apple Container's vmnet (bridge) network. */
@@ -760,6 +760,7 @@ export function readTrials(jobDir: string): Trial[] {
 /** Authoritative job-level totals from <jobDir>/result.json (written incrementally). */
 export interface JobInfo {
 	nTotal: number;
+	startedAt?: number | null;
 	running: number | null;
 	pending: number | null;
 	/** Harbor sets this only when the job reached a terminal state. */
@@ -778,9 +779,11 @@ export function readJobResult(jobDir: string): JobInfo | null {
 		if (typeof s.n_running_trials === "number") running = s.n_running_trials;
 		if (typeof s.n_pending_trials === "number") pending = s.n_pending_trials;
 	}
+	const startedRaw = typeof r.started_at === "string" ? Date.parse(r.started_at) : NaN;
+	const startedAt = Number.isFinite(startedRaw) ? startedRaw : null;
 	const finishedRaw = typeof r.finished_at === "string" ? Date.parse(r.finished_at) : NaN;
 	const finishedAt = Number.isFinite(finishedRaw) ? finishedRaw : null;
-	return nTotal > 0 ? { nTotal, running, pending, finishedAt } : null;
+	return nTotal > 0 ? { nTotal, startedAt, running, pending, finishedAt } : null;
 }
 
 // ──────────────────────────────────────────────────────────────────── totals
@@ -1037,6 +1040,53 @@ export interface SourceMount {
 	nodeModules: string[];
 }
 
+export interface SourceDepsInstallOptions {
+	envType: "docker" | "apple-container";
+	arch: "arm64" | "x64";
+	depsDir: string;
+	bunVersion: string;
+	script: string;
+	uid?: number;
+	gid?: number;
+}
+
+export function buildSourceDepsInstallArgv(options: SourceDepsInstallOptions): string[] {
+	const image = `oven/bun:${options.bunVersion}`;
+	if (options.envType === "apple-container") {
+		return [
+			"container",
+			"run",
+			"--rm",
+			"--dns",
+			CONTAINER_DNS,
+			"-e",
+			"HOME=/tmp",
+			"-v",
+			`${options.depsDir}:/deps`,
+			image,
+			"sh",
+			"-c",
+			options.script,
+		];
+	}
+	return [
+		"docker",
+		"run",
+		"--rm",
+		"--platform",
+		`linux/${options.arch === "x64" ? "amd64" : "arm64"}`,
+		...(options.uid === undefined || options.gid === undefined ? [] : ["--user", `${options.uid}:${options.gid}`]),
+		"-e",
+		"HOME=/tmp",
+		"-v",
+		`${options.depsDir}:/deps`,
+		image,
+		"sh",
+		"-c",
+		options.script,
+	];
+}
+
 /** Bun version pinned by the repo's `packageManager` field. */
 function repoBunVersion(): string {
 	const raw = readJson(path.join(REPO_ROOT, "package.json"));
@@ -1127,39 +1177,15 @@ export function prepareSourceDeps(cfg: Config): SourceMount {
 		// (root `prepare` → gen:tool-views) would fail; patchedDependencies still apply.
 		const script =
 			'mkdir -p /deps/bin && cp "$(command -v bun)" /deps/bin/bun && cd /deps && bun install --production --omit=optional --ignore-scripts';
-		const image = `oven/bun:${bunVersion}`;
-		const runArgv =
-			cfg.envType === "apple-container"
-				? [
-						"container",
-						"run",
-						"--rm",
-						"--dns",
-						CONTAINER_DNS,
-						"-e",
-						"HOME=/tmp",
-						"-v",
-						`${depsDir}:/deps`,
-						image,
-						"sh",
-						"-c",
-						script,
-					]
-				: [
-						"docker",
-						"run",
-						"--rm",
-						"--platform",
-						`linux/${arch === "x64" ? "amd64" : "arm64"}`,
-						"-e",
-						"HOME=/tmp",
-						"-v",
-						`${depsDir}:/deps`,
-						image,
-						"sh",
-						"-c",
-						script,
-					];
+		const runArgv = buildSourceDepsInstallArgv({
+			envType: cfg.envType,
+			arch,
+			depsDir,
+			bunVersion,
+			script,
+			uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+			gid: typeof process.getgid === "function" ? process.getgid() : undefined,
+		});
 		const r = spawnSync(runArgv[0], runArgv.slice(1), { stdio: ["ignore", "inherit", "inherit"] });
 		if (r.status !== 0) {
 			fs.rmSync(stampFile, { force: true });
@@ -1369,28 +1395,29 @@ export function buildResumeArgs(cfg: Config, jobDir: string): string[] {
 	return a;
 }
 
-const FORWARD_ENV_DENYLIST = new Set([
-	"PI_CODING_AGENT_DIR",
-	"PI_CONFIG_DIR",
-	"PI_PROFILE",
-	"PI_PACKAGE_DIR",
-	"PI_SESSION_FILE",
-	"PI_ARTIFACTS_DIR",
-	"PI_TOOL_BRIDGE_URL",
-	"PI_TOOL_BRIDGE_TOKEN",
-	"PI_TOOL_BRIDGE_SESSION",
-	"PI_EVAL_LOCAL_ROOTS",
-]);
+const FORWARD_ENV_DENYLIST: Record<string, true> = {
+	PI_CODING_AGENT_DIR: true,
+	PI_CONFIG_DIR: true,
+	PI_CONFIG_FILES: true,
+	PI_PROFILE: true,
+	PI_PACKAGE_DIR: true,
+	PI_SESSION_FILE: true,
+	PI_ARTIFACTS_DIR: true,
+	PI_TOOL_BRIDGE_URL: true,
+	PI_TOOL_BRIDGE_TOKEN: true,
+	PI_TOOL_BRIDGE_SESSION: true,
+	PI_EVAL_LOCAL_ROOTS: true,
+};
 
 /**
  * Env vars injected into the in-container omp run: every host `PI_*` knob (minus
  * container-hostile dir/profile/session keys) plus explicit `--env` entries,
  * which always win and bypass the denylist.
  */
-export function collectForwardEnv(cfg: Config): Record<string, string> {
+export function collectForwardEnv(cfg: Config, hostEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
 	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(process.env)) {
-		if (v === undefined || !k.startsWith("PI_") || FORWARD_ENV_DENYLIST.has(k)) continue;
+	for (const [k, v] of Object.entries(hostEnv)) {
+		if (v === undefined || !k.startsWith("PI_") || FORWARD_ENV_DENYLIST[k]) continue;
 		out[k] = v;
 	}
 	for (const [k, v] of Object.entries(cfg.env)) out[k] = v;
@@ -1403,11 +1430,13 @@ export function buildHarborEnv(
 	tarball: string | null,
 	version: string,
 	source: SourceMount | null = null,
+	hostEnv: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+	const env: Record<string, string> = { ...(hostEnv as Record<string, string>) };
 	// Drop any stale OMP_BENCH_FORWARD_ENV inherited from the caller's shell before
 	// the agent-type early return, so it never leaks (incl. into the dry-run dump).
 	delete env.OMP_BENCH_FORWARD_ENV;
+	for (const key of Object.keys(FORWARD_ENV_DENYLIST)) delete env[key];
 	if (cfg.agent !== "omp") return env;
 	const prepend = (k: string, v: string): void => {
 		env[k] = env[k] ? `${v}:${env[k]}` : v;
@@ -1434,7 +1463,7 @@ export function buildHarborEnv(
 		env.OMP_BENCH_GATEWAY_PROVIDERS = deriveProviders(cfg).join(",");
 	}
 	if (cfg.envType === "apple-container") env.OMP_BENCH_CONTAINER_DNS = CONTAINER_DNS;
-	const forward = collectForwardEnv(cfg);
+	const forward = collectForwardEnv(cfg, hostEnv);
 	if (Object.keys(forward).length > 0) env.OMP_BENCH_FORWARD_ENV = JSON.stringify(forward);
 	return env;
 }

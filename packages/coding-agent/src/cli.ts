@@ -34,6 +34,7 @@ import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbou
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 import { BUN_RUN_WORKER_ARG, runBunGuest } from "./runtime/bun-run-entry";
 import { EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_EXECUTION_WORKER_ARG } from "./runtime/embedded/worker-protocol";
+import { smokeTestBunRunWorker } from "./runtime/transport/bun";
 import { COMPUTER_WORKER_ARG } from "./tools/computer/protocol";
 import { smokeTestComputerWorker } from "./tools/computer/supervisor";
 import { startComputerWorker } from "./tools/computer/worker-entry";
@@ -107,6 +108,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestTinyTitleWorker();
 	await smokeTestSttWorker();
 	await smokeTestJsEvalWorker();
+	await smokeTestBunRunWorker();
 	await smokeTestComputerWorker();
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();

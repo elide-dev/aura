@@ -918,11 +918,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
 		// or the dedicated-tool command that follows the directory change.
 		//
-		// `bashInterceptor.enabled` gates the dedicated-tool nudges only: the
-		// runtime-routing group is always evaluated, because it is policy rather than
-		// a nudge and would otherwise be inert on a default install. It keeps its own
-		// gates — tool availability and the runtime shell opt-out. See
-		// `activeBashInterceptorRules`.
+		// `bashInterceptor.enabled` gates every configured dedicated-tool nudge.
 		const rules = activeBashInterceptorRules(
 			this.session.settings.getBashInterceptorRules(),
 			this.session.settings.get("bashInterceptor.enabled"),

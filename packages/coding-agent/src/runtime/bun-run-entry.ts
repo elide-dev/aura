@@ -9,7 +9,7 @@ export async function runBunGuest(argv: string[]): Promise<void> {
 	const worker = new Worker(pathToFileURL(sourcePath).href, { argv: programArgs, ref: true });
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	worker.addEventListener("close", event => {
-		process.exitCode = event.code;
+		process.exitCode = "code" in event && typeof event.code === "number" ? event.code : 1;
 		resolve();
 	});
 	worker.addEventListener("error", event => reject(event.error ?? new Error(event.message)));

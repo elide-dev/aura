@@ -2,20 +2,33 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the public `jvm_run` tool; execute Java and Kotlin through the unified `run` tool with `language`, optional `mainClass`, and the existing args/stdin/cwd controls.
+
 ### Added
 
 - Added a repeatable Linux x64/glibc relocatable bundle builder that packages standalone Aura with the complete Elide process and embedded runtimes, verifies the staged and extracted layouts, and emits a tarball plus SHA-256.
+- Added explicit `engine` selection and resolved engine/language result metadata to `run`, with JavaScript, TypeScript, Python, Java, and Kotlin supported through one contract.
 
 ### Changed
 
 - Changed the default Auto-QA grievance collector to the Elide-operated `qa.elide.dev` endpoint while preserving explicit endpoint overrides.
 - Changed Aura's compact prompt and terminal-title brand mark from `π` to `☉`, with `o` retained for explicit ASCII-only symbol mode.
+- Clarified that managed `check` validates supported runtime project builds but does not replace project-declared TypeScript static typechecking.
+- Changed JavaScript and TypeScript `run` calls to use an isolated Bun child by default while keeping the embedded engine selectable; Python, Java, and Kotlin use the embedded engine.
 
 ### Fixed
 
 - Fixed transient internal runtime failures poisoning the session-wide service cache permanently; the failed service is now retired so the next explicit run gets a fresh embedded worker host without retrying the failed guest execution.
 - Fixed relocatable Aura bundles failing to launch when `bin/aura` is installed through a filesystem symlink.
 - Fixed Kotlin runtime execution missing the bundled standard library, and made Auto runtime selection try Java/Kotlin in-process before falling back when the embedded library does not support them yet.
+- Fixed Python path execution through process and embedded runtime adapters omitting `__file__`, script argv identity, and sibling import roots.
+- Fixed isolated and containerized Aura launches ignoring the requested runtime adapter by adding the validated `AURA_RUNTIME_ADAPTER` process override.
+
+### Removed
+
+- Removed runtime-binary shell interception and its `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` escape hatches; direct runtime commands now follow the ordinary `bashInterceptor.enabled` policy.
 
 ## [17.1.8] - 2026-07-28
 

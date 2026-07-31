@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { SETTINGS_SCHEMA } from "../src/config/settings-schema";
-import { type RuntimeSettingsValues, resolveRuntimeEndpointOptions } from "../src/runtime";
+import {
+	type RuntimeSettingsValues,
+	resolveRuntimeEndpointOptions,
+	runtimeAdapterFromEnvironment,
+} from "../src/runtime";
 
 describe("runtime settings wiring", () => {
 	const defaults: RuntimeSettingsValues = {
@@ -22,6 +26,14 @@ describe("runtime settings wiring", () => {
 			type: "string",
 			default: "",
 		});
+	});
+
+	test("AURA_RUNTIME_ADAPTER selects the benchmark adapter explicitly", () => {
+		expect(runtimeAdapterFromEnvironment("process", { AURA_RUNTIME_ADAPTER: " embedded " })).toBe("embedded");
+		expect(runtimeAdapterFromEnvironment("process", { AURA_RUNTIME_ADAPTER: "" })).toBe("process");
+		expect(() => runtimeAdapterFromEnvironment("process", { AURA_RUNTIME_ADAPTER: "invalid" })).toThrow(
+			"AURA_RUNTIME_ADAPTER",
+		);
 	});
 
 	test("returns undefined when the runtime is disabled", () => {
