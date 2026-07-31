@@ -107,10 +107,12 @@ describe("initTelemetryExport signals export path", () => {
 		// singleton into every later test. The probe stands up its own loopback
 		// receiver and exits 0 only when a protobuf trace export actually lands.
 		const probe = fileURLToPath(new URL("./otel-export-probe.ts", import.meta.url));
-		const proc = Bun.spawn(["bun", probe], { stdout: "pipe", stderr: "pipe" });
-		const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
-		expect(stdout).toContain("PROBE: RECEIVED");
-		expect(code).toBe(0);
+		const proc = Bun.spawn([process.execPath, probe], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await proc.exited).toBe(0);
 	}, 20_000);
 
 	it("exports log records and metrics to OTLP/proto receivers", async () => {
@@ -130,6 +132,22 @@ describe("initTelemetryExport signals export path", () => {
 		const output = `${stdout}\n${stderr}`;
 		expect(output).toContain("PROBE: SIGNALS OK");
 		expect(output).toContain("PROBE: RECEIVED");
+		expect(code).toBe(0);
+	}, 20_000);
+
+	it("merges OTEL_RESOURCE_ATTRIBUTES into the exported resource", async () => {
+		// Regression for #7134: the resource only carried service.name, so
+		// OTEL_RESOURCE_ATTRIBUTES entries never reached the collector. The probe
+		// asserts the merged attributes land and that OTEL_SERVICE_NAME wins
+		// service.name over an OTEL_RESOURCE_ATTRIBUTES entry.
+		const probe = fileURLToPath(new URL("./otel-resource-probe.ts", import.meta.url));
+		const proc = Bun.spawn(["bun", probe], { stdout: "pipe", stderr: "pipe" });
+		const [code, stdout, stderr] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
+		expect(`${stdout}\n${stderr}`).not.toContain("PROBE: FAIL");
 		expect(code).toBe(0);
 	}, 20_000);
 });
