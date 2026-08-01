@@ -4,41 +4,23 @@ description: >
    exposes the backend through step outputs before any action condition
    uses it.
 
-   omp-kata jobs use the cluster remote cache. GitHub-hosted jobs use an
-   actions/cache-backed disk cache seeded by the bazel-cache-warm workflow
-   on the same runner image — cross-host action keys never hit, so the disk
-   cache is hosted-only and its key carries a schema version (v1 was
-   poisoned by a kata-produced export that silently missed every action).
-
-   The v3 key is <config hash>-<source hash>: config covers toolchain and
-   build settings, source covers crates/** + BUILD.bazel. Restores fall
-   back to the config-scoped prefix, then to a bare scope+os+arch prefix:
-   the config hash covers Cargo.toml/Cargo.lock, which every release
-   version bump rewrites, so without the bare fallback each release built
-   the darwin addons fully cold (~40-50 min on macos-15-intel; CI run
-   30357804722). A stale-config archive is safe — bazel keys every
-   action by content digest, so mismatched entries just miss — and the
-   refreshed archive is saved after the build (an exact hit suppresses
-   the save — without the source component the first archive for a config
-   generation would permanently shadow newer source states). Restored
-   entries untouched for 14 days are pruned before the build so
-   ever-seeding archives don't grow without bound.
-
-inputs:
-   scope:
-      description: Disk-cache key discriminator shared by compatible consumers
-      required: true
+   With the BUILDBUDDY_API_KEY secret exported, linux-x64 jobs run on the
+   BuildBuddy RBE executors (--config=rbe) so action results are shared
+   across CI and local development; macOS jobs use the BuildBuddy remote
+   cache + BES only (--config=buildbuddy — the workers are linux, and darwin
+   addons need the host Xcode toolchain). Both carry the remote downloader
+   for toolchain archives. The legacy in-cluster bazel-remote branch remains
+   for runners that inject BAZEL_REMOTE_USER/_PASSWORD. The
+   actions/cache-backed disk-cache archives this action used to restore are
+   retired: the BuildBuddy cache is shared across runner images and
+   branches, which is what the per-image warm archives simulated. Fork PRs
+   see an empty secret and build cold — their bazel fallback path is rare
+   (prebuilt addons cover PRs).
 
 outputs:
    rc:
       description: Path to the generated bazelrc fragment
       value: ${{ steps.compose.outputs.rc }}
-   cache-key:
-      description: Exact GitHub cache key for a later explicit save
-      value: ${{ steps.backend.outputs.cache-key }}
-   save-needed:
-      description: Whether a disk-cache build can save a new exact-key archive
-      value: ${{ steps.compose.outputs.save-needed }}
    remote:
       description: Whether the shell probe selected the cluster remote cache
       value: ${{ steps.backend.outputs.remote }}
@@ -49,9 +31,6 @@ runs:
       - name: Detect bazel cache backend
         id: backend
         shell: bash
-        env:
-           CONFIG_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'MODULE.bazel', 'MODULE.bazel.lock', 'rust-toolchain.toml', 'rustfmt.toml', '.bazelrc', '.bazelignore', '.bazelversion', 'bazel/**') }}
-           SOURCE_HASH: ${{ hashFiles('crates/**', 'BUILD.bazel') }}
         run: |
            set -euo pipefail
            remote=false
@@ -62,51 +41,15 @@ runs:
              fi
              remote=true
            fi
-           key="bazel-disk-v3-${{ inputs.scope }}-${{ runner.os }}-${{ runner.arch }}-$CONFIG_HASH-$SOURCE_HASH"
-           prefix="bazel-disk-v3-${{ inputs.scope }}-${{ runner.os }}-${{ runner.arch }}-$CONFIG_HASH-"
-           bare_prefix="bazel-disk-v3-${{ inputs.scope }}-${{ runner.os }}-${{ runner.arch }}-"
-           {
-             echo "remote=$remote"
-             echo "cache-key=$key"
-             echo "cache-prefix=$prefix"
-             echo "cache-bare-prefix=$bare_prefix"
-           } >> "$GITHUB_OUTPUT"
-
-      - name: Restore bazel disk cache
-        id: restore
-        if: steps.backend.outputs.remote != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-           # Both caches ride one archive: the action cache AND the repository
-           # cache (downloads + extracted repo contents at repo/contents, which
-           # reproducible repo rules reuse across output bases). Without the
-           # repo half, every hosted job re-downloaded and re-extracted the
-           # rust/LLVM/zig toolchains. Save sites must list the same paths.
-           path: |
-              ~/.cache/omp-bazel-disk
-              ~/.cache/omp-bazel-repo
-           key: ${{ steps.backend.outputs.cache-key }}
-           # Order matters: exact key, same-config prefix, then any archive for
-           # this scope+os+arch. The bare fallback is what keeps release version
-           # bumps (Cargo.toml/Cargo.lock churn -> new CONFIG_HASH) from going
-           # fully cold; bazel's content-addressed action keys make a
-           # stale-config archive a partial hit, never a wrong output.
-           restore-keys: |
-              ${{ steps.backend.outputs.cache-prefix }}
-              ${{ steps.backend.outputs.cache-bare-prefix }}
+           echo "remote=$remote" >> "$GITHUB_OUTPUT"
 
       - name: Compose cache config
         id: compose
         shell: bash
         env:
            REMOTE: ${{ steps.backend.outputs.remote }}
-           RESTORE_HIT: ${{ steps.restore.outputs.cache-hit }}
         run: |
            set -euo pipefail
-           save_needed=false
-           if [ "$REMOTE" != "true" ] && [ "$RESTORE_HIT" != "true" ]; then
-             save_needed=true
-           fi
 
            # BuildBuddy composition (jobs opt in by exporting the
            # BUILDBUDDY_API_KEY secret into the environment; fork PRs see an
@@ -116,8 +59,7 @@ runs:
            #                   the in-cluster bazel-remote (faster and free of
            #                   egress); a second --remote_cache would clobber it.
            #   hosted       -> --config=buildbuddy (BES + BuildBuddy remote
-           #                   cache). The actions/cache-backed disk cache
-           #                   composes underneath as the local layer.
+           #                   cache + remote downloader).
            # Mask the key BEFORE writing the rc: config=ci enables
            # --announce_rc, which prints --remote_header lines verbatim.
            buildbuddy_rc=""
@@ -128,10 +70,7 @@ runs:
 
            rc="$RUNNER_TEMP/bazel-cache.rc"
            if [ "$REMOTE" = "true" ]; then
-             # Mask the derived credential BEFORE writing the rc: config=ci
-             # enables --announce_rc, which prints --remote_header verbatim.
-             # Mask lines inside the redirected block below would land in the
-             # rc file itself and mask nothing.
+             # Mask the derived credential BEFORE writing the rc (see above).
              raw_auth="${BAZEL_REMOTE_USER}:${BAZEL_REMOTE_PASSWORD}"
              auth="$(printf %s "$raw_auth" | base64 | tr -d '\n')"
              echo "::add-mask::$raw_auth"
@@ -154,31 +93,28 @@ runs:
                fi
              } > "$rc"
            else
-             mkdir -p "$HOME/.cache/omp-bazel-disk" "$HOME/.cache/omp-bazel-repo"
-             # Seeding from stale archives means entries dead source
-             # generations wrote would otherwise ride along forever; drop
-             # anything untouched for 14 days (tar preserves mtimes across
-             # the actions/cache round trip, so age survives restores).
-             # DISK CACHE ONLY: never prune omp-bazel-repo file-by-file —
-             # extracted repo contents keep upstream-archive mtimes (often
-             # months old), so an mtime sweep guts contents-cache entries
-             # while bazel still trusts their recorded_inputs, materializing
-             # hollow external repos ("BUILD file not found" — v17.2.0
-             # release run 30519253683). The repo cache is bounded by the
-             # GitHub cache TTL/LRU at the archive level instead.
-             find "$HOME/.cache/omp-bazel-disk" -type f -mtime +14 -delete 2>/dev/null || true
+             # Job-local repository cache: repo rules within one job reuse
+             # downloads across output bases; cross-job reuse rides the
+             # BuildBuddy remote downloader in --config=buildbuddy instead of
+             # the retired actions/cache archives.
+             mkdir -p "$HOME/.cache/omp-bazel-repo"
              {
                echo "common --config=ci"
-               echo "common --disk_cache=$HOME/.cache/omp-bazel-disk"
                echo "common --repository_cache=$HOME/.cache/omp-bazel-repo"
                if [ -n "$buildbuddy_rc" ]; then
-                 echo "common --config=buildbuddy"
+                 # linux-x64 executes on the BuildBuddy RBE workers (rbe
+                 # implies the buildbuddy cache config) so CI and local
+                 # `--config=rbe` builds share one action cache. macOS stays
+                 # cache-only: the workers are linux, and darwin addons need
+                 # the host Xcode toolchain.
+                 if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
+                   echo "common --config=rbe"
+                 else
+                   echo "common --config=buildbuddy"
+                 fi
                  echo "$buildbuddy_rc"
                fi
              } > "$rc"
            fi
 
-           {
-             echo "rc=$rc"
-             echo "save-needed=$save_needed"
-           } >> "$GITHUB_OUTPUT"
+           echo "rc=$rc" >> "$GITHUB_OUTPUT"

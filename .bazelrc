@@ -96,6 +96,10 @@ common:buildbuddy --config=cache-rw
 common:buildbuddy --remote_cache=grpcs://elide-dev.buildbuddy.io
 common:buildbuddy --remote_cache_compression
 common:buildbuddy --remote_timeout=10m
+# Route repo-rule downloads (zig/LLVM/xwin/rustc archives, multi-GB) through
+# the BuildBuddy CAS so ephemeral runners skip the upstream fetch — this
+# replaces the retired actions/cache repository-cache archives in CI.
+common:buildbuddy --experimental_remote_downloader=grpcs://remote.buildbuddy.io
 
 # rbe: remote execution on the BuildBuddy executors, on top of the cache.
 # The exec platform pins linux-amd64 + zig gnu.2.17 so cc/rust toolchain
