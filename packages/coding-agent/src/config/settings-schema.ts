@@ -1077,7 +1077,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Display",
 			label: "Rewrite Scrollback",
 			description:
-				"Erase and replay terminal scrollback when a block's final form replaces its live preview. When off (default), stale preview copies remain in history and the final content is appended below.",
+				"Erase and replay terminal scrollback when a block's final form replaces its live preview. Defaults on for Windows/WSL (ConPTY) terminals, where a stale preview copy otherwise remains in history with the final content appended below; off elsewhere. Set explicitly to override the per-host default.",
 		},
 	},
 
