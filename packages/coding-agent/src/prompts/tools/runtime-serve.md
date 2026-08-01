@@ -1,16 +1,7 @@
-Serve a directory of static files over HTTP on the managed runtime, as a
-supervised background job. `directory` is required (resolved against `cwd`, which
-defaults to the session directory); optional `port` and `host` default to the
-runtime's own (`127.0.0.1:8080`), and `waitSeconds` bounds how long the startup
-output is watched for the URL (default 15).
+Serve a static directory over HTTP on the managed runtime to preview built
+sites, generated docs, or other static assets.
 
-Use it to preview a built site, generated API docs, or any directory of static
-assets. The result is the URL plus a **hub job name**: read its output with
-`hub {op:"logs", name}`, and stop it with `hub {op:"stop", name}` — there is no
-separate stop tool, and leaving a server running holds the port. (If this session
-has no `hub` tool, nothing here can stop the job — the result says so and what to
-do instead; report that to the user.)
-If no URL
-appears within the wait window the job is still returned along with its startup
-output; it may simply still be starting, so poll `hub logs` before concluding
-anything failed.
+Returns the URL plus a hub job name. Use `hub logs` for output and `hub stop` to
+release the job and port; no separate stop tool exists. No hub? Report that the
+job cannot be stopped from this session. A missing URL after the wait still
+returns the job and startup output; inspect `hub logs` before declaring failure.

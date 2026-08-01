@@ -17,6 +17,7 @@
 - Changed Aura's compact prompt and terminal-title brand mark from `π` to `☉`, with `o` retained for explicit ASCII-only symbol mode.
 - Clarified that managed `check` validates supported runtime project builds but does not replace project-declared TypeScript static typechecking.
 - Changed JavaScript and TypeScript `run` calls to use an isolated Bun child by default while keeping the embedded engine selectable; Python, Java, and Kotlin use the embedded engine.
+- Reduced persistent system and runtime tool prompt text while preserving tool-selection and safety contracts.
 
 ### Fixed
 

@@ -1,6 +1,3 @@
-Compile Java or Kotlin and disassemble the resulting bytecode with
-`javap -c`. Use it to see how source lowers to JVM instructions — constant
-folding, string concatenation, boxing, lambda desugaring. Same entrypoint
-rules as Java/Kotlin `run`: the `public class`, or `MainKt` for Kotlin, unless
-`mainClass` names another class. On a compile error you get the compiler's
-diagnostics instead of a listing.
+Compile Java/Kotlin source, then disassemble its bytecode with `javap -c`.
+Entrypoint defaults to the Java public class or Kotlin `MainKt`; `mainClass`
+overrides it. Compilation failure returns compiler diagnostics and no listing.

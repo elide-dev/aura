@@ -1,5 +1,4 @@
-Analyze JVM dependencies with `jdeps`: which packages and modules a class,
-jar, or class directory actually depends on. Either pass `path` to an
-existing `.class`/`.jar`/class directory (relative to the cwd, read-only), or
-pass `language` + `code` to compile source in a scratch directory first and
-analyze the result.
+Analyze JVM package/module dependencies with `jdeps`. Provide `path` to an
+existing `.class`, `.jar`, or class directory for read-only analysis, or provide
+`language` + `code` to compile in scratch space and then analyze. No project
+files are modified.

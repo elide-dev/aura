@@ -202,7 +202,8 @@ re-appending this one.
   archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
-  keeping a process registry of its own), `src/prompts/tools/runtime-*.md`
+  keeping a process registry of its own), `src/prompts/tools/runtime-*.md`,
+  `src/prompts/tools/jvm-*.md`
 - `packages/coding-agent/src/tools/runtime-renderer.ts` — TUI renderers for the whole
   runtime tool family. One factory over declarative per-tool `describeCall` /
   `describeResult` specs, in the `glob`/`hub` house style (status line + short output

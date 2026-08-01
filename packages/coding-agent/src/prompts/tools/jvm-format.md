@@ -1,4 +1,3 @@
-Format Java (Google Java Format) or Kotlin (ktfmt) source and return the
-formatted code. The source is formatted in a scratch directory and read
-back, so nothing in your project is modified — apply the result with `edit`
-or `write` if you want it persisted.
+Format Java with Google Java Format or Kotlin with ktfmt in scratch space.
+Returns formatted source without persisting it; apply via `edit` or `write` when
+persistence is wanted.
