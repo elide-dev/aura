@@ -21,6 +21,7 @@
 		"lint": "biome lint .",
 		"serve": "bun run src/server.ts",
 		"bench:edit": "bun adapters/edit/cli.ts",
+		"bench:inherent": "bun src/inherent-capability-benchmark.ts",
 		"dev": "bun --hot src/server.ts",
 		"bench:runtime": "bun src/runtime-benchmark.ts",
 		"test": "bun test"

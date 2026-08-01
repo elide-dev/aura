@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type Span, trace } from "@opentelemetry/api";
 import { okResponse, type RuntimeRpcRequest, type RuntimeRpcResponse } from "../src/runtime/protocol";
 import { type RuntimeEndpoint, RuntimeService } from "../src/runtime/service";
+import { subscribeTelemetry, type TelemetryEvent } from "../src/telemetry/events";
 
 class RecordingEndpoint implements RuntimeEndpoint {
 	requests: RuntimeRpcRequest[] = [];
@@ -55,6 +57,187 @@ describe("RuntimeService", () => {
 		const r = await svc.run({ code: "1" });
 		expect(r.exitCode).toBe(0);
 		expect(r.stdout).toBe("ok");
+	});
+
+	test("publishes bounded runtime facts and annotates the active tool span", async () => {
+		const events: TelemetryEvent[] = [];
+		const attributes: Record<string, string | number | boolean> = {};
+		const activeSpan = {
+			setAttribute(key: string, value: string | number | boolean) {
+				attributes[key] = value;
+				return this;
+			},
+		} as unknown as Span;
+		const spanSpy = spyOn(trace, "getActiveSpan").mockReturnValue(activeSpan);
+		const unsubscribe = subscribeTelemetry(event => events.push(event));
+		try {
+			const result = await new RuntimeService(new RecordingEndpoint()).run(
+				{
+					code: "console.log(1)",
+					language: "ts",
+				},
+				undefined,
+				"session-a",
+			);
+			expect(result.exitCode).toBe(0);
+		} finally {
+			unsubscribe();
+			spanSpy.mockRestore();
+		}
+
+		const event = events.find(candidate => candidate.type === "runtime.call.completed");
+		expect(event).toMatchObject({
+			type: "runtime.call.completed",
+			sessionId: "session-a",
+			method: "runtime/run",
+			language: "ts",
+			outcome: "ok",
+			exitCode: 0,
+			killed: false,
+		});
+		expect(event).not.toHaveProperty("stdout");
+		expect(event).not.toHaveProperty("stderr");
+		expect(event).not.toHaveProperty("params");
+		expect(attributes).toMatchObject({
+			"aura.runtime.method": "runtime/run",
+			"aura.runtime.language": "ts",
+			"aura.runtime.outcome": "ok",
+			"aura.runtime.exit_code": 0,
+			"aura.runtime.killed": false,
+		});
+		expect(attributes["aura.runtime.duration_ms"]).toBeNumber();
+	});
+
+	test("classifies runtime protocol failures once without changing the thrown error", async () => {
+		const events: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(event => events.push(event));
+		const service = new RuntimeService({
+			async request(req) {
+				return {
+					jsonrpc: "2.0",
+					id: req.id,
+					error: { code: "timeout", message: "guest timed out" },
+				};
+			},
+		});
+		try {
+			await expect(service.run({ code: "while(true){}", language: "js" })).rejects.toMatchObject({
+				name: "RuntimeRpcError",
+				code: "timeout",
+			});
+		} finally {
+			unsubscribe();
+		}
+
+		const runtimeEvents = events.filter(candidate => candidate.type === "runtime.call.completed");
+		expect(runtimeEvents).toHaveLength(1);
+		expect(runtimeEvents[0]).toMatchObject({
+			method: "runtime/run",
+			language: "js",
+			outcome: "timeout",
+			errorType: "timeout",
+		});
+		expect(runtimeEvents[0]).not.toHaveProperty("message");
+	});
+
+	test("classifies non-zero, killed, cancelled, and unexpected failures exactly once without mutation", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const unexpected = new Error("endpoint exploded");
+		const cases = [
+			{
+				name: "non-zero",
+				response: { exitCode: 2, stdout: "", stderr: "bad", durationMs: 1, killed: false },
+				expected: { outcome: "error", exitCode: 2, killed: false, errorType: "non_zero_exit" },
+			},
+			{
+				name: "killed",
+				response: { exitCode: 137, stdout: "", stderr: "", durationMs: 1, killed: true },
+				expected: { outcome: "timeout", exitCode: 137, killed: true, errorType: "killed" },
+			},
+			{
+				name: "cancelled",
+				error: new Error("cancelled"),
+				signal: controller.signal,
+				expected: { outcome: "cancelled", errorType: "cancelled" },
+			},
+			{
+				name: "unexpected",
+				error: unexpected,
+				expected: { outcome: "error", errorType: "unknown" },
+			},
+		] as const;
+		for (const testCase of cases) {
+			const events: TelemetryEvent[] = [];
+			const unsubscribe = subscribeTelemetry(event => events.push(event));
+			const service = new RuntimeService({
+				async request(req) {
+					if ("error" in testCase) throw testCase.error;
+					return okResponse(req.id, testCase.response);
+				},
+			});
+			let result: unknown;
+			let failure: unknown;
+			try {
+				result = await service.run(
+					{ code: "process.exit(2)", language: "js" },
+					"signal" in testCase ? testCase.signal : undefined,
+					"session-a",
+				);
+			} catch (error) {
+				failure = error;
+			} finally {
+				unsubscribe();
+			}
+			const runtimeEvents = events.filter(event => event.type === "runtime.call.completed");
+			expect(runtimeEvents, testCase.name).toHaveLength(1);
+			expect(runtimeEvents[0], testCase.name).toMatchObject({
+				sessionId: "session-a",
+				method: "runtime/run",
+				language: "js",
+				...testCase.expected,
+			});
+			if ("error" in testCase) expect(failure, testCase.name).toBe(testCase.error);
+			else expect(result, testCase.name).toEqual(testCase.response);
+		}
+	});
+
+	test("records JVM and spawn action and resolved language", async () => {
+		const events: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(event => events.push(event));
+		const service = new RuntimeService(new RecordingEndpoint());
+		try {
+			await service.jvm({ action: "disassemble", language: "java", code: "class Main {}" });
+			await service.spawn({ mode: "debug", path: "main.py", language: "python" });
+		} finally {
+			unsubscribe();
+		}
+		expect(events.filter(event => event.type === "runtime.call.completed")).toEqual([
+			expect.objectContaining({ method: "runtime/jvm", action: "disassemble", language: "java" }),
+			expect.objectContaining({ method: "runtime/spawn", action: "debug", language: "python" }),
+		]);
+	});
+
+	test("telemetry sink and span failures preserve the runtime result", async () => {
+		const events: TelemetryEvent[] = [];
+		const failingUnsubscribe = subscribeTelemetry(() => {
+			throw new Error("sink failed");
+		});
+		const collectingUnsubscribe = subscribeTelemetry(event => events.push(event));
+		const spanSpy = spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttribute() {
+				throw new Error("span failed");
+			},
+		} as unknown as Span);
+		try {
+			const result = await new RuntimeService(new RecordingEndpoint()).run({ code: "1" }, undefined, "session-a");
+			expect(result.exitCode).toBe(0);
+		} finally {
+			failingUnsubscribe();
+			collectingUnsubscribe();
+			spanSpy.mockRestore();
+		}
+		expect(events.filter(event => event.type === "runtime.call.completed")).toHaveLength(1);
 	});
 
 	test("close is idempotent and waits for endpoint settlement", async () => {

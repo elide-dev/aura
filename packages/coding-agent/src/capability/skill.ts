@@ -7,15 +7,6 @@ import { defineCapability } from ".";
 import type { SourceMeta } from "./types";
 
 /**
- * Provider id for the runtime skills bundled with the agent.
- *
- * Lives here rather than in `discovery/builtin-skills` so consumers can test
- * for a bundled skill without importing (and thereby registering) the provider
- * — mirroring `BUILTIN_DEFAULTS_PROVIDER_ID` on the rule capability.
- */
-export const BUILTIN_SKILLS_PROVIDER_ID = "builtin-skills";
-
-/**
  * Parsed frontmatter from a skill file.
  */
 export interface SkillFrontmatter {

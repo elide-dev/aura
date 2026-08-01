@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import jvmDepsDescription from "../prompts/tools/jvm-deps.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { jvmLanguage, requireRuntimeService } from "./jvm-common";
@@ -41,7 +41,12 @@ export class JvmDepsTool implements AgentTool<typeof jvmDepsSchema, RuntimeJvmRe
 		const result = await requireRuntimeService(this.session).jvm(
 			{ action: "deps", ...params, cwd: this.session.cwd },
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
-		return { content: [{ type: "text", text: formatExecResult(result) }], details: result };
+		return {
+			content: [{ type: "text", text: formatExecResult(result) }],
+			details: result,
+			isError: execResultFailed(result),
+		};
 	}
 }

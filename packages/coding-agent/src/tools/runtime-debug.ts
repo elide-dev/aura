@@ -80,6 +80,7 @@ export class RuntimeDebugTool implements AgentTool<typeof runtimeDebugSchema, Ru
 				cwd: params.cwd ?? this.session.cwd,
 			},
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
 		const waitSeconds = resolveWaitSeconds(params.waitSeconds);
 		const job = await startRuntimeJob(this.session, descriptor, {

@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import runtimeInsightsDescription from "../prompts/tools/runtime-insights.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult } from "../runtime/format";
 import type { RuntimeExecResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
@@ -46,10 +46,15 @@ export class RuntimeInsightsTool implements AgentTool<typeof runtimeInsightsSche
 			throw new Error(
 				"The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).",
 			);
-		const result = await service.insights({ ...params, cwd: params.cwd ?? this.session.cwd }, signal);
+		const result = await service.insights(
+			{ ...params, cwd: params.cwd ?? this.session.cwd },
+			signal,
+			this.session.getSessionId?.() ?? undefined,
+		);
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,
+			isError: execResultFailed(result),
 		};
 	}
 }

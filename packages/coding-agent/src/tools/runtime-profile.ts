@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import runtimeProfileDescription from "../prompts/tools/runtime-profile.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult } from "../runtime/format";
 import type { RuntimeExecResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
@@ -45,10 +45,15 @@ export class RuntimeProfileTool implements AgentTool<typeof runtimeProfileSchema
 			throw new Error(
 				"The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).",
 			);
-		const result = await service.profile({ ...params, cwd: params.cwd ?? this.session.cwd }, signal);
+		const result = await service.profile(
+			{ ...params, cwd: params.cwd ?? this.session.cwd },
+			signal,
+			this.session.getSessionId?.() ?? undefined,
+		);
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,
+			isError: execResultFailed(result),
 		};
 	}
 }

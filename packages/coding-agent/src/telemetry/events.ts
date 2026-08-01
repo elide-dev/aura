@@ -9,6 +9,13 @@
 import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { UsageHistoryEntry } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import type {
+	RuntimeErrorCode,
+	RuntimeJvmAction,
+	RuntimeLanguage,
+	RuntimeMethod,
+	RuntimeSpawnMode,
+} from "../runtime/protocol";
 
 export type SessionMode = "tui" | "acp" | "rpc" | "print" | "sdk";
 export type CompactionTrigger = "threshold" | "overflow" | "idle" | "incomplete" | "manual";
@@ -22,6 +29,22 @@ export type CompactionTrigger = "threshold" | "overflow" | "idle" | "incomplete"
 export type CompactionStrategy = "context-full" | "handoff" | "shake" | "snapcompact";
 export type CompactionOutcome = "ok" | "aborted" | "error" | "will-retry" | "skipped";
 export type ErrorPhase = "chat" | "tool" | "compaction" | "session";
+
+export type RuntimeCallOutcome = "ok" | "error" | "timeout" | "cancelled";
+export type RuntimeCallErrorType = RuntimeErrorCode | "non_zero_exit" | "killed" | "unknown";
+
+export interface RuntimeCallCompletedTelemetry {
+	type: "runtime.call.completed";
+	sessionId: string | undefined;
+	method: RuntimeMethod;
+	action?: RuntimeJvmAction | RuntimeSpawnMode;
+	language?: RuntimeLanguage;
+	outcome: RuntimeCallOutcome;
+	durationMs: number;
+	exitCode?: number;
+	killed?: boolean;
+	errorType?: RuntimeCallErrorType;
+}
 
 export interface SessionStartedTelemetry {
 	type: "session.started";
@@ -101,6 +124,7 @@ export type TelemetryEvent =
 	| ErrorReportedTelemetry
 	| CompactionCompletedTelemetry
 	| CompactionSavingsTelemetry
+	| RuntimeCallCompletedTelemetry
 	| UsageLimitSnapshotTelemetry;
 
 export type TelemetrySubscriber = (event: TelemetryEvent) => void;

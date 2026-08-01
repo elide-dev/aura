@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import jvmJavadocDescription from "../prompts/tools/jvm-javadoc.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { requireRuntimeService } from "./jvm-common";
@@ -40,14 +40,19 @@ export class JvmJavadocTool implements AgentTool<typeof jvmJavadocSchema, Runtim
 		const result = await requireRuntimeService(this.session).jvm(
 			{ action: "javadoc", ...params, cwd: this.session.cwd },
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
 		if (result.exitCode !== 0 || result.killed) {
-			return { content: [{ type: "text", text: formatExecResult(result) }], details: result };
+			return {
+				content: [{ type: "text", text: formatExecResult(result) }],
+				details: result,
+				isError: execResultFailed(result),
+			};
 		}
 		const text =
 			`Generated API docs for ${result.className} → ${result.output} (${result.entryCount} entries).\n` +
 			`Top-level: ${(result.topLevel ?? []).join(", ")}\n` +
 			`Tip: open ${result.output}/index.html to browse them.`;
-		return { content: [{ type: "text", text }], details: result };
+		return { content: [{ type: "text", text }], details: result, isError: execResultFailed(result) };
 	}
 }

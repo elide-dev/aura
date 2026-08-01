@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import jvmDisassembleDescription from "../prompts/tools/jvm-disassemble.md" with { type: "text" };
+import { execResultFailed } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { jvmLanguage, renderJvmPayload, requireRuntimeService } from "./jvm-common";
@@ -39,7 +40,12 @@ export class JvmDisassembleTool implements AgentTool<typeof jvmDisassembleSchema
 		const result = await requireRuntimeService(this.session).jvm(
 			{ action: "disassemble", ...params, cwd: this.session.cwd },
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
-		return { content: [{ type: "text", text: renderJvmPayload(result, result.stdout) }], details: result };
+		return {
+			content: [{ type: "text", text: renderJvmPayload(result, result.stdout) }],
+			details: result,
+			isError: execResultFailed(result),
+		};
 	}
 }

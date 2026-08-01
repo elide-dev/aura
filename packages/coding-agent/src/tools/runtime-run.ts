@@ -3,7 +3,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import runtimeRunDescription from "../prompts/tools/runtime-run.md" with { type: "text" };
 import { disposeCachedRuntimeService } from "../runtime";
-import { formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult } from "../runtime/format";
 import { type RuntimeExecResult, RuntimeRpcError } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
@@ -52,7 +52,11 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 			);
 		let result: RuntimeExecResult;
 		try {
-			result = await service.run({ ...params, cwd: params.cwd ?? this.session.cwd }, signal);
+			result = await service.run(
+				{ ...params, cwd: params.cwd ?? this.session.cwd },
+				signal,
+				this.session.getSessionId?.() ?? undefined,
+			);
 		} catch (error) {
 			if (error instanceof RuntimeRpcError && error.code === "internal" && this.session.runtimeServiceScope) {
 				try {
@@ -66,6 +70,7 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,
+			isError: execResultFailed(result),
 		};
 	}
 }

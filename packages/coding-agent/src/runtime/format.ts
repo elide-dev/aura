@@ -1,5 +1,10 @@
 import type { RuntimeExecResult } from "./protocol";
 
+/** Whether an execution result represents a failed, timed out, or cancelled tool call. */
+export function execResultFailed(result: RuntimeExecResult): boolean {
+	return result.exitCode !== 0 || result.killed;
+}
+
 /**
  * Render an exec result for the model: stdout, stderr, and an exit annotation.
  *

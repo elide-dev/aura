@@ -524,31 +524,18 @@ The process adapter remains the default. `AURA_RUNTIME_ADAPTER=process|embedded|
 
 Embedded library resolution checks a nonblank `runtime.embeddedPath`, then a nonblank `AURA_RUNTIME_EMBEDDED_LIB`, then the pinned managed runtime version's `lib` directory, and finally the `lib` directory adjacent to an already-resolved real runtime binary. Candidates must be regular files. Resolution never scans `PATH` for shared libraries.
 
-#### Bundled runtime skills
+#### Inherent runtime guidance
 
-Five skills ship with the agent and are discovered in every session:
-`skill://runtime` (the `run`/`check`/`build` surface and when to prefer it over
-`bash` or `eval`), `skill://insights`, `skill://profiling`, `skill://jvm`, and
-`skill://stateful-debugger` (the `runtime_debug`/`serve` flows and their
-`hub`-owned lifecycle). They carry the strategy the per-tool descriptions cannot
-— when `cputracing` beats `cpusampling`, why a one-shot instrumented run emits no
-`close` event, how the JVM main class is derived.
+Runtime selection is part of Aura's system policy whenever runtime tools are
+registered. The agent chooses direct execution (`run`), validation (`check`),
+artifact builds (`build`), instrumentation (`insights`), profiling (`profile`),
+stateful debugging/serving, project advice, and JVM specialists from the
+available tool inventory. Tool prompts remain the argument and failure-shape
+reference.
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `skills.enableBundled` | boolean | `true` | Discover the bundled runtime skills. Also retired automatically when `runtime.enabled` is off, since they document tools that are then unregistered. |
-
-They are materialized into `<config dir>/agent/builtin-skills/<name>/SKILL.md`
-(the skill machinery reads a skill's body back from its path) and rewritten from
-the embedded copy whenever a file drifts, so edit them there and the change is
-reverted on the next launch. Turning either toggle off removes that tree again.
-
-Only what the agent itself wrote is ever deleted: the directory carries a
-`.bundled.json` manifest naming the skills it materialized, and a skill you place
-in there yourself is left alone (it is discovered like any other). To override a
-bundled skill, author one of the same name in any normal skills directory — the
-bundled provider sits at the lowest skill priority, so yours wins. To drop one,
-list its name in `skills.ignoredSkills`.
+These capabilities are implicit: they are not materialized as skills, do not
+appear in skill lists or `/skill:*` commands, and require no skill-load round
+trip. `runtime.enabled` remains the single capability gate.
 
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.

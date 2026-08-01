@@ -65,6 +65,7 @@ export class RuntimeServeTool implements AgentTool<typeof serveSchema, RuntimeJo
 				cwd: params.cwd ?? this.session.cwd,
 			},
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
 		const waitSeconds = resolveWaitSeconds(params.waitSeconds);
 		const job = await startRuntimeJob(this.session, descriptor, {

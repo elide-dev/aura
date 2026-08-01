@@ -148,6 +148,55 @@ describe("otlp sink", () => {
 		await provider.shutdown();
 	});
 
+	it("exports bounded runtime call count and wall-clock duration dimensions", async () => {
+		const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+		const provider = new MeterProvider({
+			readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+		});
+		const recorder = new AuraMetricRecorder(provider.getMeter("test"));
+		const logs: Array<{ eventName: string; attributes: Record<string, unknown> }> = [];
+		const unregister = registerOtlpSink({
+			recorder,
+			emitLog: (_level, _body, attributes, eventName) => logs.push({ eventName, attributes }),
+		});
+
+		emitTelemetryEvent({
+			type: "runtime.call.completed",
+			sessionId: "s1",
+			method: "runtime/run",
+			language: "python",
+			outcome: "error",
+			durationMs: 125,
+			exitCode: 2,
+			killed: false,
+			errorType: "non_zero_exit",
+		});
+
+		const metrics = await collect(exporter, provider);
+		const calls = metrics.find(metric => metric.descriptor.name === "aura.runtime.calls");
+		const duration = metrics.find(metric => metric.descriptor.name === "aura.runtime.duration");
+		const attributes = calls?.dataPoints[0]?.attributes;
+		expect(calls?.dataPoints[0]?.value).toBe(1);
+		expect(duration?.dataPoints[0]?.value).toMatchObject({ sum: 125, count: 1 });
+		expect(attributes).toMatchObject({
+			"aura.runtime.method": "runtime/run",
+			"aura.runtime.language": "python",
+			"aura.runtime.outcome": "error",
+		});
+		expect(attributes).not.toHaveProperty("error.message");
+		expect(logs).toContainEqual({
+			eventName: "aura.runtime.call.completed",
+			attributes: expect.objectContaining({
+				"session.id": "s1",
+				"aura.runtime.duration_ms": 125,
+				"error.type": "non_zero_exit",
+			}),
+		});
+
+		unregister();
+		await provider.shutdown();
+	});
+
 	it("counts error.reported with phase attribute", async () => {
 		const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 		const provider = new MeterProvider({

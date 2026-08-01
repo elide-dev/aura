@@ -286,6 +286,40 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(userInner?.parentSpanContext?.spanId).toBe(tool?.spanContext().spanId);
 	});
 
+	it("records ERROR status when a tool returns a non-throwing failure result", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{ content: [{ type: "toolCall", id: "tc-1", name: "reject", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {},
+		};
+		const rejectSchema = z.object({ value: z.string() });
+		const rejectTool: AgentTool<typeof rejectSchema> = {
+			name: "reject",
+			label: "Reject",
+			description: "returns a handled failure",
+			parameters: rejectSchema,
+			execute: async () => ({
+				content: [{ type: "text", text: "request rejected" }],
+				details: {},
+				isError: true,
+			}),
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [rejectTool] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		const tool = findSpan(exporter.getFinishedSpans(), "execute_tool reject");
+		expect(tool?.status.code).toBe(SpanStatusCode.ERROR);
+		expect(tool?.attributes[GenAIAttr.ErrorType]).toBe("tool_error");
+		expect(tool?.events.some(event => event.name === "exception")).toBe(false);
+	});
+
 	it("records ERROR status + exception when a tool throws", async () => {
 		const mock = createMockModel({
 			...MOCK_IDENT,

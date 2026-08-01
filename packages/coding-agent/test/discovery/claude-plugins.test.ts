@@ -396,6 +396,56 @@ describe("listClaudePluginRoots", () => {
 		expect(found).toBeDefined();
 		expect(found?.path).toContain(path.join(".claude", "skills", "manifest-skill", "SKILL.md"));
 	});
+
+	test("promotes only canonical Superpowers workflow skills out of discovery", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const superpowersPath = path.join(tempDir, "plugins", "superpowers");
+		const authoredPath = path.join(tempDir, "plugins", "authored-workflows");
+		await Promise.all([
+			fs.mkdir(pluginsDir, { recursive: true }),
+			fs.mkdir(path.join(superpowersPath, "skills", "using-superpowers"), { recursive: true }),
+			fs.mkdir(path.join(superpowersPath, "skills", "frontend-design"), { recursive: true }),
+			fs.mkdir(path.join(authoredPath, "skills", "using-superpowers"), { recursive: true }),
+		]);
+		const entry = (installPath: string) => ({
+			scope: "user",
+			installPath,
+			version: "1.0.0",
+			installedAt: "2026-08-01T00:00:00Z",
+			lastUpdated: "2026-08-01T00:00:00Z",
+		});
+		await fs.writeFile(
+			path.join(pluginsDir, "installed_plugins.json"),
+			JSON.stringify({
+				version: 2,
+				plugins: {
+					"superpowers@superpowers-marketplace": [entry(superpowersPath)],
+					"authored-workflows@market": [entry(authoredPath)],
+				},
+			}),
+		);
+		await Promise.all([
+			fs.writeFile(
+				path.join(superpowersPath, "skills", "using-superpowers", "SKILL.md"),
+				"---\nname: using-superpowers\ndescription: Universal dispatcher\n---\nCore workflow.\n",
+			),
+			fs.writeFile(
+				path.join(superpowersPath, "skills", "frontend-design", "SKILL.md"),
+				"---\nname: frontend-design\ndescription: Domain design guidance\n---\nDomain skill.\n",
+			),
+			fs.writeFile(
+				path.join(authoredPath, "skills", "using-superpowers", "SKILL.md"),
+				"---\nname: using-superpowers\ndescription: Authored override\n---\nAuthored skill.\n",
+			),
+		]);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		const coreSkills = result.all.filter(skill => skill.name === "using-superpowers");
+
+		expect(result.all.find(skill => skill.name === "frontend-design")).toBeDefined();
+		expect(coreSkills).toHaveLength(1);
+		expect(coreSkills[0]?.path).toStartWith(authoredPath);
+	});
 	test("keeps plugin skills out of slash commands while loading them as skills", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		const pluginPath = path.join(tempDir, "plugins", "understand-anything");

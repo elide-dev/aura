@@ -12,11 +12,15 @@ import type { ToolSession } from "../src/tools";
 import { wrapToolWithMetaNotice } from "../src/tools/output-meta";
 import { RuntimeRunTool } from "../src/tools/runtime-run";
 
-function sessionWith(overrides: { enabled?: boolean; run?: (p: unknown) => Promise<RuntimeExecResult> }): ToolSession {
+function sessionWith(overrides: {
+	enabled?: boolean;
+	run?: (p: unknown, signal?: AbortSignal, sessionId?: string) => Promise<RuntimeExecResult>;
+}): ToolSession {
 	const service = overrides.run ? { run: overrides.run } : undefined;
 	return {
 		settings: { get: (key: string) => (key === "runtime.enabled" ? (overrides.enabled ?? true) : undefined) },
 		getRuntimeService: () => (overrides.enabled === false ? undefined : (service as never)),
+		getSessionId: () => "session-a",
 	} as unknown as ToolSession;
 }
 
@@ -34,10 +38,12 @@ describe("run tool", () => {
 
 	test("execute forwards params to the service and formats the result", async () => {
 		let received: unknown;
+		let receivedSessionId: string | undefined;
 		const tool = RuntimeRunTool.createIf(
 			sessionWith({
-				run: async p => {
+				run: async (p, _signal, sessionId) => {
 					received = p;
+					receivedSessionId = sessionId;
 					return { exitCode: 0, stdout: "hello\n", stderr: "", durationMs: 5, killed: false };
 				},
 			}),
@@ -48,9 +54,25 @@ describe("run tool", () => {
 			new AbortController().signal,
 		);
 		expect((received as { code: string }).code).toBe("console.log('hello')");
+		expect(receivedSessionId).toBe("session-a");
 		const block = result?.content[0] as { type: "text"; text: string } | undefined;
 		expect(block?.text).toContain("hello");
 		expect(result?.details).toMatchObject({ exitCode: 0 });
+	});
+
+	test.each([
+		{
+			name: "nonzero exit",
+			exec: { exitCode: 2, stdout: "", stderr: "boom", durationMs: 3, killed: false },
+		},
+		{
+			name: "killed execution",
+			exec: { exitCode: 0, stdout: "", stderr: "", durationMs: 3, killed: true },
+		},
+	])("marks $name as a tool error", async ({ exec }) => {
+		const tool = RuntimeRunTool.createIf(sessionWith({ run: async () => exec }));
+		const result = await tool?.execute("id1", { code: "fail()" } as never, new AbortController().signal);
+		expect(result?.isError).toBe(true);
 	});
 
 	test("evicts an internally failed cached service so the next call gets a fresh runtime", async () => {

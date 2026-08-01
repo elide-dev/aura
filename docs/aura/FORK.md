@@ -24,7 +24,7 @@ and after every upstream merge.
 | `packages/coding-agent/src/modes/setup-wizard/wizard-overlay.ts` | one symbol: the wizard scene header renders `AURA_LOGO` |
 | `packages/coding-agent/src/tools/renderers.ts` | one import + one `...runtimeToolRenderers` spread at the head of `toolRenderers`, registering the thirteen runtime tool renderers. The spread is first so a future upstream entry with the same key would win rather than be silently shadowed; all renderer logic lives in the fork-owned `tools/runtime-renderer.ts`, so this row stays a two-line change through any merge |
 | `packages/coding-agent/src/cli/gallery-fixtures/index.ts` | one import + one `...runtimeFixtures` spread, adding the runtime tool family's `omp gallery` sample data (the fixtures themselves are the fork-owned sibling module `gallery-fixtures/runtime.ts`). Without it the coverage test still passes — unfixtured tools fall back to a generic sample — but the runtime rows render as placeholder args |
-| `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`) and `theme.light` default = `aura-light` (was `light`), so the fork's terminal-background auto light/dark switching stays on-brand in both directions; `runtime.*` settings (`runtime.enabled`, `runtime.adapter` with process default and explicit-embedded no-fallback, `runtime.autoDownload`, `runtime.path`, `runtime.version`, `runtime.embeddedPath`) added to the `tools` tab, plus `skills.enableBundled` (default `true`, `tools`/`Runtime` tab-group) and its `enableBundled?: boolean` field on `SkillsSettings` — `settings.getGroup("skills")` derives the object from the `skills.*` keys, so the new toggle threads to `loadSkills` with no call-site special case; `DEFAULT_BASH_INTERCEPTOR_RULES` retains only the ordinary user-controlled dedicated-tool nudges |
+| `packages/coding-agent/src/config/settings-schema.ts` | `theme.dark` default = `aura` (was `titanium`) and `theme.light` default = `aura-light` (was `light`), so the fork's terminal-background auto light/dark switching stays on-brand in both directions; `runtime.*` settings (`runtime.enabled`, `runtime.adapter` with process default and explicit-embedded no-fallback, `runtime.autoDownload`, `runtime.path`, `runtime.version`, `runtime.embeddedPath`) added to the `tools` tab; `DEFAULT_BASH_INTERCEPTOR_RULES` retains only the ordinary user-controlled dedicated-tool nudges |
 | `packages/coding-agent/src/tools/report-tool-issue.ts`, `src/cli/grievances-cli.ts`, `test/tools/report-tool-issue.test.ts` | default Auto-QA collector copy points at Aura's Elide-operated `qa.elide.dev` endpoint; tests pin the fork default and preserve explicit setting / `PI_AUTO_QA_PUSH_URL` precedence. Keep upstream batching, consent, local retention, and push behavior unchanged when resolving merges |
 | `packages/coding-agent/src/tools/bash.ts` | selects configured rules through `activeBashInterceptorRules(getBashInterceptorRules(), settings.get("bashInterceptor.enabled"))`; the toggle gates every rule, and direct runtime-binary commands are not intercepted |
 | `packages/coding-agent/src/tools/index.ts` | `ToolSession.getRuntimeService?: () => RuntimeService \| undefined` accessor added beside `getMnemopiSessionState`, plus the root-owned `runtimeServiceScope` propagated into every subagent executor; imports the five `Runtime*Tool` classes and registers engine-aware `run` plus `check`/`build`/`insights`/`profile` in `BUILTIN_TOOLS` via their `createIf` gates; imports the five specialized `Jvm*Tool` classes and registers `jvm_disassemble`/`jvm_format`/`jvm_jar`/`jvm_deps`/`jvm_javadoc` on the same `runtime.enabled` gate as discoverable tools; plus `RuntimeDebugTool`/`RuntimeServeTool` registered as `runtime_debug`/`serve`, and `RuntimeAdviceTool` as read-only `project_advice` |
@@ -47,9 +47,8 @@ and after every upstream merge.
 | `packages/coding-agent/src/commands/launch.ts` | `prepend-system-prompt: Flags.string(...)` and `runtime: Flags.string(...)` declared for oclif's generated `--help`; the real parse lives in `cli/args.ts` (same pattern as `--auto-approve` / `--approval-mode`) |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
 | `packages/coding-agent/src/sdk.ts` | `CreateAgentSessionOptions.prependSystemPrompt`, forwarded to `buildSystemPrompt` as `resolvedPrependSystemPrompt` and included in the fork-cache-shape check; wires selected/composite runtime settings onto the lazy `toolSession.getRuntimeService` accessor; creates a root-owned runtime cache/config scope, exposes the canonical settings snapshot reader for private top-level session factories, and propagates that scope into every descendant; every top-level session sharing that scope acquires an idempotent lease while subagents never acquire or release one; startup failure releases the lease; last release asynchronously evicts/closes only that scope |
-| `packages/coding-agent/src/discovery/index.ts` | one line: `import "./builtin-skills";` in the provider side-effect import block, registering the bundled runtime-skills provider |
-| `packages/coding-agent/src/capability/skill.ts` | added `BUILTIN_SKILLS_PROVIDER_ID = "builtin-skills"`, mirroring `BUILTIN_DEFAULTS_PROVIDER_ID` on the rule capability, so consumers can identify a bundled skill without importing (and registering) the provider |
-| `packages/coding-agent/src/extensibility/skills.ts` | `loadSkills` destructures `enableBundled = true` and `isSourceEnabled` gains an explicit `BUILTIN_SKILLS_PROVIDER_ID` branch above the third-party toggles. Load-bearing: the fallback at the end of `isSourceEnabled` returns `anyThirdPartySkillToggleEnabled`, which would let the Codex/Claude/Pi toggles silently retire an agent-native bundled skill (the same class of bug as issue #2401 for managed skills) |
+| `packages/coding-agent/src/prompts/system/system-prompt.md`, `src/discovery/claude-plugins.ts` | promotes runtime selection and the universal engineering method into the inherent system layer; canonical Superpowers workflow skills are filtered only within the canonical plugin provider, while domain skills and same-named user/project skills remain discoverable |
+| `packages/coding-agent/src/telemetry/{events,metrics,sink-otlp}.ts` | adds bounded `runtime.call.completed` events, `aura.runtime.calls` and `aura.runtime.duration` instruments, and structured OTLP logs without source, arguments, output, paths, or exception messages |
 | `packages/coding-agent/src/session/agent-session-types.ts` | adds the optional root-owned `disposeRuntimeService` lifecycle callback and inherited `runtimeServiceScope` to `AgentSessionConfig` |
 | `packages/coding-agent/src/session/agent-session.ts` | retains the inherited runtime scope for descendant creation and accepts the runtime disposal callback only for main sessions; disposal first performs the bounded owned-`AsyncJobManager` drain/cancel so active descendants settle before final runtime release, then runs that release once with the remaining bounded parallel teardown |
 | `packages/coding-agent/src/commit/agentic/agent.ts` | creates or accepts one explicit root runtime scope for the private commit-agent session and passes the identical object to both the root SDK session and commit-tool factory |
@@ -76,9 +75,9 @@ and after every upstream merge.
 | `packages/metaharness/src/runtime-benchmark-suite.test.ts` | verifies the runtime task catalog, generated Harbor task structure, task-owned executable Bun, Bun-only TypeScript verifier contract, and deterministic smoke-source feature coverage |
 | `packages/metaharness/src/runtime-benchmark.ts` | orchestrates balanced matched agent arms with production-essential runtime tools plus task-specific discoverable tools, injects repository-packaged process and embedded runtime artifacts into source-mounted task containers, blocks model launches on the deterministic TypeScript verifier smoke, resumes interrupted frozen campaigns without rerunning completed Harbor jobs, reconstructs full arm elapsed time, aggregates paired effectiveness/latency/token/adoption evidence, and freezes the verifier Bun version/SHA-256 beside per-task tools and hashes |
 | `packages/metaharness/src/runtime-benchmark.test.ts` | covers matched and historical arm construction, task-specific runtime tool exposure, packaged runtime path injection, resumable arm selection and persisted elapsed-time reconstruction, canonical per-trial measurements and tool-call counting, paired confidence/gate logic, manifest identity including verifier Bun metadata, report metrics, adapter sample ordering/output acceptance, percentile and speedup math, option precedence, and service cleanup |
-| `packages/metaharness/package.json` | exposes the `bench:runtime` package script for the Aura runtime capability and microbenchmark suite |
-| `packages/metaharness/README.md` | documents the one-command runtime benchmark, resumable frozen campaigns, its comparison contract, outputs, focused run modes, and opt-in 30-iteration process-vs-embedded decision run |
-| `package.json` | exposes root `bench:runtime` as the one-command entrypoint for Aura's matched-arm runtime evaluation and `build:runtime-bundle` for the relocatable Aura + Elide archive builder; includes its contract test in `test:scripts` |
+| `packages/metaharness/package.json` | exposes `bench:runtime` for the broad runtime suite and `bench:inherent` for the focused two-task legacy-skills-vs-inherent-prompt comparison |
+| `packages/metaharness/README.md` | documents the broad runtime benchmark, the focused inherent-capability comparison and gates, resumable frozen campaigns, report outputs, focused run modes, and opt-in process-vs-embedded decision run |
+| `package.json` | exposes root `bench:runtime` and `bench:inherent` commands for the broad runtime suite and focused prompt comparison, plus `build:runtime-bundle` for the relocatable Aura + runtime archive; includes its contract test in `test:scripts` |
 | `docs/settings.md`, `docs/environment-variables.md` | documents `runtime.enabled` / `runtime.adapter` / `runtime.autoDownload` / `runtime.path` / `runtime.version` / `runtime.embeddedPath`, including process-default adapter selection, the validated per-process `AURA_RUNTIME_ADAPTER` override, explicit-embedded no-fallback behavior, embedded-library resolution precedence, off-pin managed-version verification limits, and links to the runtime tool pages (the five core tools, the six `jvm_*` tools, `runtime_debug`, `serve`, and `project_advice`) |
 | `packages/coding-agent/src/cli/update-cli.ts` | distribution coordinates come from `pi-utils/distribution` (`DIST_*`) instead of upstream's can1357/npm constants; `getLatestRelease` is channel-aware (GitHub `releases/latest` on the fork repo, token-aware via `GITHUB_TOKEN`/`GH_TOKEN`, npm branch retained for a future publish) and exported with a `timeoutMs` param for the startup check; `resolveReleaseBinaryAsset` additionally returns the API asset URL and `updateViaBinaryAt` downloads through it with `Accept: application/octet-stream` + bearer auth when a token is present (the browser download URL 404s while the repo is private); the reinstall hint points at `DIST_INSTALL_URL` |
 | `packages/coding-agent/src/main.ts` (version check) | `checkForNewVersion` delegates to `getLatestRelease(5_000)` from update-cli so the startup notification and `aura update` consult the same channel; any check failure stays silent |
@@ -140,13 +139,6 @@ bytes/sha because the fork's `tool-views.generated.js` carries the runtime
 tool renderers — recompute those three constants whenever an upstream merge
 changes the template sources.
 
-`packages/coding-agent/test/skills.test.ts` additionally carries one fork line:
-`enableBundled: false` in its `DISABLE_ALL_BUILTIN_SKILLS` helper. That helper
-means "every built-in skill source off", and the bundled runtime provider is a
-new source; without it the tests asserting an exact custom-directory skill list
-(and the "empty when all sources disabled" case) would see the five bundled
-skills. Resolve an upstream conflict by keeping upstream's toggles and
-re-appending this one.
 
 ## Fork-added files and directories (additive, no merge risk)
 
@@ -161,15 +153,16 @@ re-appending this one.
 - `packages/coding-agent/src/runtime/` — runtime capability core; `index.ts` owns the
   selected-service cache key, atomic swap/retirement/disposal ordering, and
   `RuntimeSettingsValues` adapter/library mapping; `service.ts` owns the idempotent
-  endpoint-awaiting close boundary; `transport/selected.ts` implements the engine-aware
-  process/embedded/Bun routing and composed status matrix, including optimistic
-  embedded Java/Kotlin dispatch with process fallback on an unsupported-language
-  response; `transport/bun.ts` owns isolated JavaScript/TypeScript child execution
+  endpoint-awaiting close boundary and observes every protocol request exactly once
+  through `telemetry.ts`, which emits bounded outcomes and annotates the active tool
+  span without changing results or failures; `transport/selected.ts` implements the
+  engine-aware process/embedded/Bun routing and composed status matrix, including
+  optimistic embedded Java/Kotlin dispatch with process fallback on unsupported
+  language; `transport/bun.ts` owns isolated JavaScript/TypeScript child execution
   through the CLI worker-host re-entry path in `bun-run-entry.ts`; `transport/local.ts`
   adds adjacent bundled Kotlin libraries to JVM run classpaths; `transport/embedded.ts`
   owns validation, lazy open/reuse, serial execution, cancellation races, poisoning,
-  teardown, and postmortem fallback;
-  `resolve.ts` owns regular-file validation shared
+  teardown, and postmortem fallback; `resolve.ts` owns regular-file validation shared
   by binary and library resolution; and `src/runtime/embedded/` contains the
   exact-precedence shared-library resolver, handwritten embedded wire adapter, schema
   identity constants, the sole `bun:ffi` ABI owner, and the typed
@@ -192,14 +185,19 @@ re-appending this one.
   services are closed without masking a primary probe failure
 - `packages/coding-agent/src/cli/version-identity.ts` — `--version` identity line
   (`<app>/<version>` + runtime protocol version)
-- `packages/coding-agent/src/discovery/builtin-skills.ts`,
-  `src/discovery/builtin-skill-sources/*.md` — bundled runtime skills, materialized
-  into the agent dir under a `.bundled.json` manifest that is the sole prune authority
 - `scripts/build-relocatable-runtime-bundle.ts`,
   `scripts/build-relocatable-runtime-bundle.test.ts` — fork-owned Linux x64/glibc
   packager and behavioral contract tests for a relocatable standalone Aura binary,
   complete Elide distribution, embedded-library sidecars, runtime overlay, launcher,
   archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root
+- `packages/metaharness/src/inherent-capability-benchmark.ts`,
+  `src/inherent-capability-benchmark.test.ts`, and
+  `packages/coding-agent/scripts/runtime-telemetry-preflight.ts` — focused current
+  smoke and matched comparison of legacy skill-mediated prompts against inherent
+  capability policy on TypeScript execution and edit-plus-verification tasks, with
+  identical tools, per-attempt AB/BA pairing, treatment hashes, a deterministic
+  success/failure telemetry preflight, and gates for task success, runtime adoption,
+  first execution choice, promoted-skill loads, tool calls, and input tokens
 - `packages/coding-agent/src/tools/runtime-*.ts` (including `runtime-launch.ts`, which
   starts runtime launch descriptors through the upstream `hub` supervisor rather than
   keeping a process registry of its own), `src/prompts/tools/runtime-*.md`,
@@ -239,19 +237,6 @@ re-appending this one.
 - `docs/tools/{run,check,build,insights,profile,runtime_debug,serve}.md` — root docs pages required by the
   `omp://` docs-coverage guard (`test/internal-urls/docs-tool-coverage.test.ts` asserts one
   `docs/tools/<name>.md` per entry in `BUILTIN_TOOL_NAMES`)
-- `packages/coding-agent/src/discovery/builtin-skills.ts` + `src/discovery/builtin-skill-sources/`
-  (`runtime.md`, `insights.md`, `profiling.md`, `jvm.md`, `stateful-debugger.md`, `index.ts`) —
-  the bundled runtime skills, embedded via `with { type: "text" }` so they survive
-  `bun build --compile`, exactly as `discovery/builtin-rules/` does for rules. The provider
-  materializes them into `<agentDir>/builtin-skills/<name>/SKILL.md` before scanning:
-  unlike a `Rule` (whose body lives in memory and is served by `rule://`), a `Skill` is a
-  path, and `buildSkillPromptMessage` plus the `skill://` handler both re-read
-  `Skill.filePath` off disk. What it wrote is recorded in a `.bundled.json` manifest,
-  and that manifest is the only deletion authority — the same directory is a place a
-  user may park a skill of their own, and a bare user-authored `SKILL.md` is
-  shape-identical to one we wrote. Priority 3 — below managed auto-learn (5) and every
-  authored provider — so any same-named skill overrides a bundled one
-- `packages/coding-agent/test/discovery/builtin-skills.test.ts` — fork-owned
 - `docs/aura/`, `docs/superpowers/`
 
 ## Naming rule
