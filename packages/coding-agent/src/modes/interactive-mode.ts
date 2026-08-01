@@ -38,6 +38,7 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
+import { isConPTYHosted } from "@oh-my-pi/pi-tui/terminal";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	$env,
@@ -319,7 +320,7 @@ function formatHudNoteMarker(count: number): string {
 		.split("")
 		.map(d => HUD_NOTE_SUP_DIGITS[d] ?? d)
 		.join("");
-	return theme.fg("dim", chalk.italic(` \u207a${sub}`));
+	return theme.fg("dim", theme.italic(` \u207a${sub}`));
 }
 
 type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
@@ -715,7 +716,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		setMarkdownMermaidRendering(settings.get("tui.renderMermaid"));
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setMaxInlineImages(settings.get("tui.maxInlineImages"));
-		this.ui.setScrollbackRebuild(settings.get("tui.scrollbackRebuild"));
+		// Scrollback rewrite defaults on for ConPTY hosts (native Windows and WSL),
+		// where a scrolled-off live preview otherwise leaves a duplicate above its
+		// committed final form (Windows Terminal viewport-follow). Elsewhere it stays
+		// off. An explicit user setting always wins.
+		this.ui.setScrollbackRebuild(
+			settings.isConfigured("tui.scrollbackRebuild") ? settings.get("tui.scrollbackRebuild") : isConPTYHosted(),
+		);
 		// OSC 66 text-sizing is Kitty-only; resolve the setting against the terminal's
 		// capability (`TERMINAL.textSizing` defaults on for Kitty) so it stays off
 		// unless the user opts in, and never emits raw escapes on other terminals.

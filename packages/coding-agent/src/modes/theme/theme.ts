@@ -18,6 +18,7 @@ import type {
 	Terminal,
 	TerminalAppearance,
 } from "@oh-my-pi/pi-tui";
+import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import chalk from "chalk";
@@ -1631,6 +1632,10 @@ export class Theme {
 	}
 
 	italic(text: string): string {
+		// Screen-family terminfo (GNU screen, tmux's default screen-256color)
+		// lacks `sitm`, so the multiplexer substitutes standout/reverse for
+		// SGR 3 and paints a solid inverse block. Emit plain text there instead.
+		if (!TERMINAL.italic) return text;
 		return chalk.italic(text);
 	}
 

@@ -4,9 +4,11 @@ import {
 	getTerminalInfo,
 	hyperlinksUserOverride,
 	ImageProtocol,
+	italicUserOverride,
 	NotifyProtocol,
 	resolveWarpImageProtocol,
 	shouldEnableHyperlinksByDefault,
+	shouldEnableItalicByDefault,
 	shouldEnableSynchronizedOutputByDefault,
 	synchronizedOutputUserOverride,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
@@ -20,6 +22,12 @@ describe("detectTerminalId", () => {
 		const env = { TERM: "xterm-256color", TERM_PROGRAM: "", COLORTERM: "truecolor", VTE_VERSION: "8400" };
 
 		expect(detectTerminalId(env)).toBe("trueColor");
+	});
+
+	it("treats Windows Terminal / WSL as truecolor via WT_SESSION when COLORTERM is absent", () => {
+		// Windows Terminal never sets COLORTERM, and WSLENV forwards only WT_SESSION,
+		// so the true-color fallback must key off WT_SESSION rather than COLORTERM.
+		expect(detectTerminalId({ WT_SESSION: "abc", TERM: "xterm-256color" })).toBe("trueColor");
 	});
 });
 
@@ -371,5 +379,51 @@ describe("shouldEnableHyperlinksByDefault", () => {
 		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1" }, "base")).toBe(true);
 		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1", TMUX: "1" }, "wezterm")).toBe(true);
 		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1", STY: "1.pts-0" }, "kitty")).toBe(true);
+	});
+});
+
+describe("italicUserOverride", () => {
+	it("returns null when neither override is set", () => {
+		expect(italicUserOverride({})).toBeNull();
+		expect(italicUserOverride({ TERM: "screen-256color" })).toBeNull();
+	});
+
+	it("returns true for the force-on flag and false for the opt-out", () => {
+		expect(italicUserOverride({ PI_FORCE_ITALIC: "1" })).toBe(true);
+		expect(italicUserOverride({ PI_NO_ITALIC: "1" })).toBe(false);
+	});
+
+	it("resolves opt-out ahead of force-on when both are set", () => {
+		expect(italicUserOverride({ PI_NO_ITALIC: "1", PI_FORCE_ITALIC: "1" })).toBe(false);
+	});
+});
+
+describe("shouldEnableItalicByDefault", () => {
+	it("enables italic on modern direct terminals and sitm-carrying TERMs", () => {
+		expect(shouldEnableItalicByDefault({ TERM: "xterm-256color" }, "kitty")).toBe(true);
+		expect(shouldEnableItalicByDefault({ TERM: "tmux-256color", TMUX: "1" }, "trueColor")).toBe(true);
+		expect(shouldEnableItalicByDefault({}, "base")).toBe(true);
+	});
+
+	it("disables italic under screen-family terminfo (no sitm -> tmux/screen paint reverse video)", () => {
+		// tmux's historical default-terminal is screen-256color, so tmux inside
+		// Windows Terminal substitutes standout for SGR 3 and paints a solid
+		// inverse block instead of slanted text.
+		expect(shouldEnableItalicByDefault({ TERM: "screen-256color", TMUX: "1" }, "trueColor")).toBe(false);
+		expect(shouldEnableItalicByDefault({ TERM: "screen" }, "base")).toBe(false);
+	});
+
+	it("disables italic when GNU screen is in the path", () => {
+		expect(shouldEnableItalicByDefault({ STY: "1234.pts-0.host", TERM: "xterm-256color" }, "kitty")).toBe(false);
+	});
+
+	it("lets PI_FORCE_ITALIC override a sitm-less TERM", () => {
+		expect(
+			shouldEnableItalicByDefault({ PI_FORCE_ITALIC: "1", TERM: "screen-256color", TMUX: "1" }, "trueColor"),
+		).toBe(true);
+	});
+
+	it("lets PI_NO_ITALIC force italic off on a capable terminal", () => {
+		expect(shouldEnableItalicByDefault({ PI_NO_ITALIC: "1", TERM: "xterm-256color" }, "kitty")).toBe(false);
 	});
 });
