@@ -2154,6 +2154,10 @@ describe("vibe session registry", () => {
 		await registry.spawn(session, { cli: "fast", name: "pre-init-kill", prompt: "Start later." });
 
 		expect((await registry.kill(session, "pre-init-kill")).cancelledTurn).toBe(true);
+		// The worker registers *after* the kill on purpose (the late-registration
+		// path under test); on slow runners registration can land after this
+		// point, so wait for the entry instead of racing it.
+		await pollUntil(() => AgentRegistry.global().get("pre-init-kill") !== undefined);
 		expect(AgentRegistry.global().get("pre-init-kill")).toMatchObject({ status: "aborted", session: null });
 		expect(
 			parentManager.getEntries().some(entry => {
