@@ -6,6 +6,30 @@
 
 package(default_visibility = ["//visibility:public"])
 
+# BuildBuddy RBE worker (exec/host platform for --config=rbe). Inherits the
+# zig gnu.2.17 platform so cc/rust toolchain resolution on the workers matches
+# local cross builds — every toolchain is a hermetic download, so the worker
+# image only supplies a shell, coreutils, and cmake/make for the audiopus_sys
+# build script (see the crate annotation in MODULE.bazel).
+#
+# Image: BuildBuddy's public Ubuntu 24.04 executor image, digest-pinned
+# (mutable tags can cache-hit stale layers). The image glibc is a real floor
+# twice over: the pruned @llvm_msvc_tools clang-cl (upstream LLVM 20.1.7
+# release binaries) links glibc 2.34 — the BB *default* executor image can't
+# even load it — and that repo rule compiles its vendored libxml2 on the host
+# running bazel, so the worker glibc must also be >= the driving host's
+# (24.04 = 2.39; ubuntu-22.04's 2.35 rejected a glibc-2.38 host build).
+platform(
+    name = "rbe-linux-x64",
+    exec_properties = {
+        "OSFamily": "Linux",
+        "Arch": "amd64",
+        "container-image": "docker://gcr.io/flame-public/rbe-ubuntu24-04@sha256:f7db0d4791247f032fdb4451b7c3ba90e567923a341cc6dc43abfc283436791a",
+        "network": "off",
+    },
+    parents = ["@zig_sdk//libc_aware/platform:linux_amd64_gnu.2.17"],
+)
+
 platform(
     name = "linux-x64-baseline",
     constraint_values = ["//bazel/variants:baseline"],

@@ -108,6 +108,24 @@ runs:
              save_needed=true
            fi
 
+           # BuildBuddy composition (jobs opt in by exporting the
+           # BUILDBUDDY_API_KEY secret into the environment; fork PRs see an
+           # empty secret and skip this cleanly):
+           #   kata pods    -> --config=bes only. Build results stream to the
+           #                   BuildBuddy UI while the artifact cache stays on
+           #                   the in-cluster bazel-remote (faster and free of
+           #                   egress); a second --remote_cache would clobber it.
+           #   hosted       -> --config=buildbuddy (BES + BuildBuddy remote
+           #                   cache). The actions/cache-backed disk cache
+           #                   composes underneath as the local layer.
+           # Mask the key BEFORE writing the rc: config=ci enables
+           # --announce_rc, which prints --remote_header lines verbatim.
+           buildbuddy_rc=""
+           if [ -n "${BUILDBUDDY_API_KEY:-}" ]; then
+             echo "::add-mask::$BUILDBUDDY_API_KEY"
+             buildbuddy_rc="common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+           fi
+
            rc="$RUNNER_TEMP/bazel-cache.rc"
            if [ "$REMOTE" = "true" ]; then
              # Mask the derived credential BEFORE writing the rc: config=ci
@@ -130,6 +148,10 @@ runs:
                echo "common --tls_certificate=infra/bazel-remote/ca.crt"
                echo "common --remote_header='authorization=Basic ${auth}'"
                echo "common --remote_download_toplevel"
+               if [ -n "$buildbuddy_rc" ]; then
+                 echo "common --config=bes"
+                 echo "$buildbuddy_rc"
+               fi
              } > "$rc"
            else
              mkdir -p "$HOME/.cache/omp-bazel-disk" "$HOME/.cache/omp-bazel-repo"
@@ -149,6 +171,10 @@ runs:
                echo "common --config=ci"
                echo "common --disk_cache=$HOME/.cache/omp-bazel-disk"
                echo "common --repository_cache=$HOME/.cache/omp-bazel-repo"
+               if [ -n "$buildbuddy_rc" ]; then
+                 echo "common --config=buildbuddy"
+                 echo "$buildbuddy_rc"
+               fi
              } > "$rc"
            fi
 

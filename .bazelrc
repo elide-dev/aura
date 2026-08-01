@@ -67,6 +67,41 @@ build:cache-ro --remote_retries=2
 build:cache-rw --remote_timeout=60s
 build:cache-ro --remote_timeout=60s
 
+# --- BuildBuddy ----------------------------------------------------------------
+# Auth rides on a `--remote_header=x-buildbuddy-api-key=…` line supplied
+# outside the repo: `~/.bazelrc` or `.bazelrc.user` locally, and the composed
+# rc fragment (BUILDBUDDY_API_KEY secret) in CI. Never commit the key.
+#
+# bes: Build Event Service only — streams invocations to the BuildBuddy UI.
+# Cache-agnostic, so it composes with the kata cluster cache or a disk cache.
+common:bes --bes_results_url=https://elide-dev.buildbuddy.io/invocation/
+common:bes --bes_backend=grpcs://elide-dev.buildbuddy.io
+common:bes --build_metadata=REPO_URL=https://github.com/elide-dev/aura.git
+
+# buildbuddy: BES + the BuildBuddy remote cache. cache-rw expands first so its
+# conservative 60s remote timeout is overridden by the longer one below
+# (BuildBuddy is an internet hop away and serves multi-MB action outputs).
+common:buildbuddy --config=bes
+common:buildbuddy --config=cache-rw
+common:buildbuddy --remote_cache=grpcs://elide-dev.buildbuddy.io
+common:buildbuddy --remote_cache_compression
+common:buildbuddy --remote_timeout=10m
+
+# rbe: remote execution on the BuildBuddy executors, on top of the cache.
+# The exec platform pins linux-amd64 + zig gnu.2.17 so cc/rust toolchain
+# resolution on the workers matches local cross builds (see
+# //bazel/platforms:rbe-linux-x64); all toolchains are hermetic downloads, so
+# the workers need no preinstalled compilers. Higher --jobs suits remote
+# fan-out; --remote_download_toplevel keeps worker outputs from flooding the
+# local disk.
+common:rbe --config=buildbuddy
+common:rbe --remote_executor=grpcs://elide-dev.buildbuddy.io
+common:rbe --host_platform=//bazel/platforms:rbe-linux-x64
+common:rbe --extra_execution_platforms=//bazel/platforms:rbe-linux-x64
+build:rbe --define=EXECUTOR=remote
+build:rbe --jobs=50
+build:rbe --remote_download_toplevel
+
 # --- Local development ---------------------------------------------------------
 # Optional user overrides (remote cache endpoint, disk cache, etc.).
 try-import %workspace%/.bazelrc.user

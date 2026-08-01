@@ -147,6 +147,11 @@ jobs:
       name: Validate Rust workspace (bazel)
       if: github.event_name != 'pull_request'
       runs-on: omp-kata
+      env:
+         # BuildBuddy BES/cache wiring — composed by the bazel-cache action.
+         # Kata pods stream results only; hosted runners also get the
+         # BuildBuddy remote cache. Empty on fork PRs, which degrades cleanly.
+         BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
@@ -186,6 +191,9 @@ jobs:
    native_addons:
       name: Build native addons (bazel)
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
+      env:
+         # See rust_validate: BES on kata, BES + remote cache on hosted.
+         BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
       steps:
          - uses: actions/checkout@v4
          - id: inputs
@@ -665,6 +673,11 @@ jobs:
          contents: read
       env:
          MACOS_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER_ID != '' && secrets.APPLE_API_KEY != '' }}
+         # BuildBuddy remote cache replaces the retired darwin disk-cache warm
+         # workflow: macos runners share bazel artifacts through BuildBuddy, so
+         # a release build reuses the previous release's actions instead of a
+         # same-image archive. Composed by the bazel-cache action.
+         BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
