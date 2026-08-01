@@ -13,6 +13,7 @@ import type { Attributes, Counter, Gauge, Histogram, Meter } from "@opentelemetr
 import type {
 	CompactionCompletedTelemetry,
 	CompactionSavingsTelemetry,
+	RuntimeCallCompletedTelemetry,
 	SessionEndedTelemetry,
 	UsageLimitSnapshotTelemetry,
 } from "./events";
@@ -57,6 +58,8 @@ export class AuraMetricRecorder {
 	readonly #toolCalls: Counter<Attributes>;
 	readonly #toolDurationMs: Histogram<Attributes>;
 	readonly #errors: Counter<Attributes>;
+	readonly #runtimeCalls: Counter<Attributes>;
+	readonly #runtimeDurationMs: Histogram<Attributes>;
 	readonly #sessionDuration: Histogram<Attributes>;
 	readonly #sessionTurns: Histogram<Attributes>;
 	readonly #compactions: Counter<Attributes>;
@@ -109,6 +112,14 @@ export class AuraMetricRecorder {
 		this.#errors = meter.createCounter("aura.agent.errors", {
 			description: "Errors observed in chat and tool execution.",
 			unit: "{error}",
+		});
+		this.#runtimeCalls = meter.createCounter("aura.runtime.calls", {
+			description: "Completed managed runtime calls.",
+			unit: "{call}",
+		});
+		this.#runtimeDurationMs = meter.createHistogram("aura.runtime.duration", {
+			description: "Managed runtime call wall-clock latency.",
+			unit: "ms",
 		});
 		this.#sessionDuration = meter.createHistogram("aura.session.duration", {
 			description: "Wall-clock session duration.",
@@ -205,6 +216,17 @@ export class AuraMetricRecorder {
 					}),
 				);
 		}
+	}
+
+	recordRuntimeCall(event: RuntimeCallCompletedTelemetry): void {
+		const attrs = metricAttributes({
+			"aura.runtime.method": event.method,
+			"aura.runtime.action": event.action,
+			"aura.runtime.language": event.language,
+			"aura.runtime.outcome": event.outcome,
+		});
+		this.#runtimeCalls.add(1, attrs);
+		this.#runtimeDurationMs.record(event.durationMs, attrs);
 	}
 
 	recordSessionEnd(event: SessionEndedTelemetry): void {

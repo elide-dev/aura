@@ -147,6 +147,59 @@ describe("system prompt tool inventory", () => {
 		} as ToolSession;
 	}
 
+	it("renders runtime selection as inherent policy only for registered capabilities", async () => {
+		const runtimeTools = new Map(TOOLS);
+		for (const name of [
+			"run",
+			"eval",
+			"check",
+			"build",
+			"insights",
+			"profile",
+			"runtime_debug",
+			"serve",
+			"project_advice",
+			"jvm_disassemble",
+			"jvm_format",
+			"jvm_jar",
+			"jvm_deps",
+			"jvm_javadoc",
+		]) {
+			runtimeTools.set(name, {
+				label: name,
+				description: `${name} description`,
+				parameters: { type: "object", properties: {} },
+			});
+		}
+		const renderWith = async (tools: Map<string, SystemPromptToolMetadata>): Promise<string> => {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: tempDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: [...tools.keys()],
+				tools,
+				workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+				nativeTools: true,
+				inlineToolDescriptors: false,
+			});
+			return systemPrompt.join("\n\n");
+		};
+
+		const inherent = await renderWith(runtimeTools);
+		const shellOnly = await renderWith(TOOLS);
+
+		expect(inherent).toContain("INHERENT CAPABILITIES");
+		expect(inherent).toContain("Direct program execution");
+		expect(inherent).toContain("Persistent exploration");
+		expect(inherent).toContain("Validation without artifacts");
+		expect(inherent).toContain("Artifact production");
+		expect(inherent).toContain("JVM bytecode disassembly");
+		expect(inherent).toContain("NEVER invoke the runtime binary through");
+		expect(shellOnly).not.toContain("## Runtime execution");
+		expect(shellOnly).toContain("## Engineering method");
+	});
+
 	it("preserves the one-argument full metadata builder", () => {
 		const metadata = buildSystemPromptToolMetadata(new Map([[SDK_TOOL.name, SDK_TOOL]]));
 

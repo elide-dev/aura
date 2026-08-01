@@ -63,6 +63,35 @@ independent of the agent install. The smoke covers `node:fs`, TypeScript syntax,
 top-level await, and the expected sorted BFS output. A smoke failure stops the
 campaign. The frozen manifest records this verifier Bun's version and SHA-256.
 
+### Inherent capability prompt comparison
+
+Run the current-configuration smoke while tuning inherent runtime and
+engineering policy:
+
+```bash
+bun run bench:inherent --prefix=inherent-smoke
+```
+
+This runs `typescript-execution` and `runtime-debugging` once against current
+source. The report requires every task to pass, use its task-specific runtime
+tool before `bash`, and load no promoted runtime/core-workflow skill.
+
+For a matched comparison, provide a pinned pre-change binary:
+
+```bash
+bun run bench:inherent --legacy-binary=/absolute/path/to/aura-linux-x64 \
+  --prefix=inherent-capabilities
+```
+
+Comparison mode runs each `(task, attempt)` as its own one-attempt job and
+alternates arm order across three attempts. Both revisions use the same model,
+reasoning level, fixtures, and `read,write,edit,bash,grep,glob,run,check,build`
+tool set. It adds no-increase gates for the median paired tool-call and input-token
+deltas. Reports record a SHA-256 for the current treatment sources and, in
+comparison mode, the pinned legacy binary. Set `AURA_LEGACY_BINARY` instead of
+passing the flag when automating repeat runs.
+
+
 
 An adapter decision run additionally compares independent process and embedded
 runtime services:

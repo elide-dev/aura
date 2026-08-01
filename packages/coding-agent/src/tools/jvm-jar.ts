@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import jvmJarDescription from "../prompts/tools/jvm-jar.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { jvmLanguage, requireRuntimeService } from "./jvm-common";
@@ -46,14 +46,19 @@ export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResu
 		const result = await requireRuntimeService(this.session).jvm(
 			{ action: "jar", mode: action, ...rest, cwd: this.session.cwd },
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
 		if (result.exitCode !== 0 || result.killed) {
-			return { content: [{ type: "text", text: formatExecResult(result) }], details: result };
+			return {
+				content: [{ type: "text", text: formatExecResult(result) }],
+				details: result,
+				isError: execResultFailed(result),
+			};
 		}
 		const text =
 			result.output === undefined
 				? `Entries of ${result.jar}:\n${result.listing ?? ""}`
 				: `Built ${result.output} (main class ${result.className}).\n[contents]\n${result.listing ?? ""}`;
-		return { content: [{ type: "text", text }], details: result };
+		return { content: [{ type: "text", text }], details: result, isError: execResultFailed(result) };
 	}
 }

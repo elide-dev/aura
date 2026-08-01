@@ -30,6 +30,22 @@ const PROVIDER_ID = "claude-plugins";
 const DISPLAY_NAME = "Claude Code Marketplace";
 const PRIORITY = 70; // Below claude.ts (80) so user .claude/ overrides win
 
+const INHERENT_SUPERPOWERS_SKILLS: Readonly<Record<string, true>> = {
+	"using-superpowers": true,
+	brainstorming: true,
+	"writing-plans": true,
+	"executing-plans": true,
+	"test-driven-development": true,
+	"systematic-debugging": true,
+	"verification-before-completion": true,
+	"dispatching-parallel-agents": true,
+	"subagent-driven-development": true,
+	"using-git-worktrees": true,
+	"requesting-code-review": true,
+	"receiving-code-review": true,
+	"finishing-a-development-branch": true,
+};
+
 interface ClaudePluginManifest {
 	skills?: string | string[];
 	"slash-commands"?: string | string[];
@@ -209,10 +225,10 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 					}),
 				),
 			);
-			return { scanResults, resolveWarnings };
+			return { root, scanResults, resolveWarnings };
 		}),
 	);
-	for (const { scanResults, resolveWarnings } of results) {
+	for (const { root, scanResults, resolveWarnings } of results) {
 		warnings.push(...resolveWarnings);
 		// Intentionally do NOT prefix skill names with `root.plugin`.
 		// The `plugin:name` format breaks skill:// URL parsing (colons are
@@ -220,7 +236,11 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 		// Dedup-by-key in the capability layer already handles name collisions
 		// across providers using priority ordering.
 		for (const result of scanResults) {
-			items.push(...result.items);
+			const discovered =
+				root.plugin === "superpowers"
+					? result.items.filter(skill => INHERENT_SUPERPOWERS_SKILLS[skill.name] !== true)
+					: result.items;
+			items.push(...discovered);
 			if (result.warnings) warnings.push(...result.warnings);
 		}
 	}

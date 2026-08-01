@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type } from "arktype";
 import jvmFormatDescription from "../prompts/tools/jvm-format.md" with { type: "text" };
+import { execResultFailed } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { jvmLanguage, renderJvmPayload, requireRuntimeService } from "./jvm-common";
@@ -38,7 +39,12 @@ export class JvmFormatTool implements AgentTool<typeof jvmFormatSchema, RuntimeJ
 		const result = await requireRuntimeService(this.session).jvm(
 			{ action: "format", ...params, cwd: this.session.cwd },
 			signal,
+			this.session.getSessionId?.() ?? undefined,
 		);
-		return { content: [{ type: "text", text: renderJvmPayload(result, result.formatted) }], details: result };
+		return {
+			content: [{ type: "text", text: renderJvmPayload(result, result.formatted) }],
+			details: result,
+			isError: execResultFailed(result),
+		};
 	}
 }

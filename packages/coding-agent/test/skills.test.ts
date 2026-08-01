@@ -41,9 +41,6 @@ const DISABLE_ALL_BUILTIN_SKILLS = {
 	enablePiProject: false,
 	enableAgentsUser: false,
 	enableAgentsProject: false,
-	// Fork-added: the bundled runtime skills provider is agent-native and has its
-	// own toggle, so "every built-in source off" must switch it off explicitly.
-	enableBundled: false,
 } as const;
 
 describe("skills", () => {

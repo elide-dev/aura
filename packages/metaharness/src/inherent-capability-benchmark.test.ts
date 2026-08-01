@@ -1,0 +1,183 @@
+import { describe, expect, it } from "bun:test";
+import {
+	analyzeInherentBenchmark,
+	buildInherentBenchmarkLaunches,
+	INHERENT_BENCHMARK_TASK_IDS,
+	INHERENT_BENCHMARK_TOOLS,
+	parseInherentBenchmarkCli,
+	runInherentTelemetryProbe,
+	scanInherentTranscript,
+} from "./inherent-capability-benchmark";
+import type { ArmSummary, RuntimeTaskMeasurement } from "./runtime-benchmark";
+
+function summary(
+	arm: "baseline" | "runtime",
+	options: { pass?: number; toolCalls?: number[]; inputTokens?: number[] } = {},
+): ArmSummary {
+	const toolCalls = options.toolCalls ?? [4, 4, 5, 5, 6, 6];
+	const inputTokens = options.inputTokens ?? [100, 100, 110, 110, 120, 120];
+	const trials = toolCalls.map((calls, index) => ({
+		taskId: INHERENT_BENCHMARK_TASK_IDS[index % INHERENT_BENCHMARK_TASK_IDS.length],
+		trialName: `trial-${index}`,
+		status: "pass" as const,
+		detail: "",
+		durationMs: 100,
+		tokIn: inputTokens[index],
+		tokOut: 10,
+		tokCache: 0,
+		costUsd: 0,
+		toolCalls: calls,
+		runtimeUsed: arm === "runtime",
+	}));
+	const taskMeasurements = INHERENT_BENCHMARK_TASK_IDS.map(taskId => ({
+		taskId,
+		group: taskId === "typescript-execution" ? ("execution" as const) : ("debugging" as const),
+		trials: trials.filter(trial => trial.taskId === taskId),
+	})) satisfies RuntimeTaskMeasurement[];
+	const pass = options.pass ?? trials.length;
+	return {
+		arm,
+		tasks: INHERENT_BENCHMARK_TASK_IDS.length,
+		trials: trials.length,
+		completedTrials: trials.length,
+		pass,
+		fail: trials.length - pass,
+		error: 0,
+		costUsd: 0,
+		tokIn: inputTokens.reduce((sum, value) => sum + value, 0),
+		tokOut: trials.length * 10,
+		tokCache: 0,
+		durationMs: trials.length * 100,
+		elapsedMs: trials.length * 100,
+		medianDurationMs: 100,
+		toolCalls: toolCalls.reduce((sum, value) => sum + value, 0),
+		runtimeTasks: arm === "runtime" ? INHERENT_BENCHMARK_TASK_IDS.length : 0,
+		runtimeTrials: arm === "runtime" ? trials.length : 0,
+		taskMeasurements,
+	};
+}
+
+describe("inherent capability benchmark", () => {
+	it("runs one-attempt jobs in alternating matched arm order", () => {
+		const options = parseInherentBenchmarkCli(["--legacy-binary=/tmp/legacy-omp", "--prefix=inherent-test"], {});
+		const launches = buildInherentBenchmarkLaunches(options, "/tmp/tasks");
+		expect(launches).toHaveLength(12);
+		expect(launches.map(launch => [launch.attempt, launch.arm, launch.taskId])).toEqual([
+			[1, "legacy", "typescript-execution"],
+			[1, "inherent", "typescript-execution"],
+			[1, "inherent", "runtime-debugging"],
+			[1, "legacy", "runtime-debugging"],
+			[2, "inherent", "typescript-execution"],
+			[2, "legacy", "typescript-execution"],
+			[2, "legacy", "runtime-debugging"],
+			[2, "inherent", "runtime-debugging"],
+			[3, "legacy", "typescript-execution"],
+			[3, "inherent", "typescript-execution"],
+			[3, "inherent", "runtime-debugging"],
+			[3, "legacy", "runtime-debugging"],
+		]);
+		for (const launch of launches) {
+			expect(launch.args).toContain("--attempts=1");
+			expect(launch.args).toContain(`--agent-arg=${INHERENT_BENCHMARK_TOOLS.join(",")}`);
+		}
+		expect(launches[0].args).toContain("--binary=/tmp/legacy-omp");
+		expect(launches[1].args).toContain("--install=source");
+	});
+
+	it("defaults to a one-attempt current-only smoke", () => {
+		const options = parseInherentBenchmarkCli(["--prefix=inherent-smoke"], {});
+		expect(options.attempts).toBe(1);
+		expect(options.legacyBinary).toBeUndefined();
+		const launches = buildInherentBenchmarkLaunches(options, "/tmp/tasks");
+		expect(launches.map(launch => [launch.arm, launch.taskId])).toEqual([
+			["inherent", "typescript-execution"],
+			["inherent", "runtime-debugging"],
+		]);
+	});
+
+	it("extracts first execution choice and promoted skill loads from emitted transcript events", () => {
+		const transcript = [
+			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "/app/events.jsonl" } }),
+			JSON.stringify({ type: "tool_execution_start", toolName: "run", args: { path: "/app/aggregate.py" } }),
+			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "skill://runtime" } }),
+			JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "read",
+				args: { path: "skill://superpowers:receiving-code-review" },
+			}),
+			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "skill://frontend-design" } }),
+		].join("\n");
+		expect(scanInherentTranscript(transcript)).toEqual({ firstExecutionTool: "run", coreSkillLoads: 2 });
+	});
+
+	it("passes only when behavior improves without tool-call or token regression", () => {
+		const legacy = summary("baseline", {
+			toolCalls: [6, 6, 7, 7, 8, 8],
+			inputTokens: [150, 150, 160, 160, 170, 170],
+		});
+		const inherent = summary("runtime");
+		const traces = Array.from({ length: 3 }, () => [
+			{ taskId: "typescript-execution", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "runtime-debugging", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
+		]).flat();
+		const analysis = analyzeInherentBenchmark(legacy, inherent, traces);
+		expect(analysis.verdict).toBe("pass");
+		expect(analysis).toMatchObject({
+			inherentPassRate: 1,
+			firstExecutionSelectionRate: 1,
+			coreSkillLoads: 0,
+		});
+	});
+
+	it("fails on skill loading, wrong execution selection, or efficiency regression", () => {
+		const legacy = summary("baseline");
+		const inherent = summary("runtime", {
+			pass: 5,
+			toolCalls: [7, 7, 8, 8, 9, 9],
+			inputTokens: [130, 130, 140, 140, 150, 150],
+		});
+		const analysis = analyzeInherentBenchmark(legacy, inherent, [
+			{ taskId: "typescript-execution", facts: { firstExecutionTool: "bash", coreSkillLoads: 1 } },
+		]);
+		expect(analysis.verdict).toBe("fail");
+		expect(analysis.reasons).toEqual([
+			"inherent arm did not pass every trial",
+			"inherent arm is missing transcript evidence",
+			"inherent arm did not select the task-specific runtime tool before bash in every trial",
+			"inherent arm loaded a promoted runtime or core workflow skill",
+			"median paired tool calls increased",
+			"median paired input tokens increased",
+		]);
+	});
+
+	it("fails when any inherent trial lacks runtime adoption", () => {
+		const inherent = summary("runtime");
+		inherent.runtimeTrials -= 1;
+		const traces = Array.from({ length: 3 }, () => [
+			{ taskId: "typescript-execution", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "runtime-debugging", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
+		]).flat();
+		const analysis = analyzeInherentBenchmark(undefined, inherent, traces);
+		expect(analysis.verdict).toBe("fail");
+		expect(analysis.reasons).toContain("inherent arm did not use a runtime tool in every trial");
+	});
+
+	it("preflights bounded success and failure runtime telemetry", async () => {
+		const probe = await runInherentTelemetryProbe();
+		expect(probe.success).toMatchObject({
+			sessionId: "benchmark-preflight",
+			language: "python",
+			outcome: "ok",
+			exitCode: 0,
+		});
+		expect(probe.failure).toMatchObject({
+			sessionId: "benchmark-preflight",
+			language: "python",
+			outcome: "error",
+			exitCode: 2,
+			errorType: "non_zero_exit",
+		});
+		expect(probe.success.durationMs).toBeGreaterThanOrEqual(0);
+		expect(probe.failure.durationMs).toBeGreaterThanOrEqual(0);
+	});
+});

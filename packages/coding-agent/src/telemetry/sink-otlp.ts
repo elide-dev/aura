@@ -68,6 +68,25 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 		case "chat.usage":
 			deps.recorder?.recordChatUsage(event.event);
 			break;
+		case "runtime.call.completed":
+			deps.recorder?.recordRuntimeCall(event);
+			deps.emitLog(
+				event.outcome === "ok" ? "info" : "warn",
+				"runtime call completed",
+				otelAttributes({
+					"session.id": event.sessionId,
+					"aura.runtime.method": event.method,
+					"aura.runtime.action": event.action,
+					"aura.runtime.language": event.language,
+					"aura.runtime.outcome": event.outcome,
+					"aura.runtime.duration_ms": event.durationMs,
+					"aura.runtime.exit_code": event.exitCode,
+					"aura.runtime.killed": event.killed,
+					"error.type": event.errorType,
+				}),
+				"aura.runtime.call.completed",
+			);
+			break;
 		case "error.reported":
 			deps.recorder?.recordError(event.phase, event.errorType);
 			break;
