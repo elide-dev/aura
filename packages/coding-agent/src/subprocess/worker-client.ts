@@ -1,15 +1,20 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	$env,
-	isBunTestRuntime,
-	isCompiledBinary,
-	logger,
-	stripWindowsExtendedLengthPathPrefix,
-	workerHostEntry,
-} from "@oh-my-pi/pi-utils";
+import * as logger from "@oh-my-pi/pi-utils/logger";
+import { stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils/path";
+import { workerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
 import type { Subprocess } from "bun";
+
+// Subpath imports, NOT the @oh-my-pi/pi-utils package barrel: this module sits
+// on the CLI entry graph (cli.ts -> runtime/transport/bun), and the barrel
+// eagerly re-exports env.ts (whose import applies profile-scoped .env files —
+// forbidden before profile bootstrap) and ptree (whose import loads the
+// pi_natives addon). The env.ts symbols this module does need are pulled in
+// lazily at call time — every caller runs post-bootstrap.
+function envModule(): typeof import("@oh-my-pi/pi-utils/env") {
+	return require("@oh-my-pi/pi-utils/env");
+}
 
 /**
  * Shared lifecycle scaffolding for the ONNX inference subprocess clients
@@ -115,7 +120,7 @@ export const SMOKE_TEST_TIMEOUT_MS = 30_000;
  */
 export function resolveWorkerSpawnCmd(workerArg: string): WorkerSpawnCommand {
 	const executable = stripWindowsExtendedLengthPathPrefix(process.execPath);
-	if (isCompiledBinary()) return { cmd: [executable, workerArg] };
+	if (envModule().isCompiledBinary()) return { cmd: [executable, workerArg] };
 	const hostEntry = workerHostEntry();
 	if (hostEntry) {
 		return { cmd: [executable, path.basename(hostEntry), workerArg], cwd: path.dirname(hostEntry) };
@@ -130,7 +135,7 @@ export function resolveWorkerSpawnCmd(workerArg: string): WorkerSpawnCommand {
  * `overlay` (e.g. the tiny-model device/dtype vars) wins over inherited keys.
  */
 export function workerEnvFromParent(overlay?: Record<string, string>): Record<string, string> {
-	const base = $env as Record<string, string | undefined>;
+	const base = envModule().$env as Record<string, string | undefined>;
 	const merged: Record<string, string> = {};
 	for (const key in base) {
 		const value = base[key];
@@ -213,7 +218,7 @@ export function createWorkerSubprocess<Outbound>(options: {
 	// Don't keep the parent event loop alive on an idle worker; the dispose
 	// path calls `terminate()` explicitly. Bun's test runner starves IPC for
 	// unref'd subprocesses, so keep it referenced only under tests.
-	if (!isBunTestRuntime() && options.unref !== false) proc.unref();
+	if (!envModule().isBunTestRuntime() && options.unref !== false) proc.unref();
 	return { proc, inbound, errors, intentionalExit, stderrDrained: stderrDrained.promise };
 }
 

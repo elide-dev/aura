@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ptree } from "@oh-my-pi/pi-utils";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../../subprocess/worker-client";
 import { BUN_RUN_WORKER_ARG } from "../bun-run-entry";
 import type { RuntimeExecResult, RuntimeRpcRequest, RuntimeRpcResponse, RuntimeRunParams } from "../protocol";
@@ -55,6 +54,11 @@ export class BunRuntimeEndpoint implements RuntimeEndpoint {
 				command[1] = path.resolve(spawnCommand.cwd, command[1]);
 			}
 			command.push(sourcePath, ...(params.args ?? []));
+			// Lazy on purpose: this module sits on the CLI entry graph (cli.ts
+			// imports smokeTestBunRunWorker), and ptree eagerly loads both the
+			// pi-utils env sweep (via the package barrel) and the pi_natives
+			// addon — neither may load before profile bootstrap.
+			const ptree = await import("@oh-my-pi/pi-utils/ptree");
 			const result = await ptree.exec(command, {
 				cwd,
 				env: this.#environment(),
