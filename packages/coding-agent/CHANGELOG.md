@@ -26,6 +26,8 @@
 - Fixed Kotlin runtime execution missing the bundled standard library, and made Auto runtime selection try Java/Kotlin in-process before falling back when the embedded library does not support them yet.
 - Fixed Python path execution through process and embedded runtime adapters omitting `__file__`, script argv identity, and sibling import roots.
 - Fixed isolated and containerized Aura launches ignoring the requested runtime adapter by adding the validated `AURA_RUNTIME_ADAPTER` process override.
+- Fixed duplicated/leftover scrollback rows under Windows Terminal and WSL by defaulting `tui.scrollbackRebuild` on for ConPTY hosts (native Windows and WSL); a scrolled-off live preview otherwise remained in history with the final block appended below. An explicit setting still overrides the per-host default.
+- Fixed the `Tip:` line and other italicized UI (thinking traces, blockquotes, markdown emphasis) rendering as reverse-video highlight blocks under tmux/screen inside Windows Terminal. `theme.italic` now emits plain text when the terminal lacks `sitm` (screen-family terminfo, where the multiplexer substitutes standout for SGR 3), keeping the theme colors readable instead of painting solid inverse bars.
 
 ### Removed
 

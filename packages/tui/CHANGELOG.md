@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed dull, inconsistent colors under Windows Terminal and WSL by detecting `WT_SESSION` as a truecolor terminal in `detectTerminalId`. Windows Terminal never sets `COLORTERM` (and WSLENV forwards only `WT_SESSION`), so `TERMINAL.trueColor` was `false` while the rest of the UI assumed truecolor, quantizing markdown color swatches, LaTeX colors, and the welcome brand gradient to 256-color.
+- Fixed italic text (the welcome tip, thinking traces, blockquotes, and markdown emphasis) rendering as a solid reverse-video block under tmux/screen inside Windows Terminal. Screen-family terminfo (`screen-256color`, tmux's historical `default-terminal`) lacks `sitm`, so the multiplexer substitutes the standout attribute for SGR 3. `TERMINAL.italic` (resolved via `shouldEnableItalicByDefault`) is now off for screen-family / GNU screen sessions so italic degrades to plain text; `PI_FORCE_ITALIC=1` / `PI_NO_ITALIC=1` override.
+
 ## [17.2.2] - 2026-07-31
 
 ### Added

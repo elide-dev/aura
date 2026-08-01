@@ -112,6 +112,13 @@ export class TerminalInfo {
 		 * (macOS narrow, otherwise UAX#11).
 		 */
 		public readonly hangulJamoWidth: HangulCompatibilityJamoWidth = "platform",
+		/**
+		 * Emits SGR 3 (italic) as slanted text rather than a substituted
+		 * attribute. Runtime-resolved: screen-family terminfo lacks `sitm`, so
+		 * tmux/screen paint standout (reverse video) instead — see
+		 * {@link shouldEnableItalicByDefault}.
+		 */
+		public readonly italic: boolean = true,
 	) {}
 
 	/**
@@ -429,6 +436,53 @@ export function shouldEnableHyperlinksByDefault(
 	return true;
 }
 
+/**
+ * Resolve an explicit user override for SGR 3 (italic). Returns `false` for an
+ * opt-out, `true` for a force-on, or `null` when the user has no preference.
+ * Opt-out beats force-on, mirroring {@link hyperlinksUserOverride}.
+ */
+export function italicUserOverride(env: NodeJS.ProcessEnv = Bun.env): boolean | null {
+	if (env.PI_NO_ITALIC === "1") return false;
+	if (env.PI_FORCE_ITALIC === "1") return true;
+	return null;
+}
+
+/**
+ * Whether SGR 3 (italic) should be emitted at all.
+ *
+ * Italic reaches the screen only when the active terminfo carries `sitm`.
+ * GNU `screen` and tmux's historical `screen-256color` default-terminal do
+ * not: tmux/screen then substitute the standout attribute, so every italic run
+ * paints as a solid reverse-video block (a purple/gray highlight on the welcome
+ * tip, thinking traces, and markdown emphasis) instead of slanted text. Under
+ * WSL + Windows Terminal this is the common tmux default. Degrade to plain text
+ * in that case so the color still reads.
+ *
+ * Policy (highest precedence first):
+ *   1. Explicit override (`PI_NO_ITALIC=1` off, `PI_FORCE_ITALIC=1` on).
+ *   2. Static terminal capability (`TerminalInfo.italic`).
+ *   3. GNU screen marker (`STY`) — screen-family terminfo lacks `sitm`.
+ *   4. `TERM=screen*` (tmux's historical default or bare screen) — lacks `sitm`.
+ *   5. Otherwise on: `tmux-256color`, `xterm*`, and modern direct terminals
+ *      all advertise `sitm`. A user who forces italic on a sitm-less TERM can
+ *      use `PI_FORCE_ITALIC=1`.
+ */
+export function shouldEnableItalicByDefault(
+	env: NodeJS.ProcessEnv = Bun.env,
+	terminalId: TerminalId = TERMINAL_ID,
+): boolean {
+	const override = italicUserOverride(env);
+	if (override !== null) return override;
+
+	if (!getTerminalInfo(terminalId).italic) return false;
+
+	if (env.STY) return false;
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (term.startsWith("screen")) return false;
+
+	return true;
+}
+
 function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null {
 	if (!process.stdout.isTTY) return null;
 	if (terminalId === "vscode" || terminalId === "alacritty") return null;
@@ -501,6 +555,7 @@ export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
 		TERM_PROGRAM,
 		TERM,
 		COLORTERM,
+		WT_SESSION,
 	} = env;
 
 	if (KITTY_WINDOW_ID) return "kitty";
@@ -525,6 +580,12 @@ export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
 	if (COLORTERM) {
 		if (caseEq(COLORTERM, "truecolor") || caseEq(COLORTERM, "24bit")) return "trueColor";
 	}
+	// Windows Terminal advertises 24-bit color but sets neither COLORTERM (which
+	// it never emits) nor a TERM_PROGRAM marker, and under WSL only WT_SESSION is
+	// forwarded through WSLENV. Treat its presence as truecolor so TERMINAL.trueColor
+	// agrees with the coding-agent color-mode and synchronized-output detectors,
+	// which already key off WT_SESSION.
+	if (WT_SESSION) return "trueColor";
 	return "base";
 }
 
@@ -542,6 +603,7 @@ export interface RuntimeTerminal extends TerminalInfo {
 	deccara: boolean;
 	supportsScreenToScrollback: boolean;
 	textSizing: boolean;
+	italic: boolean;
 }
 
 export const TERMINAL: RuntimeTerminal = (() => {
@@ -570,6 +632,11 @@ export const TERMINAL: RuntimeTerminal = (() => {
 	// ignores DECCARA) exercises the padded-string fallback. Integration tests opt
 	// in explicitly through setTerminalDeccara.
 	resolved.deccara = detectRectangularSgrSupport(resolved.id, Bun.env) && !isBunTestRuntime();
+	// Italic (SGR 3). Emitted directly by modern terminals; suppressed under
+	// screen-family terminfo (GNU screen, tmux's historical screen-256color
+	// default) where tmux/screen substitute standout/reverse for the missing
+	// `sitm` and paint a solid inverse block instead of slanted text.
+	resolved.italic = shouldEnableItalicByDefault(Bun.env, resolved.id);
 	return resolved;
 })();
 
@@ -607,6 +674,11 @@ export function setTerminalScreenToScrollback(enabled: boolean): void {
  */
 export function setTerminalTextSizing(enabled: boolean): void {
 	TERMINAL.textSizing = enabled;
+}
+
+/** Override italic (SGR 3) emission at runtime; tests flip it directly. */
+export function setTerminalItalic(enabled: boolean): void {
+	TERMINAL.italic = enabled;
 }
 
 export function getTerminalInfo(
