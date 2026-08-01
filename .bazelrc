@@ -42,6 +42,12 @@ test --test_summary=terse
 build:ci --curses=no --color=yes --show_timestamps
 build:ci --announce_rc
 build:ci --verbose_failures
+# BuildBuddy metadata (buildbuddy.io/docs/guide-metadata): ROLE=CI marks the
+# invocation as CI in the UI and enables CI-side features (commit status
+# reporting); USER gives CI history one stable identity instead of per-pod
+# usernames. Inert without --config=bes.
+build:ci --build_metadata=ROLE=CI
+build:ci --build_metadata=USER=elidebot
 # Fail-fast inside one invocation; job-level matrix provides isolation.
 build:ci --keep_going=false
 # Reuse sandbox trees between actions: the zig/xwin toolchains stage ~10k-file
@@ -74,9 +80,13 @@ build:cache-ro --remote_timeout=60s
 #
 # bes: Build Event Service only — streams invocations to the BuildBuddy UI.
 # Cache-agnostic, so it composes with the kata cluster cache or a disk cache.
+# Commit metadata (COMMIT_SHA / BRANCH_NAME / GIT_TREE_STATUS) rides on the
+# workspace-status script per buildbuddy.io/docs/guide-metadata — rc files
+# cannot command-substitute, so it can't be a --build_metadata flag here.
 common:bes --bes_results_url=https://elide-dev.buildbuddy.io/invocation/
 common:bes --bes_backend=grpcs://elide-dev.buildbuddy.io
 common:bes --build_metadata=REPO_URL=https://github.com/elide-dev/aura.git
+common:bes --workspace_status_command=bazel/workspace-status.sh
 
 # buildbuddy: BES + the BuildBuddy remote cache. cache-rw expands first so its
 # conservative 60s remote timeout is overridden by the longer one below
