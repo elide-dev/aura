@@ -1,11 +1,10 @@
 //! Minimizer pipeline: detect, dispatch, and fail-safe filter execution.
 
+#[cfg(not(test))]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
 	panic::{AssertUnwindSafe, catch_unwind},
-	sync::{
-		LazyLock,
-		atomic::{AtomicU64, Ordering},
-	},
+	sync::LazyLock,
 };
 
 use crate::minimizer::{
@@ -475,22 +474,52 @@ fn resolve_pipeline<'a>(
 }
 
 // Atomic counter for commands that reached `apply` without a matching filter.
+//
+// Under `cfg(test)` the counter is thread-local instead: the test harness runs
+// tests in parallel and many of them route commands through `apply`, so a
+// process-global counter makes any exact-count assertion racy. Each test runs
+// on its own thread, so thread-local storage keeps observations deterministic.
+#[cfg(not(test))]
 static UNKNOWN_COMMAND_COUNT: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+	static UNKNOWN_COMMAND_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(not(test))]
 fn record_unknown_command(_command: &str) {
 	UNKNOWN_COMMAND_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+#[cfg(test)]
+fn record_unknown_command(_command: &str) {
+	UNKNOWN_COMMAND_COUNT.with(|count| count.set(count.get() + 1));
+}
+
 /// Total number of commands that fell through `apply` without any matching
 /// filter. Useful for a "coverage gap" indicator in telemetry dashboards.
+#[cfg(not(test))]
 pub fn unknown_command_count() -> u64 {
 	UNKNOWN_COMMAND_COUNT.load(Ordering::Relaxed)
 }
 
+#[cfg(test)]
+pub fn unknown_command_count() -> u64 {
+	UNKNOWN_COMMAND_COUNT.with(std::cell::Cell::get)
+}
+
 /// Reset the unknown-command counter (intended for tests).
+#[cfg(not(test))]
 #[doc(hidden)]
 pub fn reset_unknown_command_count() {
 	UNKNOWN_COMMAND_COUNT.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+#[doc(hidden)]
+pub fn reset_unknown_command_count() {
+	UNKNOWN_COMMAND_COUNT.with(|count| count.set(0));
 }
 
 const BUILTIN_FILTERS_TOML: &str = include_str!(concat!(env!("OUT_DIR"), "/builtin_filters.toml"));
@@ -523,7 +552,6 @@ mod tests {
 	};
 
 	static CONFIG_COUNTER: AtomicUsize = AtomicUsize::new(0);
-	pub static TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 	use super::*;
 	use crate::minimizer::MinimizerOptions;
@@ -759,7 +787,6 @@ strip_lines_matching = [".*"]
 
 	#[test]
 	fn segmented_chain_supported_command_does_not_record_unknown() {
-		let _guard = TEST_LOCK.lock();
 		// Phase 7 (Mode α resolution): supported chains route through
 		// filters::dispatch via the chain decomposer instead of falling
 		// back to passthrough. The unknown-command counter must remain
@@ -1229,8 +1256,26 @@ mod pipeline_integration_tests {
 	}
 
 	#[test]
+	fn unknown_command_counter_ignores_other_threads() {
+		reset_unknown_command_count();
+		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
+			enabled: Some(true),
+			..Default::default()
+		});
+		std::thread::spawn(move || {
+			let _ = apply("zzzobscurecmd foo", "hi\n", 0, &cfg);
+		})
+		.join()
+		.expect("worker thread");
+		assert_eq!(
+			unknown_command_count(),
+			0,
+			"another thread's unknown command must not leak into this test's counter"
+		);
+	}
+
+	#[test]
 	fn unknown_command_counter_increments() {
-		let _guard = super::tests::TEST_LOCK.lock();
 		reset_unknown_command_count();
 		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
 			enabled: Some(true),
