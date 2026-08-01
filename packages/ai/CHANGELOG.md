@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed provider source typechecking for DOM-enabled workspace consumers while preserving Cowork response streaming and Codex WebSocket/zstd request behavior.
+
 ## [17.2.2] - 2026-07-31
 
 ### Added

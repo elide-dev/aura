@@ -118,7 +118,11 @@ function createResponse(message: IncomingMessage, method: string): Response {
 	const status = message.statusCode;
 	if (status === undefined) throw new Error("Cowork transport received a response without an HTTP status.");
 	const hasBody = method !== "HEAD" && status !== 204 && status !== 304;
-	const body = hasBody ? stream.Readable.toWeb(decodedResponseStream(message)) : null;
+	// Node and DOM expose structurally distinct stream declarations, but toWeb()
+	// returns the WHATWG stream accepted by Response at runtime.
+	const body = hasBody
+		? (stream.Readable.toWeb(decodedResponseStream(message)) as unknown as ReadableStream<Uint8Array>)
+		: null;
 	return new Response(body, {
 		status,
 		statusText: message.statusMessage,

@@ -1158,6 +1158,15 @@ function notifyCodexWebSocketMalformed(
 	notifyRawSseEvent(observer, { event: "parse_error", data: text, raw });
 }
 
+function decodeCodexWebSocketFrame(data: unknown): string {
+	if (typeof data === "string") return data;
+	if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
+	if (ArrayBuffer.isView(data)) {
+		return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf-8");
+	}
+	throw new TypeError("unsupported WebSocket message frame");
+}
+
 /** @internal Exported for tests. */
 export function normalizeCodexToolChoice(
 	choice: ToolChoice | undefined,
@@ -3474,13 +3483,16 @@ class CodexWebSocketConnection {
 			this.#push(null);
 		};
 		socket.onmessage = event => {
+			// Bun's DOM-aware types currently infer this callback parameter as
+			// the MessageEvent constructor rather than an event instance.
+			const data = asRecord(event)?.data;
 			// Stamp inbound activity before parsing so even malformed frames refresh
 			// the liveness clock — what matters for reuse health is that the upstream
 			// is still talking to us, not that every frame is well-formed.
 			this.#lastInboundAt = Date.now();
-			this.#writeDebugWebSocketFrame(event.data);
+			this.#writeDebugWebSocketFrame(data);
 			try {
-				const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf-8");
+				const text = decodeCodexWebSocketFrame(data);
 				if (!text) return;
 				const parsed = JSON.parse(text) as Record<string, unknown>;
 				if (parsed.type === "error" && typeof parsed.error === "object" && parsed.error) {
@@ -3495,7 +3507,7 @@ class CodexWebSocketConnection {
 				notifyCodexWebSocketInbound(this.#streamObserver, parsed, text);
 				this.#push(parsed);
 			} catch (error) {
-				notifyCodexWebSocketMalformed(this.#streamObserver, event.data, error);
+				notifyCodexWebSocketMalformed(this.#streamObserver, data, error);
 				this.#push(new CodexWebSocketTransportError(`${String(error)}`));
 			}
 		};
@@ -3945,10 +3957,12 @@ async function getOrCreateCodexWebSocketConnection(
  * compression is disabled or fails, in which case the caller sends the
  * plain JSON string without a `content-encoding` header.
  */
-function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array | undefined {
+function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array<ArrayBuffer> | undefined {
 	if (!isOfficialCodexApiUrl(baseUrl) || !$flag("PI_CODEX_ZSTD", true)) return undefined;
 	try {
-		return Bun.zstdCompressSync(bodyJson, { level: 3 });
+		const compressed = Bun.zstdCompressSync(bodyJson, { level: 3 });
+		if (!(compressed.buffer instanceof ArrayBuffer)) return Uint8Array.from(compressed);
+		return new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteLength);
 	} catch (error) {
 		CODEX_DEBUG &&
 			logger.debug("[codex] codex request body compression failed", {
@@ -4014,7 +4028,7 @@ async function openCodexSseEventStream(
 			sentModelsEtagHeader: headers.has(X_MODELS_ETAG_HEADER),
 		});
 
-	const send = (requestBody: string | Uint8Array): Promise<Response> =>
+	const send = (requestBody: string | Uint8Array<ArrayBuffer>): Promise<Response> =>
 		fetchWithRetry(url, {
 			method: "POST",
 			headers,
