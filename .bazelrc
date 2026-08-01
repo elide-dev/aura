@@ -87,6 +87,10 @@ common:bes --bes_results_url=https://elide-dev.buildbuddy.io/invocation/
 common:bes --bes_backend=grpcs://elide-dev.buildbuddy.io
 common:bes --build_metadata=REPO_URL=https://github.com/elide-dev/aura.git
 common:bes --workspace_status_command=bazel/workspace-status.sh
+# Rich timing profiles in the BuildBuddy UI (per-action labels + outputs).
+build:bes --noslim_profile
+build:bes --experimental_profile_include_primary_output
+build:bes --experimental_profile_include_target_label
 
 # buildbuddy: BES + the BuildBuddy remote cache. cache-rw expands first so its
 # conservative 60s remote timeout is overridden by the longer one below
@@ -96,6 +100,12 @@ common:buildbuddy --config=cache-rw
 common:buildbuddy --remote_cache=grpcs://elide-dev.buildbuddy.io
 common:buildbuddy --remote_cache_compression
 common:buildbuddy --remote_timeout=10m
+# Compress blobs above this size on the wire (zstd); tiny blobs aren't worth
+# the codec round trip.
+common:buildbuddy --experimental_remote_cache_compression_threshold=100
+# Runfiles trees are only needed where actions execute; skip building the
+# local symlink forests.
+common:buildbuddy --nobuild_runfile_links
 # Route repo-rule downloads (zig/LLVM/xwin/rustc archives, multi-GB) through
 # the BuildBuddy CAS so ephemeral runners skip the upstream fetch — this
 # replaces the retired actions/cache repository-cache archives in CI.
@@ -114,7 +124,13 @@ common:rbe --host_platform=//bazel/platforms:rbe-linux-x64
 common:rbe --extra_execution_platforms=//bazel/platforms:rbe-linux-x64
 build:rbe --define=EXECUTOR=remote
 build:rbe --jobs=50
+# Build-without-the-bytes: builds materialize only top-level outputs (the
+# .node addons the natives pipeline copies out of bazel-bin); test runs
+# fetch nothing beyond logs/status — intermediate artifacts stay in the
+# BuildBuddy CAS. test:rbe expands after build:rbe for test commands, so
+# minimal wins there.
 build:rbe --remote_download_toplevel
+test:rbe --remote_download_minimal
 
 # --- Local development ---------------------------------------------------------
 # Optional user overrides (remote cache endpoint, disk cache, etc.).
