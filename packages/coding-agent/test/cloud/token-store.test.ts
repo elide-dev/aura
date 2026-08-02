@@ -113,6 +113,43 @@ describe("AuraTokenStore schema and hardening", () => {
 		}
 	});
 
+	/**
+	 * The clamp has to hold for *whichever* store creates `agent.db` first, because the cloud
+	 * rows land in the same file and the same WAL.
+	 *
+	 * SQLite derives the `-wal`/`-shm` modes from the database file's mode at the moment it
+	 * creates them. That makes the ordering decisive: `AgentStorage` creates the database under
+	 * the process umask (0644), turns on WAL and writes during schema init — minting a 0644
+	 * `-wal` — and only then chmods. Clamping the database alone therefore leaves a
+	 * world-readable WAL for the entire life of that connection, and any `aura_cloud_auth` row
+	 * written while it is open sits in those frames. First-run creation order is the case that
+	 * actually bites, so that is what this test reproduces.
+	 */
+	test("WAL and SHM are 0600 even when AgentStorage is the one that creates agent.db", async () => {
+		const { AgentStorage } = await import("../../src/session/agent-storage");
+		AgentStorage.resetInstance();
+		await AgentStorage.open(dbPath);
+		try {
+			for (const suffix of ["", "-wal", "-shm"]) {
+				const stat = await fs.stat(`${dbPath}${suffix}`).catch(() => undefined);
+				if (!stat) continue;
+				expect(`${suffix || "db"}:${(stat.mode & 0o777).toString(8)}`).toBe(`${suffix || "db"}:600`);
+			}
+			// Cloud rows written into that shared, still-open WAL stay behind 0600 too.
+			const store = await openStore();
+			store.saveLogin({ identity: identity(), refreshToken: "R0" });
+			for (const suffix of ["", "-wal", "-shm"]) {
+				const stat = await fs.stat(`${dbPath}${suffix}`).catch(() => undefined);
+				if (!stat) continue;
+				expect(`shared ${suffix || "db"}:${(stat.mode & 0o777).toString(8)}`).toBe(`shared ${suffix || "db"}:600`);
+			}
+			expect(store.readAuth(ISSUER)?.refreshToken).toBe("R0");
+			store.close();
+		} finally {
+			AgentStorage.resetInstance();
+		}
+	});
+
 	test("uses WAL journaling and a 5s busy timeout", async () => {
 		const store = await openStore();
 		try {
@@ -295,28 +332,80 @@ s.close();`;
 });
 
 describe("refresh persistence, CAS and delete", () => {
-	test("stores only the refresh token; access and API-key JWTs never reach disk", async () => {
-		const jwt = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiIwMUowVVNFUiJ9.SIGNATURE-ACCESS-SECRET";
-		const apiKeyJwt = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhcGkifQ.SIGNATURE-APIKEY-SECRET";
+	/**
+	 * The persistence invariant, checked against the committed rows rather than against strings
+	 * the test itself made up: after a full lifecycle, the *only* credential material anywhere
+	 * in the schema is the current refresh token, in exactly one column. Adding an access-token
+	 * column, caching a minted JWT, or keeping the rotated-away token as history all fail here.
+	 */
+	test("the only credential in any column is the current refresh token", async () => {
 		const store = await openStore();
+		const ns = { issuer: ISSUER, userId: USER_A };
 		try {
-			store.saveLogin({ identity: identity(), refreshToken: "R0" });
-			// There is deliberately no store API that accepts an access token.
-			expect((store as unknown as Record<string, unknown>).saveAccessToken).toBeUndefined();
-			expect((store as unknown as Record<string, unknown>).setAccessToken).toBeUndefined();
-			store.setCacheValue({ issuer: ISSUER, userId: identity().userId }, "misc", { note: "no secrets here" });
+			store.saveLogin({ identity: identity(), refreshToken: "R0-consumed" });
+			const lease = store.acquireRefreshLease(ISSUER, "owner-a");
+			if (lease.status !== "acquired") throw new Error("expected lease");
+			store.markRefreshSubmitted(ISSUER, "owner-a", lease.refreshToken);
+			store.commitRefreshRotation({
+				issuer: ISSUER,
+				owner: "owner-a",
+				previousRefreshToken: lease.refreshToken,
+				previousVersion: lease.version,
+				nextRefreshToken: "R1-current",
+				deviceId: DEVICE_A,
+			});
+			store.releaseRefreshLease(ISSUER, "owner-a");
+			store.setProfileValue(ns, "display", { name: "a" });
+			store.setCacheValue(ns, "models", ["m"], 60_000);
+			store.setSyncCursor(ns, "memories", "cursor-1");
+			store.recordSyncConflict(ns, { stream: "memories", itemId: "m1", detail: { reason: "diverged" } });
+			store.recordImportReceipt({
+				issuer: ISSUER,
+				userId: USER_A,
+				apiKeyId: KEY_A,
+				apiKey: "aura_sk_live_KEYMATERIAL",
+				surface: "model",
+				scopes: ["model:invoke"],
+				deadlineAtMs: 1_900_000_000_000,
+				realmId: REALM_A,
+				orgId: ORG_1,
+				accountId: ACCOUNT_A,
+			});
 			store.close();
 
-			const bytes = await Bun.file(dbPath).text();
-			const wal = await Bun.file(`${dbPath}-wal`)
-				.text()
-				.catch(() => "");
-			for (const blob of [bytes, wal]) {
-				expect(blob).not.toContain(jwt);
-				expect(blob).not.toContain(apiKeyJwt);
-				expect(blob).not.toContain("SIGNATURE-ACCESS-SECRET");
+			const raw = new Database(dbPath, { readonly: true });
+			const tables = (
+				raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as {
+					name: string;
+				}[]
+			).map(t => t.name);
+			expect(tables.length).toBeGreaterThan(5);
+
+			const jwtShaped = /^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+			const sightings: string[] = [];
+			for (const table of tables) {
+				const columns = (raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name);
+				for (const row of raw.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]) {
+					for (const column of columns) {
+						const value = row[column];
+						if (typeof value !== "string") continue;
+						expect(`${table}.${column} jwt-shaped:${jwtShaped.test(value)}`).toBe(
+							`${table}.${column} jwt-shaped:false`,
+						);
+						// The consumed token must survive nowhere — not as history, not in a
+						// marker (which stores a digest), not in a cache row.
+						expect(`${table}.${column} holds-consumed:${value.includes("R0-consumed")}`).toBe(
+							`${table}.${column} holds-consumed:false`,
+						);
+						expect(`${table}.${column} holds-key:${value.includes("aura_sk_live_KEYMATERIAL")}`).toBe(
+							`${table}.${column} holds-key:false`,
+						);
+						if (value.includes("R1-current")) sightings.push(`${table}.${column}`);
+					}
+				}
 			}
-			expect(bytes + wal).toContain("R0");
+			raw.close();
+			expect(sightings).toEqual(["aura_cloud_auth.refresh_token"]);
 		} finally {
 			store.close();
 		}
@@ -492,6 +581,31 @@ describe("cross-process refresh lease", () => {
 		}
 	});
 
+	// Safety must not rest on owner strings being unique per process lifetime. A restarted
+	// process is free to derive its owner from something stable (a machine or installation id),
+	// and if that made it skip its own dead attempt's marker it would replay a token the server
+	// may already have consumed — the one outcome the contract forbids.
+	test("a restart that reuses the crashed owner string is still detected as poisoned", async () => {
+		const OWNER = "stable-owner-derived-from-installation-id";
+		const crashed = await openStore();
+		crashed.saveLogin({ identity: identity(), refreshToken: "R0" });
+		const lease = crashed.acquireRefreshLease(ISSUER, OWNER, 20);
+		if (lease.status !== "acquired") throw new Error("expected lease");
+		crashed.markRefreshSubmitted(ISSUER, OWNER, lease.refreshToken);
+		crashed.close();
+		await Bun.sleep(40); // the lease lapses; the marker does not.
+
+		const restarted = await openStore();
+		try {
+			expect(restarted.acquireRefreshLease(ISSUER, OWNER).status).toBe("relogin_required");
+			// And it stays poisoned however many times that owner asks.
+			expect(restarted.acquireRefreshLease(ISSUER, OWNER).status).toBe("relogin_required");
+			expect(restarted.readAuth(ISSUER)?.refreshToken).toBe("R0");
+		} finally {
+			restarted.close();
+		}
+	});
+
 	test("an aborted attempt that never reached the server is retryable", async () => {
 		const store = await openStore();
 		try {
@@ -509,6 +623,14 @@ describe("cross-process refresh lease", () => {
 		}
 	});
 
+	/**
+	 * Scope note for Task 4: this exercises the *store* half of the stale-manager property —
+	 * that a second store instance created before a rotation reloads the rotated value on
+	 * acquisition. It can only catch a regression where someone adds a refresh cache populated
+	 * at `open()`. The manager-level property (that `TokenManager` never holds a refresh string
+	 * across a rotation, and re-derives it from `acquireRefreshLease` on every attempt) lives in
+	 * the manager and is NOT covered here; Task 4 must test it separately.
+	 */
 	test("a non-overlapping stale manager submits the reloaded token, never the cached one", async () => {
 		// A fake auth server that rotates on every accepted refresh and refuses replays.
 		const seen: string[] = [];
@@ -764,17 +886,10 @@ describe("import receipts", () => {
 	});
 });
 
-describe("export and support surfaces", () => {
-	test("no table-enumerating helper in the repo sweeps cloud auth rows into a bundle", async () => {
-		// gc-cli and settings only ever name their own tables; prove the cloud tables are not
-		// reachable by name from any of them.
-		const store = await openStore();
-		store.saveLogin({ identity: identity(), refreshToken: "R0" });
-		store.close();
-		const files = ["src/cli/gc-cli.ts", "src/config/settings.ts", "src/session/agent-storage.ts"];
-		for (const file of files) {
-			const text = await Bun.file(path.join(import.meta.dir, "../..", file)).text();
-			expect(`${file}:${text.includes("aura_cloud_")}`).toBe(`${file}:false`);
-		}
-	});
-});
+// Export/backup/support paths: no code in this repo enumerates the agent database's tables for
+// export, backup, or a support bundle — `gc-cli.ts`, `settings.ts`, `agent-storage.ts` and
+// `history-storage.ts` only ever name their own tables, and `tools/sqlite-reader.ts` is a
+// user-invoked reader over an explicitly supplied path. There is deliberately no test here: the
+// only one expressible today would grep source text, which the task constraints forbid and
+// which would not catch the regression it claims to (a new bundler in a file it does not name).
+// When a real export path lands it needs its own denylist and its own behavioural test.

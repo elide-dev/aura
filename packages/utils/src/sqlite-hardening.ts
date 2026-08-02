@@ -19,6 +19,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -78,6 +79,10 @@ export async function openHardenedSqlite(options: OpenHardenedSqliteOptions): Pr
 				// Ignore chmod failures (e.g., Windows)
 			}
 			onOpen?.(db);
+			// After `onOpen`, because that is where callers switch on WAL and take their first
+			// write — which is what creates `-wal`/`-shm`. SQLite creates them with the process
+			// umask, so without this they land `0644` while holding committed row images.
+			await hardenSqliteFileModes(dbPath);
 			return db;
 		} catch (err) {
 			db?.close();
@@ -112,11 +117,33 @@ export async function ensureSqliteParentDir(dbPath: string): Promise<void> {
  * simply has nothing to clamp.
  */
 export async function hardenSqliteFileModes(dbPath: string): Promise<void> {
-	for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+	for (const file of sqliteFileSet(dbPath)) {
 		try {
 			await fs.chmod(file, 0o600);
 		} catch {
 			// Missing sidecar or a filesystem without POSIX modes: nothing to enforce.
 		}
 	}
+}
+
+/**
+ * Synchronous {@link hardenSqliteFileModes}, for stores that open inside a constructor.
+ *
+ * SQLite deletes `-wal`/`-shm` when the last connection closes and recreates them on the next
+ * open, so *every* opener of a shared database has to re-clamp them. One store getting this
+ * wrong un-hardens the file for all the others.
+ */
+export function hardenSqliteFileModesSync(dbPath: string, onError?: (file: string, error: unknown) => void): void {
+	for (const file of sqliteFileSet(dbPath)) {
+		try {
+			if (!nodeFs.existsSync(file)) continue;
+			nodeFs.chmodSync(file, 0o600);
+		} catch (error) {
+			onError?.(file, error);
+		}
+	}
+}
+
+function sqliteFileSet(dbPath: string): readonly string[] {
+	return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
 }

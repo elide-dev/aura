@@ -6938,17 +6938,27 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		// so `openHardenedSqlite` retries on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`
 		// with bounded exponential backoff before surfacing the failure, and owns the
 		// `0700` parent directory plus the `0600` database mode. See issue #2421.
-		const db = await openHardenedSqlite({
+		// The store is constructed *inside* `onOpen`, i.e. inside the retried region, because the
+		// constructor prepares a dozen statements and `sqlite3_prepare_v2` can itself return
+		// `SQLITE_BUSY` while it reads the schema during a concurrent startup — the very race
+		// this retry exists for. It also means a constructor failure closes the handle instead
+		// of leaking a connection that holds a WAL reader.
+		let store: SqliteAuthCredentialStore | undefined;
+		await openHardenedSqlite({
 			dbPath,
 			open: file => new Database(file),
-			onOpen: handle => SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(handle),
+			onOpen: handle => {
+				SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(handle);
+				store = new SqliteAuthCredentialStore(handle);
+			},
 			onExhausted: ({ attempts, lastError }) =>
 				new AIError.ConfigurationError(
 					`Failed to open auth database at '${dbPath}' after ${attempts} attempts: ${lastError?.message}`,
 					{ cause: lastError },
 				),
 		});
-		return new SqliteAuthCredentialStore(db);
+		if (!store) throw new AIError.ConfigurationError(`Failed to open auth database at '${dbPath}'`);
+		return store;
 	}
 
 	static #ensureAuthCredentialRefreshLeasesTable(db: Database): void {

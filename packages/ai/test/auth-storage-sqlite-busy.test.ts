@@ -150,4 +150,29 @@ describe("SqliteAuthCredentialStore.open SQLITE_BUSY handling", () => {
 		// suppressing the actual error path above.
 		expect(typeof realRun).toBe("function");
 	});
+
+	/**
+	 * The store is built inside the retried open region, so a constructor failure has to close
+	 * the handle that region opened. A leaked connection keeps a WAL reader alive and blocks
+	 * checkpoints for every other process on the same agent database — a slow, hard-to-trace
+	 * failure rather than a loud one.
+	 *
+	 * Forced by pre-creating an `auth_credentials` table with the wrong shape, which makes the
+	 * constructor's statement preparation fail. Leakage is observed through the `-wal`/`-shm`
+	 * sidecars: SQLite deletes them when the last connection closes, so their continued
+	 * existence after a failed open means a handle is still holding the database.
+	 */
+	test("closes the database handle when construction fails", async () => {
+		const dbPath = path.join(tempDir, "broken.db");
+		const seed = new Database(dbPath);
+		seed.run("CREATE TABLE auth_credentials (nonsense INTEGER)");
+		seed.close();
+
+		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow();
+
+		for (const suffix of ["-wal", "-shm"]) {
+			const present = await Bun.file(`${dbPath}${suffix}`).exists();
+			expect(`${suffix} still open:${present}`).toBe(`${suffix} still open:false`);
+		}
+	});
 });

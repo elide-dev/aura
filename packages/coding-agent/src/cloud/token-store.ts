@@ -323,8 +323,8 @@ export class AuraTokenStore {
 			},
 			onExhausted: ({ lastError }) => new AuraCloudError("unavailable", { cause: lastError }),
 		});
-		// WAL frames carry committed row images, so the sidecars need the database's mode.
-		await hardenSqliteFileModes(dbPath);
+		// `openHardenedSqlite` has already clamped the database and its WAL/SHM sidecars: it
+		// does so after `onOpen`, which is where WAL mode is switched on and the sidecars appear.
 		return new AuraTokenStore(db, dbPath);
 	}
 
@@ -588,6 +588,11 @@ export class AuraTokenStore {
 	 * The read happens *inside* the `BEGIN IMMEDIATE` that writes the lease, so the returned
 	 * value is the committed one at the moment ownership was granted — that is what makes a
 	 * long-lived manager unable to submit a token another process already rotated away.
+	 *
+	 * `owner` identifies the holder for lease exclusivity and renewal fencing. It does not have
+	 * to be unique across process lifetimes: `relogin_required` is decided from the in-flight
+	 * token digest alone, so a restarted process that reuses a dead attempt's owner string is
+	 * still stopped from replaying that attempt's token.
 	 */
 	acquireRefreshLease(issuer: string, owner: string, ttlMs: number = AURA_REFRESH_LEASE_TTL_MS): AuraLeaseAcquisition {
 		const key = requireIssuer(issuer);
@@ -603,13 +608,21 @@ export class AuraTokenStore {
 				return { status: "busy", retryAfterMs: Math.max(1, heldUntil - now) };
 			}
 			const inflight = this.#db
-				.prepare("SELECT owner, token_sha256 FROM aura_cloud_refresh_inflight WHERE issuer = ?")
-				.get(key) as { owner: string; token_sha256: string } | null;
-			// A marker left behind for the token that is still stored means some process sent
-			// this exact refresh token to the server and never committed the rotation. The
-			// server may have consumed it, and retrying a consumed refresh is precisely what
-			// the contract forbids — the only safe answer is a fresh login.
-			if (inflight && inflight.owner !== owner && inflight.token_sha256 === sha256Hex(auth.refreshToken)) {
+				.prepare("SELECT token_sha256 FROM aura_cloud_refresh_inflight WHERE issuer = ?")
+				.get(key) as { token_sha256: string } | null;
+			// A marker still matching the *stored* token means some attempt sent this exact
+			// refresh token to the server and never committed the rotation. The server may have
+			// consumed it, and retrying a consumed refresh is precisely what the contract
+			// forbids — the only safe answer is a fresh login.
+			//
+			// Deliberately owner-agnostic. Comparing owners would make safety depend on every
+			// caller minting a fresh owner string per process: a restarted process that derives
+			// a stable owner (from a machine or installation id, say) would match its own dead
+			// attempt's marker, skip this check, and replay the possibly-consumed token. There
+			// is also no legitimate flow in which one owner re-acquires with its own marker
+			// still standing — a live attempt either commits (which clears the marker) or
+			// abandons it — so treating the same-owner case as poisoned costs nothing.
+			if (inflight && inflight.token_sha256 === sha256Hex(auth.refreshToken)) {
 				return { status: "relogin_required" };
 			}
 			const expiresAtMs = now + ttlMs;
@@ -655,7 +668,12 @@ export class AuraTokenStore {
 	 * Record that this owner is about to send `refreshToken` to the server.
 	 *
 	 * Written before the request leaves the process so that a crash between the server
-	 * consuming the token and the local CAS is detectable by the next process.
+	 * consuming the token and the local CAS is detectable by the next process — which reads
+	 * the marker in {@link acquireRefreshLease} and answers `relogin_required`.
+	 *
+	 * The marker records the token digest, never the owner's identity, so crash detection does
+	 * not depend on owner strings being unique across process lifetimes. `owner` is used only
+	 * to scope {@link abandonRefreshAttempt}.
 	 */
 	markRefreshSubmitted(issuer: string, owner: string, refreshToken: string): void {
 		this.#db.run(
