@@ -80,8 +80,16 @@ export async function openHardenedSqlite(options: OpenHardenedSqliteOptions): Pr
 			}
 			onOpen?.(db);
 			// After `onOpen`, because that is where callers switch on WAL and take their first
-			// write — which is what creates `-wal`/`-shm`. SQLite creates them with the process
-			// umask, so without this they land `0644` while holding committed row images.
+			// write — which is what creates `-wal`/`-shm`; clamping before them would find
+			// nothing to clamp.
+			//
+			// SQLite does not apply the process umask to the sidecars: it mints them from the
+			// *database file's* own mode. That is why the `chmod(dbPath, 0o600)` above has to
+			// come first — `open()` creates the file under the umask (`0644` at the default
+			// `022`), and a sidecar minted from that mode would hold committed row images
+			// world-readable. This call is the backstop for what the ordering cannot cover: a
+			// chmod that failed, a pre-existing database left at a laxer mode, or sidecars a
+			// crashed process left behind.
 			await hardenSqliteFileModes(dbPath);
 			return db;
 		} catch (err) {
@@ -112,9 +120,11 @@ export async function ensureSqliteParentDir(dbPath: string): Promise<void> {
  * Clamp the database and its WAL/SHM sidecars to `0600`.
  *
  * Call after the connection has written at least once: the sidecars only exist once WAL mode
- * is active, and SQLite creates them with the process umask rather than inheriting the
- * database's mode. Missing files are not an error — a read-only or freshly deleted database
- * simply has nothing to clamp.
+ * is active. SQLite mints them from the *database file's* mode, not from the process umask —
+ * so what this guards against is the creation order on a first run, where the database is
+ * still at its umask mode (`0644` at the default `022`) when the first WAL write mints the
+ * pair. Missing files are not an error — a read-only or freshly deleted database simply has
+ * nothing to clamp.
  */
 export async function hardenSqliteFileModes(dbPath: string): Promise<void> {
 	for (const file of sqliteFileSet(dbPath)) {
@@ -130,8 +140,9 @@ export async function hardenSqliteFileModes(dbPath: string): Promise<void> {
  * Synchronous {@link hardenSqliteFileModes}, for stores that open inside a constructor.
  *
  * SQLite deletes `-wal`/`-shm` when the last connection closes and recreates them on the next
- * open, so *every* opener of a shared database has to re-clamp them. One store getting this
- * wrong un-hardens the file for all the others.
+ * open. A `0600` database yields `0600` sidecars, so a correctly hardened database stays
+ * hardened across reopens — but every opener re-clamps anyway, because it costs two `chmod`
+ * calls and it repairs a database an older build, a crash, or a manual copy left laxer.
  */
 export function hardenSqliteFileModesSync(dbPath: string, onError?: (file: string, error: unknown) => void): void {
 	for (const file of sqliteFileSet(dbPath)) {

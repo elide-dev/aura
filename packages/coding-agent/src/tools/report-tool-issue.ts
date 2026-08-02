@@ -21,10 +21,12 @@
  * read the cached decision without prompting. `PI_AUTO_QA_PUSH=1` bypasses
  * the dialog for headless environments.
  *
- * When the user grants consent, push is automatically active against the
- * bundled endpoint (`dev.autoqaPush.endpoint`, default `qa.elide.dev`). Each
- * insert schedules a background flush that POSTs pending rows and marks them
- * pushed on HTTP 2xx. `PI_AUTO_QA_PUSH=1` forces push in non-interactive environments
+ * There is no bundled collector. `dev.autoqaPush.endpoint` defaults to `""`,
+ * so with no endpoint setting, no `AURA_QA_URL`/`PI_AUTO_QA_PUSH_URL` and no
+ * `AURA_DOMAIN`, consent only enables *local* recording: reports stay queued in
+ * the database and nothing is sent. Once an endpoint is configured, each insert
+ * schedules a background flush that POSTs pending rows and marks them pushed on
+ * HTTP 2xx. `PI_AUTO_QA_PUSH=1` forces push in non-interactive environments
  * where the consent dialog never fires. Device execution is never blocked on
  * the network and never throws.
  */

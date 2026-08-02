@@ -195,7 +195,9 @@ function makeProgressBar(total: number, width = 30): ProgressBar {
  * ignoring the user-facing consent gate (manual push is the user's
  * explicit "yes ship these now" intent).
  *
- * Requires endpoint configuration (default `qa.elide.dev/v1/grievances`).
+ * Requires endpoint configuration: there is no default collector, so with
+ * `dev.autoqaPush.endpoint` empty and no `AURA_QA_URL`/`PI_AUTO_QA_PUSH_URL`
+ * or `AURA_DOMAIN`, there is nowhere to push and the rows stay queued.
  */
 export async function pushGrievances(options: PushGrievancesOptions): Promise<void> {
 	const db = openAutoQaDb();

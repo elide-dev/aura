@@ -797,10 +797,20 @@ ON CONFLICT(model_key) DO UPDATE SET
 		}
 
 		// The database *and* its `-wal`/`-shm` sidecars: WAL frames hold committed row images
-		// (including cloud refresh tokens), and SQLite recreates the sidecars with the process
-		// umask every time the last connection closes and a new one opens. Every opener of the
-		// shared agent database therefore has to re-clamp them, not just the one that created
-		// the rows. Runs after `#initializeSchema`, so WAL mode is already active.
+		// (including cloud refresh tokens), so all three have to end up `0600`.
+		//
+		// SQLite does not apply the process umask to the sidecars — it mints them from the
+		// *database file's* own mode, and drops them again when the last connection closes.
+		// The exposure is therefore the creation order on a first run: `new Database` creates
+		// the file under the umask (`0644` at the default `022`), `#initializeSchema` switches
+		// on WAL and takes the first write — minting `-wal`/`-shm` from that `0644` — and only
+		// then does this run. Hence "after `#initializeSchema`": clamping earlier would find no
+		// sidecars to clamp, and would leave the world-readable pair behind.
+		//
+		// Later openers re-clamp too. Not because a reopen re-derives the mode from the umask
+		// (it does not — a `0600` database yields `0600` sidecars), but because it is two
+		// `stat`+`chmod` calls and it repairs a database an older build, a crash, or a manual
+		// copy left at a laxer mode.
 		hardenSqliteFileModesSync(dbPath, (file, error) => {
 			logger.warn("AgentStorage failed to chmod db file", { path: file, error: String(error) });
 		});

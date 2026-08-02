@@ -684,9 +684,20 @@ export class AuraTokenStore {
 	}
 
 	/**
-	 * Clear the in-flight marker after an attempt that certainly never reached the server
-	 * (aborted before send, connection error before a response). Never call this after a
-	 * response — or after an unknown outcome — or a consumed token becomes retryable.
+	 * Clear the in-flight marker after an attempt that provably minted no grant.
+	 *
+	 * The rule is about the *grant*, not about whether a response arrived. Call this only for
+	 * outcomes where the server certainly did not rotate the submitted refresh token: no
+	 * response at all (aborted before send, connection error), a rejected 3xx, or a 408/429/5xx
+	 * — the server declining to do work. `grantCertainlyNotMinted` in `token-manager.ts` is the
+	 * single decision procedure and the only caller; keep the two in step rather than
+	 * re-deriving the rule here.
+	 *
+	 * Never call this for any other outcome — above all a 2xx whose token failed to parse or
+	 * verify — because the submitted token may already be spent, and clearing the marker would
+	 * make a consumed token look retryable. Equally, do not narrow this to "no response only":
+	 * keeping the marker after a transient 429/5xx strands the login and forces a re-login for
+	 * what was a network blip.
 	 */
 	abandonRefreshAttempt(issuer: string, owner: string): void {
 		this.#db.run("DELETE FROM aura_cloud_refresh_inflight WHERE issuer = ? AND owner = ?", [
