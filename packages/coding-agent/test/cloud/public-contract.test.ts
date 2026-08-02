@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as path from "node:path";
 import { inspect } from "node:util";
 import * as cloud from "../../src/cloud";
 import {
@@ -67,6 +68,27 @@ describe("cloud barrel public contract", () => {
 					matched: false,
 				});
 			}
+		}
+	});
+
+	// The store is reachable only through `import("./cloud/token-store")`. Re-exporting its
+	// runtime symbols here would drag `bun:sqlite` and the whole schema onto the CLI entry
+	// graph, which is the one thing this barrel exists to prevent.
+	test("exposes no runtime storage symbol", () => {
+		const runtime = Object.keys(cloud);
+		for (const name of ["AuraTokenStore", "AURA_SURFACE_SCOPES", "AURA_REFRESH_LEASE_TTL_MS"]) {
+			expect({ name, present: runtime.includes(name) }).toEqual({ name, present: false });
+		}
+	});
+
+	test("the bundled barrel does not pull the token store onto the entry graph", async () => {
+		const entry = path.join(import.meta.dir, "../../src/cloud/index.ts");
+		const built = await Bun.build({ entrypoints: [entry], target: "bun" });
+		expect(built.success).toBe(true);
+		const bundle = await built.outputs[0]!.text();
+		// Strings that exist only inside `token-store.ts`.
+		for (const marker of ["aura_cloud_auth", "aura_cloud_device", "bun:sqlite"]) {
+			expect({ marker, present: bundle.includes(marker) }).toEqual({ marker, present: false });
 		}
 	});
 });

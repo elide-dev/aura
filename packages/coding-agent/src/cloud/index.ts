@@ -46,3 +46,24 @@ export {
 	classifyHost,
 	isAuraCloudError,
 } from "./errors";
+/**
+ * Storage types only. `export type` is erased at build time, so the shapes are importable from
+ * the barrel while `token-store.ts` — and with it `bun:sqlite` — stays off the entry graph.
+ * Runtime storage symbols (`AuraTokenStore`, the scope list, the lease TTL) are deliberately
+ * absent: reach them through `import("./cloud/token-store")` at the call site.
+ */
+export type {
+	AuraAccessToken,
+	AuraAccessTokenProvider,
+	AuraAccountIdentity,
+	AuraAccountNamespace,
+	AuraImportReceipt,
+	AuraImportReceiptInput,
+	AuraLeaseAcquisition,
+	AuraRefreshLease,
+	AuraRotationResult,
+	AuraStoredAccount,
+	AuraStoredAuth,
+	AuraSurfaceScope,
+	AuraSyncConflict,
+} from "./token-store";

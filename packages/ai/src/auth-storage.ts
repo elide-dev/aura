@@ -9,10 +9,9 @@
  */
 import { Database, type Statement } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { parseAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
 import { $env, getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
+import { isSqliteBusyError, openHardenedSqlite } from "@oh-my-pi/pi-utils/sqlite-hardening";
 import type { ApiKeyResolver } from "./auth-retry";
 import * as AIError from "./error";
 import { isUsageLimitOutcome } from "./error/rate-limit";
@@ -6516,12 +6515,11 @@ const CODEX_METER_BLOCK_SCOPES = ["chat", "spark"] as const;
  * SQLite's busy result code family — base `SQLITE_BUSY` plus the extended
  * variants `SQLITE_BUSY_RECOVERY` (concurrent WAL recovery), `SQLITE_BUSY_SNAPSHOT`,
  * and `SQLITE_BUSY_TIMEOUT`. All warrant the same backoff-and-retry treatment.
+ *
+ * Re-exported from `@oh-my-pi/pi-utils/sqlite-hardening`, which owns the single copy of the
+ * agent-database open/permission policy, so existing importers keep their import site.
  */
-export function isSqliteBusyError(err: unknown): boolean {
-	if (err === null || typeof err !== "object") return false;
-	const code = (err as { code?: unknown }).code;
-	return typeof code === "string" && code.startsWith("SQLITE_BUSY");
-}
+export { isSqliteBusyError };
 
 function normalizeStoredAccountId(accountId: string | null | undefined): string | null {
 	const normalized = accountId?.trim();
@@ -6935,48 +6933,22 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	static async open(dbPath: string = getAgentDbPath()): Promise<SqliteAuthCredentialStore> {
-		const dir = path.dirname(dbPath);
-		const dirExists = await fs
-			.stat(dir)
-			.then(s => s.isDirectory())
-			.catch(() => false);
-		if (!dirExists) {
-			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-		}
-
 		// Concurrent omp startups can race against WAL recovery and the schema
 		// init's first lock-taking statement. Bun's default `busy_timeout` is 0,
-		// so retry the open on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY` with bounded
-		// exponential backoff before surfacing the failure. See issue #2421.
-		const maxAttempts = 4;
-		const baseDelayMs = 100;
-		let lastBusyError: Error | undefined;
-		for (let attempt = 0; attempt < maxAttempts; attempt++) {
-			let db: Database | undefined;
-			try {
-				db = new Database(dbPath);
-				try {
-					await fs.chmod(dbPath, 0o600);
-				} catch {
-					// Ignore chmod failures (e.g., Windows)
-				}
-				SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(db);
-				return new SqliteAuthCredentialStore(db);
-			} catch (err) {
-				db?.close();
-				if (!isSqliteBusyError(err)) {
-					throw err;
-				}
-				lastBusyError = err instanceof Error ? err : new Error(String(err));
-				if (attempt < maxAttempts - 1) {
-					await Bun.sleep(baseDelayMs * 2 ** attempt);
-				}
-			}
-		}
-		throw new AIError.ConfigurationError(
-			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
-			{ cause: lastBusyError },
-		);
+		// so `openHardenedSqlite` retries on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`
+		// with bounded exponential backoff before surfacing the failure, and owns the
+		// `0700` parent directory plus the `0600` database mode. See issue #2421.
+		const db = await openHardenedSqlite({
+			dbPath,
+			open: file => new Database(file),
+			onOpen: handle => SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(handle),
+			onExhausted: ({ attempts, lastError }) =>
+				new AIError.ConfigurationError(
+					`Failed to open auth database at '${dbPath}' after ${attempts} attempts: ${lastError?.message}`,
+					{ cause: lastError },
+				),
+		});
+		return new SqliteAuthCredentialStore(db);
 	}
 
 	static #ensureAuthCredentialRefreshLeasesTable(db: Database): void {

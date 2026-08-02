@@ -77,6 +77,33 @@ describe("getInstallId", () => {
 		expect(onDisk).toBe(id);
 	});
 
+	// The Aura cloud client persists its own per-profile *installation* id (an uppercase
+	// Crockford ULID in `aura_cloud_device`). That identifier is deliberately separate from
+	// this rollout UUID: different alphabet, different scope, different file. Anything that
+	// makes them converge would leak the rollout identity into cloud requests, so pin the
+	// shape here rather than in the cloud package.
+	it("stays a lowercase-hex UUID that can never be mistaken for an installation ULID", () => {
+		const id = getInstallId();
+		expect(id).toMatch(UUID_RE);
+		expect(id).not.toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+		expect(id).toContain("-");
+		expect(id).toHaveLength(36);
+	});
+
+	it("keeps one rollout id per install even when a named profile is active", () => {
+		const baseId = getInstallId();
+		const originalProfile = process.env.AURA_PROFILE;
+		process.env.AURA_PROFILE = "work";
+		try {
+			__resetInstallIdCacheForTests();
+			expect(getInstallId()).toBe(baseId);
+		} finally {
+			if (originalProfile === undefined) delete process.env.AURA_PROFILE;
+			else process.env.AURA_PROFILE = originalProfile;
+			__resetInstallIdCacheForTests();
+		}
+	});
+
 	it("anchors the install id to the base config root regardless of active profile", async () => {
 		// Default mode creates the id under the base config root.
 		const baseId = getInstallId();
