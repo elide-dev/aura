@@ -1,10 +1,9 @@
 /**
- * Gallery fixtures for the runtime tool family (`run`, `check`, `build`,
- * `insights`, `profile`, `project_advice`, the six `jvm_*` flows, and the
- * hub-backed `runtime_debug` / `serve`).
+ * Gallery fixtures for `run`, `check`, `insights`, `profile`, the four
+ * specialized `jvm_*` flows, and the hub-backed `serve` tool.
  *
  * The success/error envelopes are built by the two helpers below rather than
- * spelled out fourteen times: every one of these tools returns the same
+ * repeated for every tool: the execution tools return the same
  * `RuntimeExecResult` shape (or that shape plus a JVM flow's extras), so the
  * only per-tool data worth hand-writing is the args and the output text — which
  * is exactly what the gallery is there to show.
@@ -21,11 +20,11 @@ function execResult(text: string, over: Record<string, unknown> = {}): GalleryRe
 	};
 }
 
-/** A settled hub job, as `runtime_debug` / `serve` attach it to `details`. */
+/** A settled hub job, as `serve` attaches it to `details`. */
 function jobResult(text: string, over: Record<string, unknown>): GalleryResult {
 	return {
 		content: [{ type: "text", text }],
-		details: { mode: "serve", timedOut: false, startupOutput: text, argv: [], cwd: "/repo", ...over },
+		details: { timedOut: false, startupOutput: text, argv: [], cwd: "/repo", ...over },
 	};
 }
 
@@ -45,14 +44,6 @@ export const runtimeFixtures: Record<string, GalleryFixture> = {
 		errorResult: execResult("src/api/routes.ts:88:12 — cannot find symbol `Router`\n(exit code 2)", { exitCode: 2 }),
 	},
 
-	build: {
-		label: "Build",
-		streamingArgs: { targets: [":jvm"] },
-		args: { targets: [":jvm", ":native"] },
-		result: execResult("Built :jvm in 4.2s\nBuilt :native in 31.8s", { durationMs: 36_000 }),
-		errorResult: execResult("Target :native failed: linker exited with 1\n(exit code 1)", { exitCode: 1 }),
-	},
-
 	insights: {
 		label: "Insights",
 		args: { path: "src/worker.ts", insightPath: "hooks/alloc-trace.js" },
@@ -67,20 +58,6 @@ export const runtimeFixtures: Record<string, GalleryFixture> = {
 			["Samples: 4102", "  61.2%  parseFrame", "  22.7%  decodeChunk", "   9.4%  gc", "   6.7%  (other)"].join("\n"),
 		),
 		errorResult: execResult("--- stderr ---\nprofiler could not attach\n(exit code 1)", { exitCode: 1 }),
-	},
-
-	project_advice: {
-		label: "Project Advice",
-		args: {},
-		result: execResult(
-			[
-				"This project builds with the project manifest in this directory.",
-				"  build:  build :jvm",
-				"  test:   test --coverage",
-				"  serve:  serve public/",
-			].join("\n"),
-		),
-		errorResult: execResult("no project manifest found in this directory\n(exit code 1)", { exitCode: 1 }),
 	},
 
 	jvm_disassemble: {
@@ -146,46 +123,6 @@ export const runtimeFixtures: Record<string, GalleryFixture> = {
 			exitCode: 1,
 			action: "deps",
 			phase: "deps",
-		}),
-	},
-
-	jvm_javadoc: {
-		label: "JVM Javadoc",
-		args: { code: "/** Entry point. */\npublic class Main {}", output: "docs/api" },
-		result: execResult("Generated 12 entries into docs/api", {
-			action: "javadoc",
-			phase: "javadoc",
-			output: "/repo/docs/api",
-			entryCount: 12,
-			topLevel: ["index.html", "Main.html"],
-		}),
-		errorResult: execResult("docs/api already exists; pass overwrite: true to replace it\n(exit code 1)", {
-			exitCode: 1,
-			action: "javadoc",
-			phase: "javadoc",
-		}),
-	},
-
-	runtime_debug: {
-		label: "Runtime Debug",
-		args: { path: "src/worker.ts", protocol: "cdp" },
-		result: jobResult(
-			[
-				"CDP debugger listening at ws://127.0.0.1:4242/session/1",
-				"Open it in Chrome DevTools. The program is suspended until a client attaches.",
-				"Job: runtime-debug-cdp-1a2b3c4d (use hub logs / hub stop).",
-			].join("\n"),
-			{
-				mode: "debug",
-				jobName: "runtime-debug-cdp-1a2b3c4d",
-				endpoint: "ws://127.0.0.1:4242/session/1",
-				state: "running",
-			},
-		),
-		errorResult: jobResult("The CDP debugger printed no endpoint within 15s.", {
-			mode: "debug",
-			jobName: "runtime-debug-cdp-7e6f5a4b",
-			timedOut: true,
 		}),
 	},
 

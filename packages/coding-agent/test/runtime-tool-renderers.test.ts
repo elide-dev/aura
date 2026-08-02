@@ -71,21 +71,17 @@ describe("runtime tool renderers: registration", () => {
 		}
 	});
 
-	it("covers the five core runtime tools, the five specialized JVM tools, and the two job tools", () => {
+	it("covers runtime execution and analysis, four specialized JVM tools, and one job tool", () => {
 		expect([...RUNTIME_RENDERER_TOOL_NAMES].sort()).toEqual(
 			[
-				"build",
 				"check",
 				"insights",
 				"jvm_deps",
 				"jvm_disassemble",
 				"jvm_format",
 				"jvm_jar",
-				"jvm_javadoc",
 				"profile",
-				"project_advice",
 				"run",
-				"runtime_debug",
 				"serve",
 			].sort(),
 		);
@@ -162,7 +158,7 @@ describe("run", () => {
 	});
 });
 
-describe("check and build", () => {
+describe("check", () => {
 	it("shows pass on a clean check and fail on a broken one", () => {
 		expect(settled("check", { content: [{ type: "text", text: "ok" }], details: exec() }, {})).toContain("passed");
 		const failed = settled(
@@ -172,19 +168,6 @@ describe("check and build", () => {
 		);
 		expect(failed).toContain("failed");
 		expect(failed).toContain("exit 2");
-	});
-
-	it("shows the requested build targets on the call line and pass/fail on the result", () => {
-		expect(call("build", { targets: [":jvm", ":native"] })).toContain(":jvm :native");
-		expect(call("build", {})).toContain("default targets");
-		const text = settled(
-			"build",
-			{ content: [{ type: "text", text: "BUILD OK" }], details: exec() },
-			{ targets: [":jvm"] },
-		);
-		expect(text).toContain("Build");
-		expect(text).toContain(":jvm");
-		expect(text).toContain("passed");
 	});
 });
 
@@ -246,7 +229,7 @@ describe("jvm tools", () => {
 		expect(text).toContain("error: bad");
 	});
 
-	it("shows the written output path for jvm_jar and jvm_javadoc", () => {
+	it("shows written output paths for jvm_jar and jvm_deps", () => {
 		const jar = settled(
 			"jvm_jar",
 			{
@@ -257,46 +240,25 @@ describe("jvm tools", () => {
 		);
 		expect(jar).toContain("/tmp/app.jar");
 
-		const javadoc = settled(
-			"jvm_javadoc",
+		const deps = settled(
+			"jvm_deps",
 			{
 				content: [{ type: "text", text: "done" }],
-				details: exec({ action: "javadoc", phase: "javadoc", output: "/tmp/javadoc-out", entryCount: 7 }),
+				details: exec({ action: "deps", phase: "deps", output: "/tmp/deps.txt" }),
 			},
-			{ code: "class Main {}" },
+			{ path: "Main.java", output: "deps.txt" },
 		);
-		expect(javadoc).toContain("/tmp/javadoc-out");
-		expect(javadoc).toContain("7");
+		expect(deps).toContain("/tmp/deps.txt");
 	});
 });
 
-describe("runtime_debug and serve", () => {
-	it("shows the endpoint and the hub job handle", () => {
-		const debug = settled(
-			"runtime_debug",
-			{
-				content: [{ type: "text", text: "CDP debugger listening at ws://127.0.0.1:4242/x" }],
-				details: {
-					mode: "debug",
-					jobName: "runtime-debug-cdp-1a2b3c4d",
-					endpoint: "ws://127.0.0.1:4242/x",
-					timedOut: false,
-					startupOutput: "",
-					argv: ["elide"],
-					cwd: "/repo",
-				},
-			},
-			{ path: "app.ts" },
-		);
-		expect(debug).toContain("ws://127.0.0.1:4242/x");
-		expect(debug).toContain("runtime-debug-cdp-1a2b3c4d");
-
-		const serve = settled(
+describe("serve", () => {
+	it("shows the endpoint, hub job handle, and served directory", () => {
+		const text = settled(
 			"serve",
 			{
 				content: [{ type: "text", text: "Serving /repo/public at http://127.0.0.1:8080" }],
 				details: {
-					mode: "serve",
 					jobName: "runtime-serve-9f8e7d6c",
 					endpoint: "http://127.0.0.1:8080",
 					timedOut: false,
@@ -307,17 +269,17 @@ describe("runtime_debug and serve", () => {
 			},
 			{ directory: "public" },
 		);
-		expect(serve).toContain("http://127.0.0.1:8080");
-		expect(serve).toContain("runtime-serve-9f8e7d6c");
+		expect(text).toContain("http://127.0.0.1:8080");
+		expect(text).toContain("runtime-serve-9f8e7d6c");
+		expect(text).toContain("public");
 	});
 
-	it("says so when no endpoint was scraped inside the wait window", () => {
+	it("warns when no endpoint was scraped inside the wait window", () => {
 		const text = settled(
 			"serve",
 			{
 				content: [{ type: "text", text: "no endpoint" }],
 				details: {
-					mode: "serve",
 					jobName: "runtime-serve-1",
 					timedOut: true,
 					startupOutput: "",
@@ -329,98 +291,32 @@ describe("runtime_debug and serve", () => {
 		);
 		expect(text).toContain("no endpoint");
 		expect(text).toContain("timed out");
-		// A launched-but-unscraped job is not a failure (the process may be fine),
-		// so the frame warns rather than erroring — but it must not read as clean.
-		expect(text.startsWith(" ")).toBe(true);
-		expect(Bun.stripANSI(uiTheme.symbol("status.warning"))).toBeTruthy();
 		expect(text).toContain(Bun.stripANSI(uiTheme.symbol("status.warning")));
 	});
 
-	it("keeps the launched target visible once the endpoint replaces the description", () => {
-		// The settled row takes the endpoint as its description and
-		// `mergeCallAndResult` removes the call frame above it, so unless the
-		// target is carried into `meta` the transcript loses the one thing that
-		// says WHAT is being debugged or served.
-		const debug = settled(
-			"runtime_debug",
-			{
-				content: [{ type: "text", text: "listening" }],
-				details: {
-					mode: "debug",
-					jobName: "runtime-debug-cdp-1",
-					endpoint: "ws://127.0.0.1:4242/x",
-					timedOut: false,
-					startupOutput: "",
-					argv: [],
-					cwd: "/repo",
-				},
-			},
-			{ path: "src/app.ts", protocol: "cdp" },
-		);
-		expect(debug).toContain("ws://127.0.0.1:4242/x");
-		expect(debug).toContain("src/app.ts");
-
-		const serve = settled(
-			"serve",
-			{
-				content: [{ type: "text", text: "serving" }],
-				details: {
-					mode: "serve",
-					jobName: "runtime-serve-1",
-					endpoint: "http://127.0.0.1:8080",
-					timedOut: false,
-					startupOutput: "",
-					argv: [],
-					cwd: "/repo",
-				},
-			},
-			{ directory: "public", port: 8080 },
-		);
-		expect(serve).toContain("http://127.0.0.1:8080");
-		expect(serve).toContain("public");
-	});
-
-	it("errors — not warns — when the launch itself failed", () => {
-		// A rejected launch also has no endpoint, so the endpoint-less warning path
-		// must not swallow it.
+	it("errors rather than warns when the launch itself failed", () => {
 		const text = settled(
-			"runtime_debug",
+			"serve",
 			{
 				content: [{ type: "text", text: "hub refused to start the process" }],
 				isError: true,
 				details: {
-					mode: "debug",
-					jobName: "runtime-debug-cdp-2",
+					jobName: "runtime-serve-2",
 					timedOut: false,
 					startupOutput: "",
 					argv: [],
 					cwd: "/repo",
 				},
 			},
-			{ path: "app.ts" },
+			{ directory: "public" },
 		);
 		expect(text).toContain(Bun.stripANSI(uiTheme.symbol("status.error")));
 		expect(text).not.toContain(Bun.stripANSI(uiTheme.symbol("status.warning")));
 	});
 
-	it("shows the target on the call line", () => {
-		expect(call("runtime_debug", { path: "app.ts", protocol: "dap" })).toContain("app.ts");
-		expect(call("runtime_debug", { path: "app.ts", protocol: "dap" })).toContain("dap");
+	it("shows the target and port on the call line", () => {
 		expect(call("serve", { directory: "public", port: 9000 })).toContain("public");
 		expect(call("serve", { directory: "public", port: 9000 })).toContain("9000");
-	});
-});
-
-describe("project_advice", () => {
-	it("shows the project name", () => {
-		expect(call("project_advice", { cwd: "/home/dev/my-project" })).toContain("my-project");
-		const text = settled(
-			"project_advice",
-			{ content: [{ type: "text", text: "Run tests with: elide test" }], details: exec() },
-			{ cwd: "/home/dev/my-project" },
-		);
-		expect(text).toContain("my-project");
-		expect(text).toContain("Run tests with");
 	});
 });
 
@@ -458,17 +354,13 @@ describe("naming rule", () => {
 		const frames = [
 			call("run", { code: "x" }),
 			call("check", {}),
-			call("build", { targets: [":jvm"] }),
 			call("insights", { code: "x" }),
 			call("profile", { mode: "cputracing", code: "x" }),
-			call("project_advice", {}),
 			call("run", { language: "java", code: "class Main {}" }),
 			call("jvm_deps", { path: "app.jar" }),
 			call("jvm_format", { language: "kotlin", code: "fun main(){}" }),
 			call("jvm_disassemble", { language: "java", code: "class Main {}" }),
 			call("jvm_jar", { action: "inspect", jar: "app.jar" }),
-			call("jvm_javadoc", { code: "class Main {}" }),
-			call("runtime_debug", { path: "app.ts" }),
 			call("serve", { directory: "public" }),
 		];
 		for (const frame of frames) {

@@ -13,7 +13,6 @@ import {
 	type RuntimeMethod,
 	RuntimeRpcError,
 	type RuntimeRunParams,
-	type RuntimeSpawnMode,
 	resolveRunTarget,
 } from "./protocol";
 
@@ -30,15 +29,10 @@ const JVM_ACTIONS: Readonly<Record<string, RuntimeJvmAction>> = {
 	format: "format",
 	jar: "jar",
 	deps: "deps",
-	javadoc: "javadoc",
-};
-const SPAWN_MODES: Readonly<Record<string, RuntimeSpawnMode>> = {
-	debug: "debug",
-	serve: "serve",
 };
 
 interface RuntimeCallClassification {
-	action?: RuntimeJvmAction | RuntimeSpawnMode;
+	action?: RuntimeJvmAction;
 	language?: RuntimeLanguage;
 	outcome: RuntimeCallOutcome;
 	exitCode?: number;
@@ -124,10 +118,9 @@ function classifyRuntimeCall(
 	return { action, language, outcome: "ok", exitCode: exec.exitCode, killed: false };
 }
 
-function runtimeAction(method: RuntimeMethod, params: unknown): RuntimeJvmAction | RuntimeSpawnMode | undefined {
+function runtimeAction(method: RuntimeMethod, params: unknown): RuntimeJvmAction | undefined {
 	if (!isRecord(params)) return undefined;
 	if (method === "runtime/jvm" && typeof params.action === "string") return JVM_ACTIONS[params.action];
-	if (method === "runtime/spawn" && typeof params.mode === "string") return SPAWN_MODES[params.mode];
 	return undefined;
 }
 
@@ -135,7 +128,6 @@ function runtimeLanguage(method: RuntimeMethod, params: unknown, result: unknown
 	if (isRecord(result) && isRuntimeLanguage(result.language)) return result.language;
 	if (method === "runtime/jvm" && isRecord(params)) {
 		if (isRuntimeLanguage(params.language)) return params.language;
-		if (params.action === "javadoc") return "java";
 		return undefined;
 	}
 	if (method === "runtime/run" || method === "runtime/insights" || method === "runtime/profile") {
@@ -143,13 +135,6 @@ function runtimeLanguage(method: RuntimeMethod, params: unknown, result: unknown
 			return resolveRunTarget(params as RuntimeRunParams).language;
 		} catch {
 			return isRecord(params) && isRuntimeLanguage(params.language) ? params.language : undefined;
-		}
-	}
-	if (method === "runtime/spawn" && isRecord(params) && params.mode === "debug") {
-		try {
-			return resolveRunTarget(params as RuntimeRunParams).language;
-		} catch {
-			return isRuntimeLanguage(params.language) ? params.language : undefined;
 		}
 	}
 	return undefined;

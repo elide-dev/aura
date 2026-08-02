@@ -498,7 +498,7 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `l
 
 ### Runtime
 
-The `run`, `check`, `build`, `insights`, and `profile` tools execute on a managed runtime binary, as do the six JVM tools (`jvm_run`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, `jvm_javadoc`), which compile and run Java/Kotlin on the embedded JVM, and the two long-running flows `runtime_debug` (a CDP/DAP debug endpoint) and `serve` (static files over HTTP), which are supervised as `hub` jobs rather than by the runtime layer. `project_advice` rides the same gate but is read-only: it asks the runtime for its build/run/test/install guidance for the current project and executes nothing. All fourteen are gated on `runtime.enabled`; when it is off, none of them register.
+The `run`, `check`, `insights`, and `profile` tools execute on a managed runtime binary, as do four JVM specialists (`jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps`). Java and Kotlin execution is part of `run`. The `serve` long-running flow is supervised as a `hub` job rather than by the runtime layer. All nine tools are gated on `runtime.enabled`; when it is off, none register.
 
 ```yaml
 runtime:
@@ -513,7 +513,7 @@ runtime:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`build`/`insights`/`profile`, `runtime_debug`/`serve`, and `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
+| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`insights`/`profile`, `serve`, and four specialized `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.adapter` | `process` \| `embedded` \| `auto` | `process` | Select the runtime process, require the embedded runtime library, or choose the library automatically when it is available and compatible. Explicit `embedded` mode never falls back to the process adapter when the library is missing or incompatible. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. Also settable per-run with `--runtime <path>`, which reports `source: flag` in `aura runtime status`. |
@@ -528,10 +528,10 @@ Embedded library resolution checks a nonblank `runtime.embeddedPath`, then a non
 
 Runtime selection is part of Aura's system policy whenever runtime tools are
 registered. The agent chooses direct execution (`run`), validation (`check`),
-artifact builds (`build`), instrumentation (`insights`), profiling (`profile`),
-stateful debugging/serving, project advice, and JVM specialists from the
-available tool inventory. Tool prompts remain the argument and failure-shape
-reference.
+instrumentation (`insights`), profiling (`profile`), serving, and the four JVM
+specialists from the available tool inventory. Project builds use the project's
+declared build command rather than a separate runtime tool. Tool prompts remain
+the argument and failure-shape reference.
 
 These capabilities are implicit: they are not materialized as skills, do not
 appear in skill lists or `/skill:*` commands, and require no skill-load round
@@ -540,7 +540,7 @@ trip. `runtime.enabled` remains the single capability gate.
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 
-See [run](./tools/run.md), [check](./tools/check.md), [build](./tools/build.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for per-tool behavior, and [jvm_run](./tools/jvm_run.md), [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), [jvm_deps](./tools/jvm_deps.md), [jvm_javadoc](./tools/jvm_javadoc.md) for the JVM suite, and [runtime_debug](./tools/runtime_debug.md) and [serve](./tools/serve.md) for the two supervised long-running flows (their handle is a `hub` job name, so `hub logs`/`hub stop` apply — there is no separate stop tool), and [project_advice](./tools/project_advice.md) for the read-only project-guidance tool. `jvm_jar` (create) and `jvm_javadoc` are the only runtime tools that write into your project: both require `output` to resolve *inside* the session cwd, both refuse an existing output unless `overwrite: true` is passed, and `jvm_javadoc`'s replace path additionally only accepts a previous docs output (empty, or carrying `index.html` plus one of javadoc's own scaffolding files). Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
+See [run](./tools/run.md), [check](./tools/check.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for core behavior; [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), and [jvm_deps](./tools/jvm_deps.md) for JVM specialists; and [serve](./tools/serve.md) for the supervised long-running flow. Its handle is a `hub` job name, so `hub logs` and `hub stop` apply; there is no separate stop tool. `jvm_jar` creation and `jvm_deps` with `output` are the only runtime flows that write into the project. Both require `output` to resolve inside the session cwd and refuse an existing output unless `overwrite: true` is passed. Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
 
 ### Native computer use
 

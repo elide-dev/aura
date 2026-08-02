@@ -7,14 +7,14 @@ import type { ToolSession } from ".";
 import { jvmLanguage, requireRuntimeService } from "./jvm-common";
 
 const jvmJarSchema = type({
-	action: type("'create' | 'inspect'").describe("build a jar from source, or list an existing jar's entries"),
+	action: type("'create' | 'inspect'").describe("create or inspect"),
 	"language?": jvmLanguage.describe("source language (create)"),
-	"code?": type("string").describe("source to compile into the jar (create)"),
-	"mainClass?": type("string").describe("entrypoint class (default: the public class, or MainKt for Kotlin)"),
-	"output?": type("string").describe("destination jar path, relative to the cwd (create)"),
-	"overwrite?": type("boolean").describe("replace an existing output file (create)"),
-	"jar?": type("string").describe("existing jar to list, relative to the cwd (inspect)"),
-	"timeoutMs?": type("number").describe("kill the compile or the jar invocation after this many milliseconds"),
+	"code?": type("string").describe("source (create)"),
+	"mainClass?": type("string").describe("manifest entrypoint override"),
+	"output?": type("string").describe("cwd-relative JAR output (create)"),
+	"overwrite?": type("boolean").describe("replace output (create)"),
+	"jar?": type("string").describe("cwd-relative JAR (inspect)"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
 });
 
 export type JvmJarToolParams = typeof jvmJarSchema.infer;

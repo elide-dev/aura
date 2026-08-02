@@ -1,12 +1,9 @@
-Execute JavaScript, TypeScript, Python, Java, or Kotlin directly on the managed
-runtime; use `bash` for shell commands and `eval` for notebook-style execution.
+Execute JavaScript, TypeScript, Python, Java, or Kotlin directly. Use `bash` for
+shell commands and `eval` for persistent notebook exploration.
 
-Provide exactly one of `code` (temporary source) or `path` (existing file;
-preserves project-relative imports and data access). Inline language defaults to
-`ts`; path language is inferred unless supplied. JavaScript/TypeScript default
-to Bun and may select either available engine; Python/Java/Kotlin require the
-embedded engine.
+Provide exactly one of `code` or `path`; a path retains project-relative imports
+and data access. Inline source defaults to TypeScript, path language is inferred,
+and JavaScript/TypeScript default to Bun.
 
-Returns resolved language/engine, stdout, stderr, exit code, and JVM compile/run
-phase when applicable. Missing runtime returns installation guidance instead of
-failure.
+Returns the resolved language/engine, streams, exit status, and JVM phase.
+Missing runtime support yields setup guidance.

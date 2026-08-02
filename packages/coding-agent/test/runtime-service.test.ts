@@ -34,20 +34,18 @@ describe("RuntimeService", () => {
 		const svc = new RuntimeService(ep);
 		await svc.run({ code: "console.log(1)" });
 		await svc.check({});
-		await svc.build({ targets: [":compile"] });
 		await svc.insights({ code: "x", insight: "y" });
 		await svc.profile({ code: "x", mode: "cpusampling" });
-		await svc.spawn({ mode: "serve", directory: "public" });
-		await svc.advice({});
+		await svc.jvm({ action: "deps", path: "app.jar" });
+		await svc.spawn({ directory: "public" });
 		await svc.status();
 		expect(ep.requests.map(r => r.method)).toEqual([
 			"runtime/run",
 			"runtime/check",
-			"runtime/build",
 			"runtime/insights",
 			"runtime/profile",
+			"runtime/jvm",
 			"runtime/spawn",
-			"runtime/advice",
 			"runtime/status",
 		]);
 	});
@@ -202,20 +200,23 @@ describe("RuntimeService", () => {
 		}
 	});
 
-	test("records JVM and spawn action and resolved language", async () => {
+	test("records JVM action and resolved language plus the spawn method", async () => {
 		const events: TelemetryEvent[] = [];
 		const unsubscribe = subscribeTelemetry(event => events.push(event));
 		const service = new RuntimeService(new RecordingEndpoint());
 		try {
 			await service.jvm({ action: "disassemble", language: "java", code: "class Main {}" });
-			await service.spawn({ mode: "debug", path: "main.py", language: "python" });
+			await service.spawn({ directory: "public" });
 		} finally {
 			unsubscribe();
 		}
-		expect(events.filter(event => event.type === "runtime.call.completed")).toEqual([
+		const completed = events.filter(event => event.type === "runtime.call.completed");
+		expect(completed).toEqual([
 			expect.objectContaining({ method: "runtime/jvm", action: "disassemble", language: "java" }),
-			expect.objectContaining({ method: "runtime/spawn", action: "debug", language: "python" }),
+			expect.objectContaining({ method: "runtime/spawn" }),
 		]);
+		expect(completed[1]?.action).toBeUndefined();
+		expect(completed[1]?.language).toBeUndefined();
 	});
 
 	test("telemetry sink and span failures preserve the runtime result", async () => {

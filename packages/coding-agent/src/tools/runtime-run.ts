@@ -8,17 +8,17 @@ import { type RuntimeExecResult, RuntimeRpcError } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
 const runtimeRunSchema = type({
-	"code?": type("string").describe("inline source to execute (mutually exclusive with path)"),
-	"path?": type("string").describe("existing file to run; preserves project cwd/imports"),
+	"code?": type("string").describe("inline source (exclusive with path)"),
+	"path?": type("string").describe("existing file; keeps project cwd/imports"),
 	"language?": type("'js' | 'ts' | 'python' | 'java' | 'kotlin'").describe(
-		"language for inline code (default ts; inferred from path)",
+		"inline language (default ts; inferred from path)",
 	),
-	"engine?": type("'bun' | 'elide'").describe("execution engine (js/ts default bun; other languages use elide)"),
-	"args?": type("string[]").describe("arguments passed to the program"),
-	"stdin?": type("string").describe("data piped to the program's stdin"),
-	"timeoutMs?": type("number").describe("kill the run after this many milliseconds"),
-	"cwd?": type("string").describe("working directory (defaults to the session cwd)"),
-	"mainClass?": type("string").describe("Java/Kotlin entrypoint class override"),
+	"engine?": type("'bun' | 'elide'").describe("engine override (JS/TS default bun)"),
+	"args?": type("string[]").describe("program arguments"),
+	"stdin?": type("string").describe("program stdin"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
+	"cwd?": type("string").describe("working directory (session cwd)"),
+	"mainClass?": type("string").describe("JVM entrypoint override"),
 });
 
 export type RuntimeRunToolParams = typeof runtimeRunSchema.infer;

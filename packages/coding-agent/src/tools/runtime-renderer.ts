@@ -1,7 +1,6 @@
 /**
- * TUI renderers for the runtime tool family (`run`, `check`, `build`,
- * `insights`, `profile`, `project_advice`, the five specialized `jvm_*` flows,
- * and the two hub-backed job tools `runtime_debug` / `serve`).
+ * TUI renderers for the runtime tool family (`run`, `check`, `insights`,
+ * `profile`, the four specialized `jvm_*` flows, and hub-backed `serve`).
  *
  * These are deliberately *thin*. The house style for an exec-shaped tool is a
  * status line plus a short output preview (`glob`, `hub`), and everything that
@@ -13,7 +12,7 @@
  * invoked* on the call line, and *how did it end* on the result line — and let
  * the shared preview machinery handle the rest.
  *
- * One factory drives all fourteen because the result shapes collapse to three:
+ * One factory drives all eleven because the result shapes collapse to three:
  * `RuntimeExecResult` (exit code / duration / killed), `RuntimeJvmResult` (that
  * plus the flow's phase and what it produced), and `RuntimeJobDetails` (an
  * endpoint and a hub job handle). Per-tool differences are declarative
@@ -24,7 +23,6 @@
  * tool's own label ("Run", "JVM Jar") or "the runtime".
  */
 
-import * as path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isRecord } from "@oh-my-pi/pi-utils";
@@ -70,9 +68,9 @@ interface RuntimeRendererSpec {
 	 */
 	describeResult?: (details: AnyDetails | undefined, args: Args, uiTheme: Theme) => Frame;
 	/**
-	 * Append a `passed` / `failed` verdict to the result line. For the two tools
-	 * whose whole purpose is the verdict (`check`, `build`), an exit code alone
-	 * makes the reader do the translation.
+	 * Append a `passed` / `failed` verdict to the result line. For `check`,
+	 * whose whole purpose is the verdict, an exit code alone makes the reader
+	 * do the translation.
 	 */
 	passFail?: boolean;
 	/** Result details are a hub job descriptor, not an exec result. */
@@ -94,12 +92,6 @@ const str = (args: Args, key: string): string | undefined => {
 const num = (args: Args, key: string): number | undefined => {
 	const value = args?.[key];
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-};
-const strList = (args: Args, key: string): string[] | undefined => {
-	const value = args?.[key];
-	if (!Array.isArray(value)) return undefined;
-	const items = value.filter((item): item is string => typeof item === "string" && item.length > 0);
-	return items.length > 0 ? items : undefined;
 };
 
 /** `run`/`insights`/`profile` all take either inline source or an existing file. */
@@ -292,24 +284,12 @@ function jvmResultFrame(fallback: (args: Args) => Frame) {
 		const written = jvm.output ?? jvm.jar;
 		return {
 			description: (written ? shortenPath(written) : undefined) ?? jvm.className ?? base.description,
-			meta: [
-				...(base.meta ?? []),
-				stoppedEarly ? `stopped at ${jvm.phase}` : undefined,
-				jvm.entryCount !== undefined ? `${jvm.entryCount} entries` : undefined,
-			],
+			meta: [...(base.meta ?? []), stoppedEarly ? `stopped at ${jvm.phase}` : undefined],
 		};
 	};
 }
 
-/**
- * `describeResult` for the two hub-backed job tools.
- *
- * The endpoint takes the description slot because it is what the caller needs
- * next — but `mergeCallAndResult` removes the call frame above this row, so the
- * launched target has to ride along in `meta` or the transcript stops saying
- * *what* is being debugged or served. (`serve` is partly self-documenting via
- * the URL's path; `runtime_debug`'s `ws://…` endpoint says nothing at all.)
- */
+/** `describeResult` for the supervised static-server tool. */
 function jobResultFrame(fallback: (args: Args) => Frame) {
 	return (details: AnyDetails | undefined, args: Args): Frame => {
 		if (!isJobDetails(details)) return fallback(args);
@@ -324,11 +304,6 @@ function jobResultFrame(fallback: (args: Args) => Frame) {
 const runCallFrame = (args: Args): Frame => ({
 	description: describeSource(args),
 	meta: [str(args, "language") ?? (str(args, "path") ? undefined : "ts"), str(args, "engine"), str(args, "mainClass")],
-});
-
-const debugCallFrame = (args: Args): Frame => ({
-	description: shortenPath(str(args, "path") ?? "?"),
-	meta: [str(args, "protocol") ?? "cdp"],
 });
 
 const serveCallFrame = (args: Args): Frame => {
@@ -372,12 +347,6 @@ const RUNTIME_RENDERER_SPECS: Record<string, RuntimeRendererSpec> = {
 		}),
 	},
 
-	build: {
-		title: "Build",
-		passFail: true,
-		describeCall: args => ({ description: strList(args, "targets")?.join(" ") ?? "default targets" }),
-	},
-
 	insights: {
 		title: "Insights",
 		describeCall: args => {
@@ -392,11 +361,6 @@ const RUNTIME_RENDERER_SPECS: Record<string, RuntimeRendererSpec> = {
 	profile: {
 		title: "Profile",
 		describeCall: args => ({ description: describeSource(args), meta: [str(args, "mode")] }),
-	},
-
-	project_advice: {
-		title: "Project Advice",
-		describeCall: args => ({ description: path.basename(str(args, "cwd") ?? getProjectDir()) }),
 	},
 
 	jvm_disassemble: {
@@ -414,19 +378,6 @@ const RUNTIME_RENDERER_SPECS: Record<string, RuntimeRendererSpec> = {
 	jvm_jar: { title: "JVM Jar", describeCall: jvmJarCallFrame, describeResult: jvmResultFrame(jvmJarCallFrame) },
 
 	jvm_deps: { title: "JVM Deps", describeCall: jvmDepsCallFrame, describeResult: jvmResultFrame(jvmDepsCallFrame) },
-
-	jvm_javadoc: {
-		title: "JVM Javadoc",
-		describeCall: args => ({ description: str(args, "output") ?? "javadoc-out" }),
-		describeResult: jvmResultFrame(args => ({ description: str(args, "output") ?? "javadoc-out" })),
-	},
-
-	runtime_debug: {
-		title: "Runtime Debug",
-		job: true,
-		describeCall: debugCallFrame,
-		describeResult: jobResultFrame(debugCallFrame),
-	},
 
 	serve: {
 		title: "Serve",

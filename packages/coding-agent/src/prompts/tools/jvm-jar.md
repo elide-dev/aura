@@ -1,9 +1,6 @@
-Create a JAR from Java/Kotlin source or inspect an existing JAR.
+Create or inspect a JAR.
 
-- `create` requires `language` + `code` + `output`; compile in scratch space,
-  write to in-project `output`, and derive the manifest main class unless
-  `mainClass` is supplied. Reject `.`, `..`,
-  paths outside the cwd, existing directories, and existing files unless
-  `overwrite: true`.
-- `inspect` requires `jar`; list entries from an existing in-project JAR;
-  read-only.
+- `create`: compile `language` + `code` in scratch space and write `output`.
+  The main class is derived unless supplied. Output must stay inside the cwd;
+  existing files require `overwrite: true`, and directories are refused.
+- `inspect`: list an existing in-project `jar`; read-only.

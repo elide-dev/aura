@@ -79,8 +79,8 @@ export type ToolRenderer = {
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {
-	// Runtime tool family (`run`/`check`/`build`/`insights`/`profile`/`jvm_*`/
-	// `runtime_debug`/`serve`/`project_advice`) — one factory, per-tool specs.
+	// Runtime tool family (`run`/`check`/`insights`/`profile`/`jvm_*`/`serve`) —
+	// one factory, per-tool specs.
 	...runtimeToolRenderers,
 	ask: askToolRenderer as ToolRenderer,
 	ast_grep: astGrepToolRenderer as ToolRenderer,

@@ -283,7 +283,7 @@ function runtimeSection(input: DoctorRuntimeInput): DoctorEntry[] {
 				label: "state",
 				status: "warn",
 				detail:
-					"disabled (runtime.enabled = false) — run/check/build/insights/profile and the five specialized jvm_* tools do not register",
+					"disabled (runtime.enabled = false) — run/check/insights/profile and the four specialized jvm_* tools do not register",
 			},
 			protocol,
 		];
@@ -649,24 +649,12 @@ export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint",
  * drift test can enumerate it and compare against the real registry.
  */
 const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | undefined> = {
-	// Runtime execution/check/build/analysis, the two launch tools, the five
-	// specialized Jvm*Tool classes, and RuntimeAdviceTool gate on `runtime.enabled`.
+	// Runtime execution/check/analysis, the launch tool, and the four specialized
+	// Jvm*Tool classes gate on `runtime.enabled`.
 	...Object.fromEntries(
-		[
-			"run",
-			"check",
-			"build",
-			"insights",
-			"profile",
-			"runtime_debug",
-			"serve",
-			"jvm_disassemble",
-			"jvm_format",
-			"jvm_jar",
-			"jvm_deps",
-			"jvm_javadoc",
-			"project_advice",
-		].map(name => [name, (s: ToolGateSettings) => (s.runtimeEnabled ? undefined : "runtime.enabled = false")]),
+		["run", "check", "insights", "profile", "serve", "jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps"].map(
+			name => [name, (s: ToolGateSettings) => (s.runtimeEnabled ? undefined : "runtime.enabled = false")],
+		),
 	),
 	// DebugTool.createIf
 	debug: s => (s.debugEnabled ? undefined : "debug.enabled = false"),

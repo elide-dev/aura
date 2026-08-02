@@ -1,5 +1,5 @@
 /**
- * Inspect the managed runtime powering the innate run/check/build/insights/profile tools.
+ * Inspect the managed runtime powering the innate run/check/insights/profile tools.
  */
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";

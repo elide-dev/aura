@@ -8,9 +8,9 @@ import { jvmLanguage, renderJvmPayload, requireRuntimeService } from "./jvm-comm
 
 const jvmDisassembleSchema = type({
 	language: jvmLanguage.describe("source language"),
-	code: type("string").describe("Java or Kotlin source"),
-	"mainClass?": type("string").describe("class to disassemble (default: the public class, or MainKt for Kotlin)"),
-	"timeoutMs?": type("number").describe("kill the compile or the disassembly after this many milliseconds"),
+	code: type("string").describe("source to compile"),
+	"mainClass?": type("string").describe("target class (derived by default)"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
 });
 
 export type JvmDisassembleToolParams = typeof jvmDisassembleSchema.infer;

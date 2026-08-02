@@ -6,15 +6,15 @@ import type { RuntimeExecResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
 const runtimeInsightsSchema = type({
-	"code?": type("string").describe("inline program source (mutually exclusive with path)"),
+	"code?": type("string").describe("inline program (exclusive with path)"),
 	"path?": type("string").describe("existing program file"),
-	"insight?": type("string").describe("inline insight instrumentation script (JavaScript)"),
-	"insightPath?": type("string").describe("existing insight script path"),
-	"language?": type("'js' | 'ts' | 'python'").describe("program language (default ts for inline code)"),
-	"args?": type("string[]").describe("arguments passed to the program"),
-	"stdin?": type("string").describe("data piped to stdin"),
-	"timeoutMs?": type("number").describe("kill the run after this many milliseconds"),
-	"cwd?": type("string").describe("working directory (defaults to the session cwd)"),
+	"insight?": type("string").describe("inline JS instrumentation"),
+	"insightPath?": type("string").describe("instrumentation file"),
+	"language?": type("'js' | 'ts' | 'python'").describe("inline language (default ts)"),
+	"args?": type("string[]").describe("program arguments"),
+	"stdin?": type("string").describe("program stdin"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
+	"cwd?": type("string").describe("working directory (session cwd)"),
 });
 
 export type RuntimeInsightsToolParams = typeof runtimeInsightsSchema.infer;

@@ -1,7 +1,5 @@
 import {
 	createRequest,
-	type RuntimeAdviceParams,
-	type RuntimeBuildParams,
 	type RuntimeCheckParams,
 	type RuntimeExecResult,
 	type RuntimeInsightsParams,
@@ -49,34 +47,22 @@ export class RuntimeService {
 	check(params: RuntimeCheckParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeExecResult> {
 		return this.#call("runtime/check", params, signal, sessionId);
 	}
-	build(params: RuntimeBuildParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeExecResult> {
-		return this.#call("runtime/build", params, signal, sessionId);
-	}
 	insights(params: RuntimeInsightsParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeExecResult> {
 		return this.#call("runtime/insights", params, signal, sessionId);
 	}
 	profile(params: RuntimeProfileParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeExecResult> {
 		return this.#call("runtime/profile", params, signal, sessionId);
 	}
-	/** One of the six JVM flows; see {@link RuntimeJvmParams.action}. */
+	/** Run a specialized JVM analysis, formatting, or artifact flow. */
 	jvm(params: RuntimeJvmParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeJvmResult> {
 		return this.#call("runtime/jvm", params, signal, sessionId);
 	}
 	/**
-	 * Compose the command line for a long-running flow (`debug`, `serve`) without
-	 * starting anything. The caller starts the returned descriptor through the
-	 * `hub` supervisor and owns its lifecycle; nothing here holds a process.
+	 * Compose a supervised static-server command without starting it. The caller
+	 * starts the descriptor through `hub` and owns its lifecycle.
 	 */
 	spawn(params: RuntimeSpawnParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeLaunchDescriptor> {
 		return this.#call("runtime/spawn", params, signal, sessionId);
-	}
-	/**
-	 * The runtime's own build/run/test/install guidance for a project directory.
-	 * Read-only, and it runs in the real directory — the guidance is derived from
-	 * the manifests it finds there.
-	 */
-	advice(params: RuntimeAdviceParams, signal?: AbortSignal, sessionId?: string): Promise<RuntimeExecResult> {
-		return this.#call("runtime/advice", params, signal, sessionId);
 	}
 	status(): Promise<RuntimeStatusResult> {
 		return this.#call("runtime/status", undefined);

@@ -205,7 +205,7 @@ describe("runtime benchmark orchestration", () => {
 		expect(launches.filter(launch => launch.arm === "runtime")).toHaveLength(RUNTIME_TASKS.length);
 		expect(launches[0].args).toContain(`--agent-arg=${BASELINE_TOOLS.join(",")}`);
 		expect(launches.find(launch => launch.arm === "runtime")?.args).toContain(
-			`--agent-arg=${[...BASELINE_TOOLS, "run", "check", "build"].join(",")}`,
+			`--agent-arg=${[...BASELINE_TOOLS, "run", "check"].join(",")}`,
 		);
 		expect(launches.every(launch => launch.args.includes("--host-network"))).toBe(true);
 	});
@@ -220,18 +220,16 @@ describe("runtime benchmark orchestration", () => {
 			taskRoot: "/tmp/tasks",
 			gatewayUrl: "http://127.0.0.1:4000",
 			hostNetwork: true,
-			taskIds: ["project-validation", "instrumentation", "jvm-dependency-docs"],
+			taskIds: ["project-validation", "instrumentation", "jvm-dependencies"],
 		});
 		const runtimeArgs = (taskId: string) =>
 			launches.find(launch => launch.arm === "runtime" && launch.taskId === taskId)?.args;
-		const essentials = [...BASELINE_TOOLS, "run", "check", "build"];
+		const essentials = [...BASELINE_TOOLS, "run", "check"];
 
 		expect(runtimeArgs("project-validation")).toContain(`--agent-arg=${essentials.join(",")}`);
 		expect(runtimeArgs("project-validation")?.join(" ")).not.toContain("project_advice");
 		expect(runtimeArgs("instrumentation")).toContain(`--agent-arg=${[...essentials, "insights"].join(",")}`);
-		expect(runtimeArgs("jvm-dependency-docs")).toContain(
-			`--agent-arg=${[...essentials, "jvm_deps", "jvm_javadoc"].join(",")}`,
-		);
+		expect(runtimeArgs("jvm-dependencies")).toContain(`--agent-arg=${[...essentials, "jvm_deps"].join(",")}`);
 	});
 
 	it("maps packaged runtime files into source-mounted task containers", () => {
@@ -668,7 +666,7 @@ describe("runtime benchmark orchestration", () => {
 			tools: {
 				baseline: BASELINE_TOOLS,
 				runtimeByTask: {
-					"python-execution": [...BASELINE_TOOLS, "run", "check", "build"],
+					"python-execution": [...BASELINE_TOOLS, "run", "check"],
 				},
 				historical: BASELINE_TOOLS,
 			},

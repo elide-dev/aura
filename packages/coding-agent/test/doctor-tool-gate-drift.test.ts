@@ -127,20 +127,14 @@ describe("doctor's tool-gate table matches the real registry", () => {
 		const dropped = [...on].filter(name => !off.has(name)).sort();
 		expect(dropped).toEqual(
 			[
-				"build",
 				"check",
 				"insights",
 				"jvm_deps",
 				"jvm_disassemble",
 				"jvm_format",
 				"jvm_jar",
-				"jvm_javadoc",
 				"profile",
-				// Read-only, but registered on the same gate: no runtime, no advice.
-				"project_advice",
 				"run",
-				// The two long-running flows ride the same gate.
-				"runtime_debug",
 				"serve",
 			].sort(),
 		);

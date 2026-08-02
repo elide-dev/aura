@@ -9,13 +9,7 @@
 import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { UsageHistoryEntry } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
-import type {
-	RuntimeErrorCode,
-	RuntimeJvmAction,
-	RuntimeLanguage,
-	RuntimeMethod,
-	RuntimeSpawnMode,
-} from "../runtime/protocol";
+import type { RuntimeErrorCode, RuntimeJvmAction, RuntimeLanguage, RuntimeMethod } from "../runtime/protocol";
 
 export type SessionMode = "tui" | "acp" | "rpc" | "print" | "sdk";
 export type CompactionTrigger = "threshold" | "overflow" | "idle" | "incomplete" | "manual";
@@ -37,7 +31,7 @@ export interface RuntimeCallCompletedTelemetry {
 	type: "runtime.call.completed";
 	sessionId: string | undefined;
 	method: RuntimeMethod;
-	action?: RuntimeJvmAction | RuntimeSpawnMode;
+	action?: RuntimeJvmAction;
 	language?: RuntimeLanguage;
 	outcome: RuntimeCallOutcome;
 	durationMs: number;

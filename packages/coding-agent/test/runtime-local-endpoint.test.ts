@@ -46,14 +46,6 @@ describe("LocalRuntimeEndpoint", () => {
 		expect(out.stdout.trim()).toBe("ARGS:build --no-color");
 	});
 
-	test("build passes targets through", async () => {
-		const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
-		const out = unwrapResponse<RuntimeExecResult>(
-			await ep.request(createRequest("runtime/build", { targets: [":deps", "--fresh"] })),
-		);
-		expect(out.stdout.trim()).toBe("ARGS:build --no-color :deps --fresh");
-	});
-
 	test("status reports version without provisioning", async () => {
 		const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
 		const out = unwrapResponse<RuntimeStatusResult>(await ep.request(createRequest("runtime/status", undefined)));
@@ -214,55 +206,6 @@ describe("LocalRuntimeEndpoint", () => {
 				expect((e as RuntimeRpcError).code).toBe("runtime-missing");
 			}
 			expect(calls).toEqual([]);
-		});
-	});
-
-	describe("runtime/advice", () => {
-		test("maps to the pinned project-advice argv and takes no other input", async () => {
-			const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
-			const out = unwrapResponse<RuntimeExecResult>(await ep.request(createRequest("runtime/advice", {})));
-			expect(out.exitCode).toBe(0);
-			expect(out.stdout.trim()).toBe("ARGS:project advice --error-format=plain --no-color");
-		});
-
-		test("empty params are valid — there is nothing to configure but where to look", async () => {
-			const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
-			// Undefined params, not even an object: `advice` must not demand a field.
-			const out = unwrapResponse<RuntimeExecResult>(await ep.request(createRequest("runtime/advice", undefined)));
-			expect(out.stdout.trim()).toBe("ARGS:project advice --error-format=plain --no-color");
-		});
-
-		test("runs in the caller's real directory, with no temp workdir", async () => {
-			// The whole point of the flow: advice detects manifests in place, so the
-			// process cwd must be exactly what the caller named.
-			const pwdBin = path.join(dir, "pwd-echo");
-			await fs.writeFile(pwdBin, `#!/bin/sh\necho "CWD:$(pwd)"\n`, { mode: 0o755 });
-			const project = path.join(dir, "project");
-			await fs.mkdir(project, { recursive: true });
-			const ep = new LocalRuntimeEndpoint({ explicitPath: pwdBin, autoDownload: false });
-			const out = unwrapResponse<RuntimeExecResult>(
-				await ep.request(createRequest("runtime/advice", { cwd: project })),
-			);
-			expect(out.stdout.trim()).toBe(`CWD:${await fs.realpath(project)}`);
-		});
-
-		test("omitting cwd leaves the endpoint process directory in place", async () => {
-			const pwdBin = path.join(dir, "pwd-echo2");
-			await fs.writeFile(pwdBin, `#!/bin/sh\necho "CWD:$(pwd)"\n`, { mode: 0o755 });
-			const ep = new LocalRuntimeEndpoint({ explicitPath: pwdBin, autoDownload: false });
-			const out = unwrapResponse<RuntimeExecResult>(await ep.request(createRequest("runtime/advice", {})));
-			expect(out.stdout.trim()).toBe(`CWD:${await fs.realpath(process.cwd())}`);
-		});
-
-		test("a missing runtime is a typed runtime-missing error", async () => {
-			const ep = new LocalRuntimeEndpoint({ explicitPath: path.join(dir, "nope"), autoDownload: false });
-			const res = await ep.request(createRequest("runtime/advice", {}));
-			try {
-				unwrapResponse(res);
-				throw new Error("expected error");
-			} catch (e) {
-				expect((e as RuntimeRpcError).code).toBe("runtime-missing");
-			}
 		});
 	});
 

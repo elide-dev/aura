@@ -38,55 +38,9 @@ async function descriptor(params: Record<string, unknown>): Promise<RuntimeLaunc
 	return unwrapResponse<RuntimeLaunchDescriptor>(await endpoint().request(createRequest("runtime/spawn", params)));
 }
 
-describe("runtime/spawn — debug descriptors", () => {
-	test("composes the CDP argv and carries the ws:// recognition rule", async () => {
-		const d = await descriptor({ mode: "debug", path: guest, cwd: dir });
-		expect(d.argv).toEqual([
-			fakeBin,
-			"run",
-			"--debugger=cdp",
-			"--error-format=plain",
-			"--no-color",
-			"-l",
-			"ts",
-			guest,
-		]);
-		expect(d.cwd).toBe(dir);
-		expect(d.env).toEqual({ NO_COLOR: "1" });
-		expect(d.endpointPattern).toEqual([{ pattern: "ws://\\S+" }]);
-		expect(d.source).toBe("flag");
-		expect(d.shimWarning).toBeUndefined();
-	});
-
-	test("dap selects the debugger flag and the `listening on` rule", async () => {
-		const d = await descriptor({ mode: "debug", path: guest, protocol: "dap", cwd: dir });
-		expect(d.argv).toContain("--debugger=dap");
-		// The optional `/` is consumed, not captured: see the real banner test below.
-		expect(d.endpointPattern).toEqual([{ pattern: "listening on\\s+/?(\\S+)", group: 1 }]);
-	});
-
-	test("language is inferred from the extension and overridable", async () => {
-		const py = path.join(dir, "app.py");
-		await fs.writeFile(py, "print(1)\n");
-		expect((await descriptor({ mode: "debug", path: py, cwd: dir })).argv).toContain("python");
-		expect((await descriptor({ mode: "debug", path: py, language: "js", cwd: dir })).argv).toContain("js");
-	});
-
-	test("guest args go after `--`, and timeoutMs becomes the runtime's own timeout flag", async () => {
-		const d = await descriptor({ mode: "debug", path: guest, args: ["a", "b"], timeoutMs: 2500, cwd: dir });
-		expect(d.argv.join(" ")).toContain("--timeout 2500ms");
-		expect(d.argv.slice(-3)).toEqual(["--", "a", "b"]);
-	});
-
-	test("a missing or absent path is invalid-params, not a launch", async () => {
-		await expect(descriptor({ mode: "debug", cwd: dir })).rejects.toMatchObject({ code: "invalid-params" });
-		await expect(descriptor({ mode: "debug", path: path.join(dir, "nope.ts"), cwd: dir })).rejects.toMatchObject({
-			code: "invalid-params",
-		});
-	});
-
-	test("a directory in place of the program file is refused", async () => {
-		await expect(descriptor({ mode: "debug", path: staticDir, cwd: dir })).rejects.toMatchObject({
+describe("runtime/spawn — removed debug descriptors", () => {
+	test("rejects the retired debug mode instead of silently serving", async () => {
+		await expect(descriptor({ mode: "debug", path: guest, directory: staticDir, cwd: dir })).rejects.toMatchObject({
 			code: "invalid-params",
 		});
 	});
@@ -94,7 +48,7 @@ describe("runtime/spawn — debug descriptors", () => {
 
 describe("runtime/spawn — serve descriptors", () => {
 	test("composes the serve argv with --no-tui and the static-files rule", async () => {
-		const d = await descriptor({ mode: "serve", directory: "public", cwd: dir });
+		const d = await descriptor({ directory: "public", cwd: dir });
 		expect(d.argv).toEqual([fakeBin, "serve", staticDir, "--no-tui"]);
 		expect(d.endpointPattern).toEqual([
 			{ pattern: "Serving static files on\\s+(\\S+)", group: 1, prefix: "http://" },
@@ -102,53 +56,33 @@ describe("runtime/spawn — serve descriptors", () => {
 	});
 
 	test("port and host are appended only when supplied", async () => {
-		const d = await descriptor({ mode: "serve", directory: staticDir, port: 8123, host: "0.0.0.0", cwd: dir });
+		const d = await descriptor({ directory: staticDir, port: 8123, host: "0.0.0.0", cwd: dir });
 		expect(d.argv.slice(-4)).toEqual(["--port", "8123", "--host", "0.0.0.0"]);
 	});
 
 	test("a non-integer or out-of-range port is invalid-params", async () => {
 		for (const port of [0, 70_000, 1.5]) {
-			await expect(descriptor({ mode: "serve", directory: staticDir, port, cwd: dir })).rejects.toMatchObject({
+			await expect(descriptor({ directory: staticDir, port, cwd: dir })).rejects.toMatchObject({
 				code: "invalid-params",
 			});
 		}
 	});
 
 	test("a missing directory, or a file in its place, is invalid-params", async () => {
-		await expect(descriptor({ mode: "serve", cwd: dir })).rejects.toMatchObject({ code: "invalid-params" });
-		await expect(descriptor({ mode: "serve", directory: "nope", cwd: dir })).rejects.toMatchObject({
+		await expect(descriptor({ cwd: dir })).rejects.toMatchObject({ code: "invalid-params" });
+		await expect(descriptor({ directory: "nope", cwd: dir })).rejects.toMatchObject({
 			code: "invalid-params",
 		});
-		await expect(descriptor({ mode: "serve", directory: guest, cwd: dir })).rejects.toMatchObject({
+		await expect(descriptor({ directory: guest, cwd: dir })).rejects.toMatchObject({
 			code: "invalid-params",
 		});
 	});
 });
 
-/**
- * The rules the endpoint ships must parse the banners the pinned runtime really
- * prints. These are verbatim captures from 1.4.2 — the one thing a unit test can
- * pin that a mocked banner cannot, and the bug class that shipped a `/0.0.0.0:4711`
- * "endpoint" no DAP client could attach to.
- */
-describe("runtime/spawn — the shipped rules parse real 1.4.2 banners", () => {
-	test("cdp", async () => {
-		const d = await descriptor({ mode: "debug", path: guest, protocol: "cdp", cwd: dir });
-		const banner =
-			"Debugger listening on ws://127.0.0.1:9229/0dc12963/inspect\n" +
-			"For help, see: https://www.graalvm.org/tools/chrome-debugger\n" +
-			"E.g. in Chrome open: devtools://devtools/bundled/js_app.html?ws=127.0.0.1:9229/0dc12963/inspect\n";
-		expect(matchRuntimeEndpoint(banner, d.endpointPattern)).toBe("ws://127.0.0.1:9229/0dc12963/inspect");
-	});
-
-	test("dap — the leading slash never reaches the caller", async () => {
-		const d = await descriptor({ mode: "debug", path: guest, protocol: "dap", cwd: dir });
-		const banner = "[Graal DAP] Starting server and listening on /0.0.0.0:4711\n";
-		expect(matchRuntimeEndpoint(banner, d.endpointPattern)).toBe("0.0.0.0:4711");
-	});
-
+/** The endpoint rule must parse the banner printed by the pinned runtime. */
+describe("runtime/spawn — the shipped rule parses the real serve banner", () => {
 	test("serve", async () => {
-		const d = await descriptor({ mode: "serve", directory: staticDir, cwd: dir });
+		const d = await descriptor({ directory: staticDir, cwd: dir });
 		const banner =
 			'Serving from directory: "/tmp/pub"\nServing /tmp/pub at http://"127.0.0.1":8080\n' +
 			"Serving static files on 127.0.0.1:8080\n";
@@ -159,7 +93,7 @@ describe("runtime/spawn — the shipped rules parse real 1.4.2 banners", () => {
 describe("runtime/spawn — resolution", () => {
 	test("a missing runtime is a runtime-missing error, never a partial descriptor", async () => {
 		const ep = new LocalRuntimeEndpoint({ explicitPath: path.join(dir, "gone"), autoDownload: false });
-		const res = await ep.request(createRequest("runtime/spawn", { mode: "serve", directory: staticDir, cwd: dir }));
+		const res = await ep.request(createRequest("runtime/spawn", { directory: staticDir, cwd: dir }));
 		expect(() => unwrapResponse(res)).toThrow(RuntimeRpcError);
 		expect(() => unwrapResponse(res)).toThrow(/not installed/);
 	});
@@ -170,7 +104,7 @@ describe("runtime/spawn — resolution", () => {
 			resolve: async () => ({ binaryPath: fakeBin, source: "path" }),
 		});
 		const d = unwrapResponse<RuntimeLaunchDescriptor>(
-			await onPath.request(createRequest("runtime/spawn", { mode: "serve", directory: staticDir, cwd: dir })),
+			await onPath.request(createRequest("runtime/spawn", { directory: staticDir, cwd: dir })),
 		);
 		expect(d.source).toBe("path");
 		expect(d.shimWarning).toMatch(/PATH/);
@@ -186,13 +120,17 @@ describe("runtime/spawn — resolution", () => {
 			resolve: async () => ({ binaryPath: fakeBin, source: "managed" }),
 		});
 		const m = unwrapResponse<RuntimeLaunchDescriptor>(
-			await managed.request(createRequest("runtime/spawn", { mode: "serve", directory: staticDir, cwd: dir })),
+			await managed.request(createRequest("runtime/spawn", { directory: staticDir, cwd: dir })),
 		);
 		expect(m.shimWarning).toBeUndefined();
 	});
 
-	test("an unknown mode is invalid-params", async () => {
-		await expect(descriptor({ mode: "repl" })).rejects.toMatchObject({ code: "invalid-params" });
+	test("an obsolete or unknown mode is invalid-params", async () => {
+		for (const mode of ["debug", "repl"]) {
+			await expect(descriptor({ mode, directory: staticDir, cwd: dir })).rejects.toMatchObject({
+				code: "invalid-params",
+			});
+		}
 	});
 
 	test("invalid params are rejected before the binary is resolved, so no download is triggered", async () => {
@@ -212,11 +150,10 @@ describe("runtime/spawn — resolution", () => {
 			},
 		});
 		for (const params of [
-			{ mode: "repl" },
-			{ mode: "debug", cwd: dir },
-			{ mode: "debug", path: path.join(dir, "missing.ts"), cwd: dir },
-			{ mode: "serve", directory: "nope", cwd: dir },
-			{ mode: "serve", directory: staticDir, port: 0, cwd: dir },
+			{ mode: "repl", directory: staticDir, cwd: dir },
+			{ mode: "debug", directory: staticDir, cwd: dir },
+			{ directory: "nope", cwd: dir },
+			{ directory: staticDir, port: 0, cwd: dir },
 		]) {
 			const res = await ep.request(createRequest("runtime/spawn", params));
 			expect(() => unwrapResponse(res)).toThrow(RuntimeRpcError);
@@ -226,9 +163,7 @@ describe("runtime/spawn — resolution", () => {
 
 		// Sanity: valid params DO resolve, so the assertion above is about ordering
 		// rather than a resolve call that never happens.
-		unwrapResponse(
-			await ep.request(createRequest("runtime/spawn", { mode: "serve", directory: staticDir, cwd: dir })),
-		);
+		unwrapResponse(await ep.request(createRequest("runtime/spawn", { directory: staticDir, cwd: dir })));
 		expect(resolved).toBe(1);
 		expect(provisioned).toBe(1);
 	});

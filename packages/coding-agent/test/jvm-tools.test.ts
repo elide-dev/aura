@@ -5,7 +5,6 @@ import { JvmDepsTool } from "../src/tools/jvm-deps";
 import { JvmDisassembleTool } from "../src/tools/jvm-disassemble";
 import { JvmFormatTool } from "../src/tools/jvm-format";
 import { JvmJarTool } from "../src/tools/jvm-jar";
-import { JvmJavadocTool } from "../src/tools/jvm-javadoc";
 
 const SESSION_CWD = "/work/project";
 
@@ -161,44 +160,30 @@ describe("jvm_deps", () => {
 		expect(seen()).toEqual({ action: "deps", path: "out/Main.class", cwd: SESSION_CWD });
 		expect(textOf(out)).toBe("Main.class -> java.base");
 	});
-});
 
-describe("jvm_javadoc", () => {
-	test("reports the written tree, its size, and how to browse it", async () => {
+	test("source path and output are forwarded without manual compilation or writing", async () => {
 		const { session, seen } = sessionReturning(
 			ok({
-				action: "javadoc",
-				phase: "javadoc",
-				className: "Widget",
-				output: "/work/project/apidocs",
-				entryCount: 42,
-				topLevel: ["index.html", "Widget.html"],
+				action: "deps",
+				phase: "deps",
+				stdout: "Report.class -> java.sql\n",
+				output: "/work/project/deps.txt",
 			}),
 		);
-		const out = await JvmJavadocTool.createIf(session)!.execute(
+		const out = await JvmDepsTool.createIf(session)!.execute(
 			"id",
-			{ code: "public class Widget {}", output: "apidocs" },
+			{ path: "Report.java", output: "deps.txt", overwrite: true },
 			SIGNAL,
 		);
 		expect(seen()).toEqual({
-			action: "javadoc",
-			code: "public class Widget {}",
-			output: "apidocs",
+			action: "deps",
+			path: "Report.java",
+			output: "deps.txt",
+			overwrite: true,
 			cwd: SESSION_CWD,
 		});
-		expect(textOf(out)).toBe(
-			"Generated API docs for Widget → /work/project/apidocs (42 entries).\n" +
-				"Top-level: index.html, Widget.html\n" +
-				"Tip: open /work/project/apidocs/index.html to browse them.",
-		);
-	});
-
-	test("a javadoc failure renders the generator's output", async () => {
-		const { session } = sessionReturning(
-			ok({ action: "javadoc", phase: "javadoc", exitCode: 1, stderr: "error: bad @link" }),
-		);
-		const out = await JvmJavadocTool.createIf(session)!.execute("id", { code: "class X {}" }, SIGNAL);
-		expect(textOf(out)).toContain("error: bad @link");
+		expect(textOf(out)).toContain("Wrote dependency report to /work/project/deps.txt");
+		expect(textOf(out)).toContain("Report.class -> java.sql");
 	});
 });
 
@@ -214,7 +199,6 @@ describe("JVM tools without a runtime service", () => {
 			JvmFormatTool.createIf(session)!,
 			JvmJarTool.createIf(session)!,
 			JvmDepsTool.createIf(session)!,
-			JvmJavadocTool.createIf(session)!,
 		];
 		for (const tool of tools) {
 			await expect(

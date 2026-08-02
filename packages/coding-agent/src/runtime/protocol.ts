@@ -20,12 +20,10 @@ export const RUNTIME_PROTOCOL_VERSION = 3 as const;
 export type RuntimeMethod =
 	| "runtime/run"
 	| "runtime/check"
-	| "runtime/build"
 	| "runtime/insights"
 	| "runtime/profile"
 	| "runtime/jvm"
 	| "runtime/spawn"
-	| "runtime/advice"
 	| "runtime/status";
 
 export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
@@ -108,8 +106,8 @@ export interface RuntimeProfileParams extends RuntimeRunParams {
 	mode: "cputracing" | "cpusampling";
 }
 
-/** The six JVM flows behind the single `runtime/jvm` method. */
-export type RuntimeJvmAction = "run" | "disassemble" | "format" | "jar" | "deps" | "javadoc";
+/** The five JVM flows behind the single `runtime/jvm` method. */
+export type RuntimeJvmAction = "run" | "disassemble" | "format" | "jar" | "deps";
 
 /**
  * Parameters for `runtime/jvm`. One method, one action union: every flow is
@@ -120,7 +118,7 @@ export type RuntimeJvmAction = "run" | "disassemble" | "format" | "jar" | "deps"
  */
 export interface RuntimeJvmParams {
 	action: RuntimeJvmAction;
-	/** Source language. Required for every action except `javadoc` (Java-only) and `jar`/`deps` in artifact mode. */
+	/** Source language. Required except for `jar`/`deps` in artifact mode. */
 	language?: JvmLanguage;
 	/** Inline source to compile. */
 	code?: string;
@@ -132,13 +130,13 @@ export interface RuntimeJvmParams {
 	stdin?: string;
 	/** `jar` sub-mode: build a jar from source, or list an existing one. Default `create`. */
 	mode?: "create" | "inspect";
-	/** Destination written by `jar` (create) and `javadoc`, resolved against `cwd`. */
+	/** Destination written by `jar` (create) or `deps`, resolved against `cwd`. */
 	output?: string;
 	/** Required to replace an existing `output`. */
 	overwrite?: boolean;
 	/** Existing jar to inspect (`jar`, mode `inspect`), resolved against `cwd`. */
 	jar?: string;
-	/** Source path for `run`, or existing `.class`/`.jar`/directory for `deps`; resolved against `cwd`. */
+	/** Source path for `run`; source, `.class`, `.jar`, or class directory for `deps`; resolved against `cwd`. */
 	path?: string;
 	/** Base directory for path-bearing fields and the `run` program cwd. */
 	cwd?: string;
@@ -163,16 +161,12 @@ export interface RuntimeJvmResult extends RuntimeExecResult {
 	className?: string;
 	/** `format`: the formatted source, read back from the workdir. */
 	formatted?: string;
-	/** `jar`/`javadoc`: absolute path actually written. */
+	/** `jar`/`deps`: absolute path actually written. */
 	output?: string;
 	/** `jar` (inspect): absolute path of the archive that was listed. */
 	jar?: string;
 	/** `jar`: `jar --list` output for the built or inspected archive. */
 	listing?: string;
-	/** `javadoc`: number of entries copied into `output`. */
-	entryCount?: number;
-	/** `javadoc`: first few top-level entries of `output`, for orientation. */
-	topLevel?: string[];
 }
 
 // ── runtime/spawn: launch descriptors for long-running processes ─────────────
@@ -183,36 +177,15 @@ export interface RuntimeJvmResult extends RuntimeExecResult {
 // the endpoint the process prints — and nothing in the runtime layer holds a
 // process handle.
 
-/** Wire protocol a debug session speaks: Chrome DevTools, or Debug Adapter. */
-export type RuntimeDebugProtocol = "cdp" | "dap";
-
-/** Which long-running flow to compose a descriptor for. */
-export type RuntimeSpawnMode = "debug" | "serve";
-
+/** Parameters for composing a supervised static-file server launch. */
 export interface RuntimeSpawnParams {
-	mode: RuntimeSpawnMode;
-	/**
-	 * `debug`: existing program file to run under the debugger. Required — unlike
-	 * `runtime/run` there is no inline-code mode, because the file would have to
-	 * outlive the request that created it and no request-scoped workdir can
-	 * promise that.
-	 */
-	path?: string;
-	/** `debug`: language override; inferred from `path`'s extension otherwise. */
-	language?: RuntimeLanguage;
-	/** `debug`: debug wire protocol. Default `cdp`. */
-	protocol?: RuntimeDebugProtocol;
-	/** `debug`: arguments passed to the program after `--`. */
-	args?: string[];
-	/** `debug`: guest execution timeout, passed to the runtime as `--timeout <n>ms`. */
-	timeoutMs?: number;
-	/** `serve`: directory of static files to serve, resolved against `cwd`. Required. */
-	directory?: string;
-	/** `serve`: TCP port to bind. */
+	/** Directory of static files to serve, resolved against `cwd`. */
+	directory: string;
+	/** TCP port to bind. */
 	port?: number;
-	/** `serve`: interface to bind. */
+	/** Interface to bind. */
 	host?: string;
-	/** Working directory for the launched process, and the base for `path`/`directory`. */
+	/** Working directory for the launched process and base for `directory`. */
 	cwd?: string;
 }
 
@@ -260,27 +233,11 @@ export interface RuntimeLaunchDescriptor {
 	shimWarning?: string;
 }
 
-/**
- * Parameters for `runtime/advice` — the runtime's own project guidance. There is
- * nothing to configure but *where* to look: the guidance is derived entirely from
- * what the directory contains (`elide.pkl`, package manifests), so `cwd` is the
- * only input and it names a real project directory, never a request workdir.
- */
-export interface RuntimeAdviceParams {
-	/** Project directory to inspect. Defaults to the endpoint process cwd. */
+/** Validation-only project compilation; never emits build artifacts. */
+export interface RuntimeCheckParams {
 	cwd?: string;
 	timeoutMs?: number;
 }
-
-export interface RuntimeBuildParams {
-	/** ':'-prefixed build targets with scoped options, passed through verbatim. */
-	targets?: string[];
-	cwd?: string;
-	timeoutMs?: number;
-}
-
-/** v1: check = validation build (resolve + compile, no artifacts requested). */
-export type RuntimeCheckParams = RuntimeBuildParams;
 
 export interface RuntimeExecResult {
 	exitCode: number;

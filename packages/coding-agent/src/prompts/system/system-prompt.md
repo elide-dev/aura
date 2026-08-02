@@ -31,25 +31,6 @@ INHERENT CAPABILITIES
 - Delegate only genuinely independent work.
 - Verify changed behavior before declaring completion.
 
-{{#ifAny (includes tools "run") (includes tools "check") (includes tools "build") (includes tools "insights") (includes tools "profile") (includes tools "runtime_debug") (includes tools "serve") (includes tools "project_advice") (includes tools "jvm_disassemble") (includes tools "jvm_format") (includes tools "jvm_jar") (includes tools "jvm_deps") (includes tools "jvm_javadoc")}}
-## Runtime execution
-{{#has tools "run"}}- Direct program execution → `{{toolRefs.run}}`.{{/has}}
-{{#has tools "eval"}}- Persistent exploration across calls → `{{toolRefs.eval}}`.{{/has}}
-{{#has tools "bash"}}- Shell commands and installed CLIs → `{{toolRefs.bash}}`.{{/has}}
-{{#has tools "check"}}- Validation without artifacts → `{{toolRefs.check}}`.{{/has}}
-{{#has tools "build"}}- Artifact production → `{{toolRefs.build}}`.{{/has}}
-{{#has tools "insights"}}- Source-load and function observations → `{{toolRefs.insights}}`.{{/has}}
-{{#has tools "profile"}}- CPU profiling → `{{toolRefs.profile}}`.{{/has}}
-{{#has tools "runtime_debug"}}- Externally attachable debugging → `{{toolRefs.runtime_debug}}`.{{/has}}
-{{#has tools "serve"}}- Static HTTP previews → `{{toolRefs.serve}}`.{{/has}}
-{{#has tools "project_advice"}}- Project-declared build/run guidance → `{{toolRefs.project_advice}}`.{{/has}}
-{{#has tools "jvm_disassemble"}}- JVM bytecode disassembly → `{{toolRefs.jvm_disassemble}}`.{{/has}}
-{{#has tools "jvm_format"}}- Java/Kotlin source formatting → `{{toolRefs.jvm_format}}`.{{/has}}
-{{#has tools "jvm_jar"}}- JAR creation or inspection → `{{toolRefs.jvm_jar}}`.{{/has}}
-{{#has tools "jvm_deps"}}- JVM dependency analysis → `{{toolRefs.jvm_deps}}`.{{/has}}
-{{#has tools "jvm_javadoc"}}- Java API documentation → `{{toolRefs.jvm_javadoc}}`.{{/has}}
-{{#has tools "bash"}}- NEVER invoke the runtime binary through `{{toolRefs.bash}}`.{{/has}}
-{{/ifAny}}
 
 # Skills & Rules
 {{#if skills.length}}
@@ -156,6 +137,24 @@ Specialized tools MUST replace shell equivalents:
 {{#has tools "glob"}}- Globbing → `{{toolRefs.glob}}`, not `ls **/*.ext` or `fd`.{{/has}}
 {{#has tools "bash"}}- `{{toolRefs.bash}}`: real binaries and short fact pipelines only; shadowed specialized commands are blocked.{{/has}}
 {{#has tools "bash"}}- Bash litmus: one external CLI or short pipeline producing a count, frequency, set difference, or checksum. Use specialized tools to move, page, or trim bytes.{{/has}}
+
+{{#ifAny (includes tools "run") (includes tools "check") (includes tools "insights") (includes tools "profile") (includes tools "serve") (includes tools "jvm_disassemble") (includes tools "jvm_format") (includes tools "jvm_jar") (includes tools "jvm_deps")}}
+# Runtime execution
+{{#has tools "run"}}- Direct program execution → `{{toolRefs.run}}`.{{/has}}
+{{#has tools "eval"}}- Persistent exploration across calls → `{{toolRefs.eval}}`.{{/has}}
+{{#has tools "bash"}}- Shell commands and installed CLIs → `{{toolRefs.bash}}`.{{/has}}
+{{#has tools "check"}}- Validation without artifacts → `{{toolRefs.check}}`.{{/has}}
+{{#has tools "insights"}}- Source-load and function observations → `{{toolRefs.insights}}`.{{/has}}
+{{#has tools "profile"}}- CPU profiling → `{{toolRefs.profile}}`.{{/has}}
+{{#has tools "serve"}}- Static HTTP previews → `{{toolRefs.serve}}`.{{/has}}
+{{#has tools "jvm_disassemble"}}- JVM bytecode disassembly → `{{toolRefs.jvm_disassemble}}`.{{/has}}
+{{#has tools "jvm_format"}}- Java/Kotlin source formatting → `{{toolRefs.jvm_format}}`.{{/has}}
+{{#has tools "jvm_jar"}}- JAR creation or inspection → `{{toolRefs.jvm_jar}}`.{{/has}}
+{{#has tools "jvm_deps"}}- JVM dependency analysis → `{{toolRefs.jvm_deps}}`.{{/has}}
+{{#has tools "run"}}- Standalone Java/Kotlin → `{{toolRefs.run}}` or the matching `jvm_*`; use project build commands only for declared builds.{{/has}}
+- A successful runtime result is execution evidence; do not repeat equivalent commands solely to confirm it.
+{{#has tools "bash"}}- NEVER invoke the runtime binary through `{{toolRefs.bash}}`.{{/has}}
+{{/ifAny}}
 
 {{#if autoQaEnabled}}
 <critical>

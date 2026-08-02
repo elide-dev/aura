@@ -16,21 +16,16 @@ import {
 } from "./runtime-launch";
 
 const serveSchema = type({
-	directory: type("string").describe("directory of static files to serve"),
-	"port?": type("number").describe("port to bind (default 8080)"),
-	"host?": type("string").describe("interface to bind (default 127.0.0.1)"),
-	"cwd?": type("string").describe("base directory for `directory` (defaults to the session cwd)"),
-	"waitSeconds?": type("number").describe("how long to watch startup output for the URL (default 15)"),
+	directory: type("string").describe("static files directory"),
+	"port?": type("number").describe("port (default 8080)"),
+	"host?": type("string").describe("bind interface (default 127.0.0.1)"),
+	"cwd?": type("string").describe("base directory (session cwd)"),
+	"waitSeconds?": type("number").describe("URL discovery timeout (default 15s)"),
 });
 
 export type RuntimeServeToolParams = typeof serveSchema.infer;
 
-/**
- * Serve a directory over HTTP as a hub job.
- *
- * Unlike `runtime_debug`, the plain name is free (no built-in `serve`), so it
- * keeps the short form the other runtime tools use (`run`, `check`, `build`).
- */
+/** Serve a directory over HTTP as a hub job. */
 export class RuntimeServeTool implements AgentTool<typeof serveSchema, RuntimeJobDetails> {
 	readonly name = "serve";
 	readonly approval = "exec" as const;
@@ -58,7 +53,6 @@ export class RuntimeServeTool implements AgentTool<typeof serveSchema, RuntimeJo
 	): Promise<AgentToolResult<RuntimeJobDetails>> {
 		const descriptor = await requireRuntimeService(this.session).spawn(
 			{
-				mode: "serve",
 				directory: params.directory,
 				port: params.port,
 				host: params.host,
@@ -70,7 +64,6 @@ export class RuntimeServeTool implements AgentTool<typeof serveSchema, RuntimeJo
 		const waitSeconds = resolveWaitSeconds(params.waitSeconds);
 		const job = await startRuntimeJob(this.session, descriptor, {
 			namePrefix: "runtime-serve",
-			mode: "serve",
 			waitSeconds,
 			signal,
 			launch: this.launch,

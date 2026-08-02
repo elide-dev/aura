@@ -333,6 +333,20 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				expected: "embedded",
 			},
 			{
+				name: "auto Python prefers process",
+				adapter: "auto",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "print(1)", language: "python" },
+				expected: "process",
+			},
+			{
+				name: "auto inferred Python file prefers process",
+				adapter: "auto",
+				embeddedStatus: validEmbeddedStatus,
+				params: { path: "main.py" },
+				expected: "process",
+			},
+			{
 				name: "auto JVM with valid library",
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
@@ -622,8 +636,9 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		const environment: NodeJS.ProcessEnv = { AUTO_SNAPSHOT: "original-env" };
 		const args = ["original-arg"];
 		const params: Record<string, unknown> = {
-			code: "print('original-source')",
-			language: "python",
+			code: "console.log('original-source')",
+			language: "js",
+			engine: "elide",
 			args,
 			stdin: "original-stdin",
 			timeoutMs: 10_000,
@@ -658,8 +673,8 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			expect(unwrapResponse<{ exitCode: number }>(await pending).exitCode).toBe(0);
 			const call = new Message(host.callRequests[0], false).getRoot(EmbeddedCallRequest);
 			const run = call.invocation.invocation.cli.command.run;
-			expect(run.sourceLanguage).toBe(EngineInvocation_CliInvocation_SourceLanguage.PYTHON);
-			expect(run.sourceCode.code).toBe("print('original-source')");
+			expect(run.sourceLanguage).toBe(EngineInvocation_CliInvocation_SourceLanguage.JAVASCRIPT);
+			expect(run.sourceCode.code).toBe("console.log('original-source')");
 			expect(run.scriptArgs.count).toBe(1);
 			expect(call.invocation.args.args.list.get(1).key).toBe("original-arg");
 			expect(call.invocation.meta.engineConfig.directories.workingDir.path.pathString.path).toBe(originalCwd);
@@ -852,7 +867,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		}
 	});
 
-	test("routes every non-run method through the process endpoint", async () => {
+	test("routes every executable non-run method through the process endpoint", async () => {
 		const processEndpoint = new StubEndpoint("process", processStatus);
 		const embedded = new StubEndpoint("embedded", validEmbeddedStatus);
 		const endpoint = new SelectedRuntimeEndpoint({
@@ -860,13 +875,21 @@ describe("SelectedRuntimeEndpoint routing", () => {
 			processEndpoint,
 			embeddedEndpoint: embedded,
 		});
-		await endpoint.request(rpcRequest(1, "runtime/check", {}));
-		await endpoint.request(rpcRequest(2, "runtime/build", {}));
-		await endpoint.request(rpcRequest(3, "runtime/advice", {}));
+		for (const [id, method] of [
+			[1, "runtime/check"],
+			[2, "runtime/insights"],
+			[3, "runtime/profile"],
+			[4, "runtime/jvm"],
+			[5, "runtime/spawn"],
+		] as const) {
+			await endpoint.request(rpcRequest(id, method, {}));
+		}
 		expect(processEndpoint.requests.map(request => request.method)).toEqual([
 			"runtime/check",
-			"runtime/build",
-			"runtime/advice",
+			"runtime/insights",
+			"runtime/profile",
+			"runtime/jvm",
+			"runtime/spawn",
 		]);
 		expect(embedded.requests).toHaveLength(0);
 	});

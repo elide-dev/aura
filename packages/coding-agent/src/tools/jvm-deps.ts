@@ -7,11 +7,13 @@ import type { ToolSession } from ".";
 import { jvmLanguage, requireRuntimeService } from "./jvm-common";
 
 const jvmDepsSchema = type({
-	"language?": jvmLanguage.describe("source language (with code)"),
-	"code?": type("string").describe("source to compile and analyze"),
-	"mainClass?": type("string").describe("entrypoint class (default: the public class, or MainKt for Kotlin)"),
-	"path?": type("string").describe("existing .class, .jar, or class directory to analyze (relative to the cwd)"),
-	"timeoutMs?": type("number").describe("kill the analysis after this many milliseconds"),
+	"language?": jvmLanguage.describe("source language"),
+	"code?": type("string").describe("inline source"),
+	"mainClass?": type("string").describe("target class override"),
+	"path?": type("string").describe("source, class, JAR, or class directory"),
+	"output?": type("string").describe("cwd-relative report output"),
+	"overwrite?": type("boolean").describe("replace output"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
 });
 
 export type JvmDepsToolParams = typeof jvmDepsSchema.infer;
@@ -43,10 +45,13 @@ export class JvmDepsTool implements AgentTool<typeof jvmDepsSchema, RuntimeJvmRe
 			signal,
 			this.session.getSessionId?.() ?? undefined,
 		);
+		const failed = execResultFailed(result);
+		const report = formatExecResult(result);
+		const text = result.output && !failed ? `Wrote dependency report to ${result.output}\n${report}` : report;
 		return {
-			content: [{ type: "text", text: formatExecResult(result) }],
+			content: [{ type: "text", text }],
 			details: result,
-			isError: execResultFailed(result),
+			isError: failed,
 		};
 	}
 }
