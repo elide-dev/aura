@@ -466,7 +466,7 @@ describe("Settings", () => {
 
 		it("keeps the telemetry settings empty even though telemetry has a built-in destination", async () => {
 			// Telemetry is the one surface with a built-in fallback: unconfigured
-			// export goes to the team Grafana Cloud stack. That destination lives in
+			// export goes to the Aura telemetry collector. That destination lives in
 			// `telemetry/init.ts` as the LOWEST resolution tier, deliberately *not*
 			// as a settings default — a populated default would be indistinguishable
 			// from a user-set value and would outrank the Aura tiers, so the relay

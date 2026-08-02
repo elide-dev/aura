@@ -41,7 +41,7 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { auraDeploymentFor, readCloudSwitches, resolveAuraDeployment } from "../cloud/deployment";
 import type { Settings } from "../config/settings";
 import { type ErrorReportedTelemetry, emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
-import { buildResourceAttributes } from "./identity";
+import { buildResourceAttributes, getOrCreateInstallId } from "./identity";
 import { AuraMetricRecorder } from "./metrics";
 import { registerOtlpSink } from "./sink-otlp";
 
@@ -83,14 +83,20 @@ export interface ExporterConfig {
 	headers?: Record<string, string>;
 }
 
-/** Built-in OTLP destination: the team Grafana Cloud stack (us-west-0, instance 1421560). */
-export const BUILTIN_TELEMETRY_ENDPOINT = "https://otlp-gateway-prod-us-west-0.grafana.net/otlp";
+/** Built-in OTLP destination: the Aura telemetry collector (http/protobuf). */
+export const BUILTIN_TELEMETRY_ENDPOINT = "https://aura.elide.events";
 
-/** Credential for {@link BUILTIN_TELEMETRY_ENDPOINT}. Atomic with it — never sent anywhere else. */
-export const BUILTIN_TELEMETRY_HEADERS: Readonly<Record<string, string>> = {
-	Authorization:
-		"Basic MTQyMTU2MDpnbGNfZXlKdklqb2lNVFUzTkRnMU9DSXNJbTRpT2lKemRHRmpheTB4TkRJeE5UWXdMVzkwYkhBdGQzSnBkR1V0WVhWeVlTMTJNQ0lzSW1zaU9pSTNOMmxsUm00d1Z6bFNNWGN5T0UwelpXaE5PVUU0UW5JaUxDSnRJanA3SW5JaU9pSndjbTlrTFhWekxYZGxjM1F0TUNKOWZRPT0=",
-};
+/**
+ * Headers for {@link BUILTIN_TELEMETRY_ENDPOINT}. Atomic with it — never sent
+ * anywhere else. Carries the pseudonymous install id (the same one emitted as
+ * the `aura.install.id` resource attribute) so the collector can derive
+ * unique-installation metrics at the HTTP layer. No credential today: the
+ * collector accepts unauthenticated OTLP; when it starts requiring one, an
+ * `Authorization: Bearer …` slots in alongside.
+ */
+export function builtinTelemetryHeaders(): Readonly<Record<string, string>> {
+	return { "x-aura-install-id": getOrCreateInstallId() };
+}
 
 /** Accepted `telemetry.signals` members (the settings-side signal names). */
 const KNOWN_TELEMETRY_SIGNALS: ReadonlySet<string> = new Set(["traces", "logs", "metrics"]);
@@ -366,8 +372,9 @@ function settingsHeaders(settings: Pick<Settings, "get">): Record<string, string
  *  2. **Aura** — `AURA_TELEMETRY_URL`, or a derivation from `AURA_DOMAIN`, and
  *     only while `cloud.telemetry.enabled` is on (off by default). Carries no
  *     built-in credential; the Aura relay authenticates its own way.
- *  3. **The built-in team Grafana Cloud stack**, with the credential that
- *     belongs to it. This is the destination an unconfigured install exports to.
+ *  3. **The built-in Aura telemetry collector**, with the headers that belong
+ *     to it (the install-id header; no credential today). This is the
+ *     destination an unconfigured install exports to.
  *
  * Two properties are load-bearing:
  *
@@ -394,7 +401,7 @@ function resolveDestination(
 	if (aura) return headers ? { url: aura, headers } : { url: aura };
 
 	if (headers) return undefined;
-	return { url: BUILTIN_TELEMETRY_ENDPOINT, headers: BUILTIN_TELEMETRY_HEADERS };
+	return { url: BUILTIN_TELEMETRY_ENDPOINT, headers: builtinTelemetryHeaders() };
 }
 
 /**

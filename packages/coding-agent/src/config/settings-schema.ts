@@ -5633,7 +5633,7 @@ export const SETTINGS_SCHEMA = {
 	 * a domain is configured — signing in is not consent to be measured. `telemetry.endpoint`
 	 * and the `OTEL_EXPORTER_OTLP_*` variables are unaffected either way; switching this on
 	 * inserts the Aura tier *above* the built-in destination, so an Aura relay takes over from
-	 * the built-in Grafana stack automatically.
+	 * the built-in collector automatically.
 	 */
 	"cloud.telemetry.enabled": { type: "boolean", default: false },
 
@@ -5669,7 +5669,7 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Ships empty, but empty does NOT mean "no collector" here: telemetry is the one surface
-	// with a built-in destination. Unconfigured export goes to the team Grafana Cloud stack,
+	// with a built-in destination. Unconfigured export goes to the Aura telemetry collector,
 	// which lives in `telemetry/init.ts` (`BUILTIN_TELEMETRY_ENDPOINT`) as the LOWEST tier of
 	// destination resolution — below `OTEL_EXPORTER_OTLP_*`, below this setting, and below the
 	// Aura tier. It is deliberately not a default *here*: a populated default is

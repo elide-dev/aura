@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	BUILTIN_TELEMETRY_ENDPOINT,
-	BUILTIN_TELEMETRY_HEADERS,
+	builtinTelemetryHeaders,
 	resolveExporterConfig,
 	resolveTelemetryEnv,
 } from "../src/telemetry/init";
@@ -178,7 +178,7 @@ describe("settings-driven OTLP exporter config", () => {
  *
  * Order under test, highest first: `OTEL_EXPORTER_OTLP_*` → explicit
  * `telemetry.endpoint` → Aura (`AURA_TELEMETRY_URL`/`AURA_DOMAIN`, gated by
- * `cloud.telemetry.enabled`) → the built-in team Grafana Cloud stack.
+ * `cloud.telemetry.enabled`) → the built-in Aura telemetry collector.
  *
  * Endpoint and headers of a fallback tier are atomic: the built-in credential
  * must never ride along with any endpoint other than the built-in one.
@@ -186,15 +186,15 @@ describe("settings-driven OTLP exporter config", () => {
 describe("telemetry destination fallback tiers", () => {
 	const AURA_URL = "https://telemetry.aura.example/otlp";
 
-	it("falls back to the built-in Grafana destination when nothing is configured", () => {
+	it("falls back to the built-in Aura destination when nothing is configured", () => {
 		const settings = fakeSettings({ "telemetry.enabled": true });
 		expect(resolveExporterConfig("trace", settings, {}).url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
 		expect(resolveExporterConfig("log", settings, {}).url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/logs`);
 		expect(resolveExporterConfig("metric", settings, {}).url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/metrics`);
-		// The credential travels with it, or the endpoint is useless.
+		// The install-id header travels with it so the collector can count unique installs.
 		const headers = resolveExporterConfig("trace", settings, {}).headers;
-		expect(headers?.Authorization).toBe(BUILTIN_TELEMETRY_HEADERS.Authorization);
-		expect(headers?.Authorization?.startsWith("Basic ")).toBe(true);
+		expect(headers?.["x-aura-install-id"]).toBe(builtinTelemetryHeaders()["x-aura-install-id"]);
+		expect(headers?.["x-aura-install-id"]).toMatch(/^[0-9a-f-]{36}$/);
 		// And the gating view activates the signals, exactly as a settings endpoint would.
 		expect(resolveTelemetryEnv(settings, {}).OTEL_EXPORTER_OTLP_ENDPOINT).toBe(BUILTIN_TELEMETRY_ENDPOINT);
 	});
@@ -238,7 +238,7 @@ describe("telemetry destination fallback tiers", () => {
 		);
 	});
 
-	it("never sends the built-in credential to an Aura endpoint", () => {
+	it("never sends the built-in headers to an Aura endpoint", () => {
 		const settings = fakeSettings({ "telemetry.enabled": true, "cloud.telemetry.enabled": true });
 		const cases = [
 			{ env: { AURA_TELEMETRY_URL: AURA_URL }, url: `${AURA_URL}/v1/traces` },
@@ -249,7 +249,8 @@ describe("telemetry destination fallback tiers", () => {
 			// Not vacuous: the Aura endpoint really is the winner here.
 			expect(config.url).toBe(url);
 			expect(config.headers ?? {}).not.toHaveProperty("Authorization");
-			expect(JSON.stringify(config)).not.toContain(BUILTIN_TELEMETRY_HEADERS.Authorization);
+			expect(config.headers ?? {}).not.toHaveProperty("x-aura-install-id");
+			expect(JSON.stringify(config)).not.toContain(builtinTelemetryHeaders()["x-aura-install-id"]);
 		}
 	});
 
@@ -259,7 +260,7 @@ describe("telemetry destination fallback tiers", () => {
 		const settings = fakeSettings({ "telemetry.enabled": true });
 		const config = resolveExporterConfig("trace", settings, { AURA_TELEMETRY_URL: AURA_URL });
 		expect(config.url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
-		expect(config.headers?.Authorization).toBe(BUILTIN_TELEMETRY_HEADERS.Authorization);
+		expect(config.headers?.["x-aura-install-id"]).toBe(builtinTelemetryHeaders()["x-aura-install-id"]);
 	});
 
 	it("keeps the built-in destination when an Aura variable is malformed", () => {
