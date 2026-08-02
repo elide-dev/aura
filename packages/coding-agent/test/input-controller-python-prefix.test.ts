@@ -170,15 +170,16 @@ describe("InputController Python prompt prefix", () => {
 		expect(onInputCallback).not.toHaveBeenCalled();
 	});
 
-	it("submits Python-prefixed text normally when the shell action is disabled", async () => {
-		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext();
+	it("dispatches Python-prefixed text through the embedded runtime by default", async () => {
+		// Defaults are parent on, embedded on, subprocess fallback off — the
+		// embedded runtime alone carries the action, so `$` dispatches.
+		const { ctx, editor, handlePythonCommand } = createContext();
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 
 		await editor.onSubmit?.("$ print(1)");
 
-		expect(handlePythonCommand).not.toHaveBeenCalled();
-		expect(onInputCallback).toHaveBeenCalledTimes(1);
+		expect(handlePythonCommand).toHaveBeenCalledWith("print(1)", false);
 	});
 
 	it("keeps the shell action disabled when the parent Python capability is off", async () => {
@@ -192,8 +193,20 @@ describe("InputController Python prompt prefix", () => {
 		expect(onInputCallback).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps the shell action disabled when embedded Python is off", async () => {
-		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(true, true, false);
+	it("keeps the shell action available on the subprocess fallback when embedded Python is off", async () => {
+		// embedded off + shell on: the action survives on a subprocess interpreter
+		// rather than the managed runtime, so `$` still dispatches.
+		const { ctx, editor, handlePythonCommand } = createContext(true, true, false);
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await editor.onSubmit?.("$ print(1)");
+
+		expect(handlePythonCommand).toHaveBeenCalledWith("print(1)", false);
+	});
+
+	it("keeps the shell action disabled when embedded Python and the subprocess fallback are both off", async () => {
+		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(true, false, false);
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 

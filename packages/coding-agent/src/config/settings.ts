@@ -2454,7 +2454,17 @@ export function isEmbeddedPythonEnabled(config: Pick<Settings, "get">): boolean 
 	return isPythonEnabled(config) && config.get("python.embedded") === true;
 }
 
-/** Whether the TUI may interpret $/$$ input as the local Python action. */
+/**
+ * Whether the TUI may interpret $/$$ input as the local Python action.
+ *
+ * The action routes to the embedded runtime when that is enabled, and otherwise
+ * to a subprocess interpreter — `enumeratePythonRuntimes` already prefers the
+ * managed interpreter and falls back to system `python`/`python3`. So the
+ * embedded runtime and the `python.shell` subprocess fallback are alternatives,
+ * not a chain: either one can carry the action, and only the parent
+ * `python.enabled` can withdraw it outright.
+ */
 export function isPythonShellEnabled(config: Pick<Settings, "get">): boolean {
-	return isEmbeddedPythonEnabled(config) && config.get("python.shell") === true;
+	if (!isPythonEnabled(config)) return false;
+	return isEmbeddedPythonEnabled(config) || config.get("python.shell") === true;
 }

@@ -498,8 +498,10 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `l
 
 Python has a parent/child capability hierarchy. `python.enabled` is the parent
 gate for every Python surface. `python.embedded` controls Python in the managed
-`run`, `insights`, and `profile` tools. `python.shell` controls the local
-`$`/`$$` snake action through that runtime, so it also requires `python.embedded`.
+`run`, `insights`, and `profile` tools. The local `$`/`$$` snake action routes to
+that embedded runtime when it is on; `python.shell` adds a subprocess-interpreter
+fallback for when it is not. The two are alternatives, so either one keeps the
+action alive and only `python.enabled` withdraws it outright.
 
 ### Runtime
 
@@ -606,7 +608,7 @@ lsp:
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
 | `python.enabled` | boolean | `true` | Parent gate for every Python capability. When false, child settings cannot re-enable Python. |
 | `python.embedded` | boolean | `true` | Permit Python in the managed `run`, `insights`, and `profile` tools when `python.enabled` is true. Disabled sessions omit Python from those tools' schemas and descriptions. |
-| `python.shell` | boolean | `false` | Enable the local `$`/`$$` snake action through the managed runtime when both `python.enabled` and `python.embedded` are true. Disabled sessions treat sigil input as ordinary prompt text and omit the action from welcome and hotkey guidance. |
+| `python.shell` | boolean | `false` | Fall back to a subprocess Python interpreter for the local `$`/`$$` snake action when the embedded runtime is unavailable. The action itself follows `python.embedded`, so it already works by default; this key only adds the subprocess route for hosts running without the embedded runtime. With `python.enabled` off, or with embedded and this both off, sigil input is ordinary prompt text and the action is omitted from welcome and hotkey guidance. Disabled sessions treat sigil input as ordinary prompt text and omit the action from welcome and hotkey guidance. |
 | `eval.py` | boolean | `true` | Permit the Python eval backend when `python.enabled` is also true. `PI_PY=0` disables it for the process; `PI_PY=1` cannot bypass `python.enabled`. |
 | `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
 | `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |

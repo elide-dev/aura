@@ -3699,7 +3699,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Python Shell Action",
-			description: "Enable the local $/$$ Python action through the managed runtime.",
+			description:
+				"Fall back to a subprocess Python interpreter for the local $/$$ action when the embedded runtime is unavailable.",
 		},
 	},
 	// Python eval-kernel knobs

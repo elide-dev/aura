@@ -529,12 +529,31 @@ export class InputController {
 			const wasPythonMode = this.ctx.isPythonMode;
 			const trimmed = text.trimStart();
 			this.ctx.isBashMode = trimmed.startsWith("!");
-			this.ctx.isPythonMode =
-				isPythonShellEnabled(this.ctx.session.settings) && parsePythonCommandInput(trimmed) !== undefined;
+			this.ctx.isPythonMode = this.#pythonShellEnabled() && parsePythonCommandInput(trimmed) !== undefined;
 			if (wasBashMode !== this.ctx.isBashMode || wasPythonMode !== this.ctx.isPythonMode) {
 				this.ctx.updateEditorBorderColor();
 			}
 		};
+	}
+
+	/**
+	 * Gate for interpreting `$`/`$$` input as the local Python action.
+	 *
+	 * Prefers the session's own Settings — SDK and collab hosts can run an
+	 * isolated config — and otherwise falls back to the module singleton that
+	 * every other settings read in this controller already uses. The fallback is
+	 * load-bearing: `ctx.session` is widely stubbed through `as unknown as` casts
+	 * (tests, embedders), so those stubs satisfy the compiler while carrying no
+	 * `settings`, and reaching straight through it threw `undefined is not an
+	 * object` from the first `editor.onChange`.
+	 */
+	#pythonShellEnabled(): boolean {
+		const config = this.ctx.session?.settings ?? (isSettingsInitialized() ? settings : undefined);
+		// Nothing to read yet — early startup, or a host that stubs the session.
+		// Fall back to the schema defaults (all three Python keys default on),
+		// matching how the emoji-autocomplete read above treats uninitialized
+		// settings rather than silently disabling the action.
+		return config === undefined ? true : isPythonShellEnabled(config);
 	}
 
 	#handleFocusedLeftTap(): void {
@@ -712,10 +731,7 @@ export class InputController {
 					this.ctx.editor.setText("");
 					return;
 				}
-				if (
-					text.startsWith("!") ||
-					(isPythonShellEnabled(this.ctx.session.settings) && parsePythonCommandInput(text))
-				) {
+				if (text.startsWith("!") || (this.#pythonShellEnabled() && parsePythonCommandInput(text))) {
 					this.ctx.showStatus("Local execution is host-only during a collab session");
 					this.ctx.editor.setText("");
 					return;
@@ -768,9 +784,7 @@ export class InputController {
 
 			// Handle python command (`$ <code>` for normal, `$$ <code>` for excluded from context).
 			// Shell-style variables such as `$HOME` are normal prose unless a space follows the sigil.
-			const pythonCommand = isPythonShellEnabled(this.ctx.session.settings)
-				? parsePythonCommandInput(text)
-				: undefined;
+			const pythonCommand = this.#pythonShellEnabled() ? parsePythonCommandInput(text) : undefined;
 			if (pythonCommand) {
 				const { code, isExcluded } = pythonCommand;
 				if (code) {
@@ -944,9 +958,7 @@ export class InputController {
 		}
 		if (
 			text &&
-			(text.startsWith("/") ||
-				text.startsWith("!") ||
-				(isPythonShellEnabled(this.ctx.session.settings) && parsePythonCommandInput(text)))
+			(text.startsWith("/") || text.startsWith("!") || (this.#pythonShellEnabled() && parsePythonCommandInput(text)))
 		) {
 			this.ctx.showStatus("Commands run in the main session — press ←← to return first");
 			return; // editor text not cleared: Editor does not auto-clear on submit
