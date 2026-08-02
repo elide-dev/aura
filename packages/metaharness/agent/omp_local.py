@@ -14,8 +14,9 @@ this runs the working tree at `/work/pi`. Install modes (`OMP_BENCH_INSTALL`):
     external deps + the platform native addon, and run `bun .../dist/cli.js`.
   * binary (`--binary`): a self-contained compiled omp binary is uploaded.
 
-Auth never enters the container: a generated `~/.aura/agent/models.yml` routes the
-configured providers' `baseUrl` at the host's pm2 auth-gateway (default
+Auth never enters the container: generated `models.yml` files in Aura's and
+vanilla OMP's config directories route the configured providers' `baseUrl` at the
+host's pm2 auth-gateway (default
 `http://host.docker.internal:4000`, `transport: pi-native`), so the gateway
 resolves credentials host-side. No provider API keys are passed in.
 
@@ -322,7 +323,7 @@ class OmpLocal(BaseInstalledAgent):
             else:
                 self._cli = await self._install_local(environment)
 
-        # 3) Auth + model config under $HOME/.aura/agent.
+        # 3) Auth + model config for both Aura and vanilla OMP binaries.
         if self._gateway_on:
             # Gateway routing — no provider keys ever enter the container.
             await self._write_models_yaml(environment)
@@ -453,8 +454,9 @@ class OmpLocal(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
-                f'mkdir -p "$HOME/.aura/agent"; '
-                f'cp {shlex.quote(staged)} "$HOME/.aura/agent/models.yml"'
+                f'mkdir -p "$HOME/.aura/agent" "$HOME/.omp/agent"; '
+                f'cp {shlex.quote(staged)} "$HOME/.aura/agent/models.yml"; '
+                f'cp {shlex.quote(staged)} "$HOME/.omp/agent/models.yml"'
             ),
         )
 
@@ -474,7 +476,7 @@ class OmpLocal(BaseInstalledAgent):
         return "\n".join(lines)
 
     async def _write_config(self, environment: BaseEnvironment) -> None:
-        """Write $HOME/.aura/agent/config.yml: the web_search toggle.
+        """Write the web_search toggle for Aura and vanilla OMP.
 
         web_search can't authenticate through the gateway, so it's off by default.
         """
@@ -489,8 +491,9 @@ class OmpLocal(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
-                f'mkdir -p "$HOME/.aura/agent"; '
-                f'cp {shlex.quote(_CONFIG_DST)} "$HOME/.aura/agent/config.yml"'
+                f'mkdir -p "$HOME/.aura/agent" "$HOME/.omp/agent"; '
+                f'cp {shlex.quote(_CONFIG_DST)} "$HOME/.aura/agent/config.yml"; '
+                f'cp {shlex.quote(_CONFIG_DST)} "$HOME/.omp/agent/config.yml"'
             ),
         )
 

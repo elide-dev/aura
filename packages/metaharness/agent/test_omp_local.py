@@ -7,7 +7,7 @@ from omp_local import OmpLocal
 
 
 class OmpLocalConfigPathTest(unittest.IsolatedAsyncioTestCase):
-    async def test_gateway_configuration_is_written_to_aura_config_directory(self) -> None:
+    async def test_gateway_configuration_is_written_to_aura_and_omp_config_directories(self) -> None:
         agent = OmpLocal.__new__(OmpLocal)
         agent._models_yaml_path = ""
         agent._gateway_providers = ["openai-codex"]
@@ -30,6 +30,12 @@ class OmpLocalConfigPathTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             any('"$HOME/.aura/agent/config.yml"' in command for command in commands)
+        )
+        self.assertTrue(
+            any('"$HOME/.omp/agent/models.yml"' in command for command in commands)
+        )
+        self.assertTrue(
+            any('"$HOME/.omp/agent/config.yml"' in command for command in commands)
         )
 
 
