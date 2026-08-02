@@ -507,6 +507,12 @@ jobs:
          - name: Install method smoke tests
            env:
               OMP_INSTALL_TEST_SKIP_NATIVE_BUILD: "1"
+              # The tarball smoke installs into a scratch dir outside the repo,
+              # so it writes its own @buf scope mapping for the coding-agent's
+              # BSR-hosted protobuf SDK. buf.build/elide/cloud is public, so an
+              # unset secret is fine — the token only lifts anonymous rate
+              # limits (and covers the module going private).
+              BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
            run: bun run ci:test:install-methods
 
    # Aggregates every validation job so publish-side release jobs gate on one

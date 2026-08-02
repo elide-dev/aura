@@ -27,6 +27,26 @@ smoke_cli() {
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --smoke-test
 }
 
+# The coding-agent depends on @buf/elide_cloud.bufbuild_es, which lives on the
+# Buf Schema Registry's npm bridge and cannot be resolved from npmjs.org. The
+# repo's bunfig.toml carries that scope mapping, but bun only reads bunfig.toml
+# from the install cwd (and $HOME) — it does not walk up — so a scratch install
+# dir outside the repo needs its own copy or `bun add` 404s on the @buf package.
+# buf.build/elide/cloud is public, so the token is optional; when BUF_TOKEN is
+# present (private module, or rate-limited runner) it is threaded through by
+# name so the secret never lands in the generated file.
+write_buf_registry_config() {
+   local dir="$1"
+   {
+      echo '[install.scopes]'
+      if [ -n "${BUF_TOKEN:-}" ]; then
+         echo '"@buf" = { url = "https://buf.build/gen/npm/v1/", token = "$BUF_TOKEN" }'
+      else
+         echo '"@buf" = "https://buf.build/gen/npm/v1/"'
+      fi
+   } >"$dir/bunfig.toml"
+}
+
 find_tarball() {
    local pattern="$1"
    local matches=()
@@ -138,6 +158,7 @@ mkdir -p "$TARBALL_APP_DIR"
 (
    cd "$TARBALL_APP_DIR"
    bun init -y >/dev/null
+   write_buf_registry_config "$TARBALL_APP_DIR"
 
    # Write overrides so bun resolves inter-package deps from tarballs, not the registry
    # (the version under test has not necessarily been published yet).
