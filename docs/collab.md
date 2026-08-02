@@ -103,10 +103,10 @@ Set `collab.webUrl` when the browser UI is hosted separately from the websocket 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `collab.relayUrl` | `wss://my.omp.sh` | Relay used by `/collab` when no relay is passed inline |
+| `collab.relayUrl` | empty | Relay used by `/collab` when no relay is passed inline. There is no default: with it empty and no inline relay, `/collab` refuses to start a room |
 | `collab.webUrl` | empty | Browser UI URL for `/collab` links; empty derives from relay; explicit `http://` is allowed only for localhost |
 | `collab.displayName` | OS username | Name shown to other participants |
-| `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`) |
+| `share.serverUrl` | empty | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`). There is no default: with it empty, `/share` refuses to upload |
 | `share.redactSecrets` | `true` | Run the secret obfuscator over `/share` snapshots before upload |
 
 ## Self-hosting the relay

@@ -128,9 +128,13 @@ Only when no custom share handler is found (`shareSession()`):
    snapshot, replacing configured/discovered secrets with placeholders.
 3. The JSON is gzipped and sealed with a fresh AES-256-GCM key
    (`[12B IV][ciphertext+tag]`).
-4. Upload target is chosen by `share.store`:
+4. `share.serverUrl` must be set. There is no default share server: with it
+   empty, `/share` fails with "No share server is configured" and uploads
+   nothing — including in the gist path, whose blob is unreadable without a
+   viewer base to hang the `#key` link off.
+5. Upload target is chosen by `share.store`:
    - **Share server** (default, `store: "blob"`) — `POST <share.serverUrl>`
-     (default `https://my.omp.sh/s`) with the raw blob, capped at 1 MB.
+     with the raw blob, capped at 1 MB.
      Oversized snapshots are trimmed until they fit: inline images first,
      then long strings (32 KB → 8 KB → 2 KB → 512 B caps), then oldest
      entries.
@@ -138,7 +142,7 @@ Only when no custom share handler is found (`shareSession()`):
      authenticated, the sealed blob is pushed base64-encoded as
      `session.ompshare.txt` (budget 5 MB sealed; gist raw fetches cap at
      10 MB), falling back to the share server when `gh` is unusable.
-5. The link is `<share.serverUrl>/<id>#<base64url key>` in both cases. The
+6. The link is `<share.serverUrl>/<id>#<base64url key>` in both cases. The
    viewer page served there fetches the blob (hex ids via the GitHub gist
    API, anything else from the server's blob store) and decrypts it
    client-side; the key lives only in the URL fragment and never appears in
