@@ -2,10 +2,23 @@ telemetry = false
 
 [install]
 minimumReleaseAge = 259200 # 3 days in seconds
-minimumReleaseAgeExcludes = ["@types/bun", "bun-types"]
+minimumReleaseAgeExcludes = [
+  "@types/bun",
+  "bun-types",
+  # First-party generated SDK: published by our own BSR pipeline, so the
+  # supply-chain soak period that protects third-party packages buys nothing
+  # and would block same-day proto changes.
+  "@buf/elide_cloud.bufbuild_es",
+]
 linker = "hoisted"
 exact = true
 saveTextLockfile = true
+
+# Generated protobuf SDKs for elide.cloud.v1 come from the Buf Schema Registry's
+# npm bridge. The registry is private; auth is read from ~/.npmrc
+# (`//buf.build/gen/npm/v1/:_authToken=…`) and must never be committed here.
+[install.scopes]
+"@buf" = "https://buf.build/gen/npm/v1/"
 
 [loader]
 ".md" = "text"

@@ -51,6 +51,8 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
+    "@buf/elide_cloud.bufbuild_es": "2.13.0-20260802023748-1f789d98c496.1",
+    "@bufbuild/protobuf": "catalog:",
     "@babel/parser": "catalog:",
     "@mozilla/readability": "catalog:",
     "@oh-my-pi/hashline": "catalog:",

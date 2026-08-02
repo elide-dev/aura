@@ -77,6 +77,8 @@
       "dependencies": {
         "@agentclientprotocol/sdk": "catalog:",
         "@babel/parser": "catalog:",
+        "@buf/elide_cloud.bufbuild_es": "2.13.0-20260802023748-1f789d98c496.1",
+        "@bufbuild/protobuf": "catalog:",
         "@mozilla/readability": "catalog:",
         "@oh-my-pi/hashline": "catalog:",
         "@oh-my-pi/omp-stats": "catalog:",
@@ -514,6 +516,8 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.5.6", "", { "os": "win32", "cpu": "arm64" }, "sha512-tDGshcm6BdkZOCGnTDX0Y8/U4IfBSlnUU7T56nNDuPEfed+aHg+u8G36NB43fJVl0Os6+QURXIE1yuD7AaEofA=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.6", "", { "os": "win32", "cpu": "x64" }, "sha512-WN05KwXnTO/2J45RQPvzZMXf7tZUIofHoR35xIPfCo7pQ2RFidxI8sfb5mGsaTxdMmEOzHzOPRCdA5/fCpc7xQ=="],
+
+    "@buf/elide_cloud.bufbuild_es": ["@buf/elide_cloud.bufbuild_es@2.13.0-20260802023748-1f789d98c496.1", "https://buf.build/gen/npm/v1/@buf/elide_cloud.bufbuild_es/-/elide_cloud.bufbuild_es-2.13.0-20260802023748-1f789d98c496.1.tgz", { "peerDependencies": { "@bufbuild/protobuf": "^2.13.0" } }, ""],
 
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.13.0", "", {}, "sha512-acq7c49vxfm1ggJ95P70TX7ABDM0vxr1SYD3BB0o0jnBLB4OAqeHyKuN+cD3w80gXEDQ2zxHpR6CUeA+O/aU9g=="],
 
