@@ -2,11 +2,11 @@
 
 **Date:** 2026-07-29
 **Status:** approved design, pre-implementation
-**Repos:** WHIPLASH and BREAKDANCE (Aura/OMP fork)
+**Repos:** WHIPLASH and aura (Aura/OMP fork)
 
 ## Summary
 
-Elide will operate its own Auto-QA grievance collector at `https://qa.elide.dev/v1/grievances`. The collector will be a Cloudflare Worker in `WHIPLASH/project/infra/qa`, deployed through the same Wrangler conventions as the other WHIPLASH workers and backed by a dedicated D1 database. BREAKDANCE will change Aura's default Auto-QA endpoint from `qa.omp.sh` to `qa.elide.dev` without changing consent, batching, local retention, or endpoint override behavior.
+Elide will operate its own Auto-QA grievance collector at `https://qa.elide.dev/v1/grievances`. The collector will be a Cloudflare Worker in `WHIPLASH/project/infra/qa`, deployed through the same Wrangler conventions as the other WHIPLASH workers and backed by a dedicated D1 database. aura will change Aura's default Auto-QA endpoint from `qa.omp.sh` to `qa.elide.dev` without changing consent, batching, local retention, or endpoint override behavior.
 
 The collector will then provide durable evidence for a controlled reproduction of Aura's failing embedded inline execution. Diagnosis will combine the collector's client/platform symptom record with local Aura logs and direct runtime-path reproduction. The repair must fix the embedded path at its source; it must not silently fall back to the process adapter.
 
@@ -161,7 +161,7 @@ D1 insertion failure returns non-2xx so Aura retains the local row as unpushed a
 
 ## 5. Aura integration
 
-BREAKDANCE changes the schema default and user-facing description for `dev.autoqaPush.endpoint` to:
+aura changes the schema default and user-facing description for `dev.autoqaPush.endpoint` to:
 
 ```text
 https://qa.elide.dev/v1/grievances

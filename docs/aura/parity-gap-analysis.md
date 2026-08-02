@@ -1,4 +1,4 @@
-# Aura v1 parity gap analysis — BUCKSHOT `aura` → BREAKDANCE fork
+# Aura v1 parity gap analysis — BUCKSHOT `aura` → aura fork
 
 **Date:** 2026-07-27
 **BUCKSHOT (v1 reference):** `/home/sam/workspace/labs/BUCKSHOT` — `@buckshot/cli` → `dist/aura`, a Pi-SDK harness with the Elide runtime fused in via an extension registry.

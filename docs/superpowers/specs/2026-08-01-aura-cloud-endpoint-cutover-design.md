@@ -5,13 +5,13 @@
 
 ## Summary
 
-Move Aura's first-party remote defaults from upstream/shared infrastructure to the white-label BLACKBOARD deployment without coupling the CLI to one hardcoded production domain. BLACKBOARD owns the server contracts; BREAKDANCE owns client discovery, credentials, compatibility, and local fallback behavior.
+Move Aura's first-party remote defaults from upstream/shared infrastructure to the white-label BLACKBOARD deployment without coupling the CLI to one hardcoded production domain. BLACKBOARD owns the server contracts; aura owns client discovery, credentials, compatibility, and local fallback behavior.
 
 Remote agent execution is excluded. Aura remains a local coding agent consuming hosted identity, settings, credential, ingestion, collaboration, and distribution services.
 
 ## Dependency and rollout rule
 
-No client default changes until the corresponding BLACKBOARD service has a deployed `{DOMAIN}` route, a release-environment health/contract probe, tenant-scoped authentication where required, a rollback to prior explicit/local behavior, and a BREAKDANCE migration test.
+No client default changes until the corresponding BLACKBOARD service has a deployed `{DOMAIN}` route, a release-environment health/contract probe, tenant-scoped authentication where required, a rollback to prior explicit/local behavior, and a aura migration test.
 
 `AURA_DOMAIN` is an explicit, validated bare-domain deployment input; it has no source default, compiled production value, DNS discovery, or bootstrap document. Exact canonical overrides are `AURA_AUTH_URL`, `AURA_SYNC_URL`, `AURA_BROKER_URL`, `AURA_GATEWAY_URL`, `AURA_TELEMETRY_URL`, `AURA_QA_URL`, `AURA_COLLAB_ORIGIN`, `AURA_DIST_API_URL`, `AURA_DIST_DOWNLOAD_URL`, `AURA_DIST_JWKS_URL`, and `AURA_CATALOG_MANIFEST_URL`. Auth publishes only standard OIDC/JWKS metadata and distribution publishes only its signed manifests.
 
@@ -93,7 +93,7 @@ Keep `@oh-my-pi/pi-wire` `DEFAULT_RELAY_URL` and `DEFAULT_SHARE_URL` only as leg
 
 ## Distribution cutover
 
-The BLACKBOARD distribution plan's JSON/JCS/signature contract is authoritative; BREAKDANCE consumes it without redefining a looser shape. Envelopes use closed `{protected,payload,signature}` objects; `protected` fixes `alg:"EdDSA"`, `jcs:"RFC8785"`, a non-empty `kid`, and the exact channel/release/catalog media type. Signed bytes are UTF-8 RFC 8785 JCS of `{payload,protected}` with `signature` excluded. Trust roots are distribution Ed25519 JWKs from the separately configured exact distribution-JWKS origin, never auth JWKS.
+The BLACKBOARD distribution plan's JSON/JCS/signature contract is authoritative; aura consumes it without redefining a looser shape. Envelopes use closed `{protected,payload,signature}` objects; `protected` fixes `alg:"EdDSA"`, `jcs:"RFC8785"`, a non-empty `kid`, and the exact channel/release/catalog media type. Signed bytes are UTF-8 RFC 8785 JCS of `{payload,protected}` with `signature` excluded. Trust roots are distribution Ed25519 JWKs from the separately configured exact distribution-JWKS origin, never auth JWKS.
 
 Channel/catalog payloads carry `schema_version:1`, unsigned-decimal monotonic `manifest_revision`, `generated_at`, expiry no more than 24 hours later, exact rollout algorithm/basis points/salt/window, and bounded signed descriptors with platform, size, SHA-256, object URL, detached descriptor signature, and status. The client stores the highest `(origin,stream,manifest_revision,signed_digest)` in the current profile's distribution state. Lower revision or same revision/different digest fails closed. Unknown or ineligible key performs exactly one cache-bypassing JWKS refresh; compromised, expired, revoked, malformed, or still-ineligible content never falls back.
 
@@ -101,7 +101,7 @@ Rollout uses the stable installation ID for fresh and existing installs; zero se
 
 ## Files affected
 
-Primary BREAKDANCE surfaces:
+Primary aura surfaces:
 
 - `packages/coding-agent/src/cloud/deployment.ts`
 - `packages/coding-agent/src/cloud/token-store.ts`

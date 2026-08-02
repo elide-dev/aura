@@ -11,7 +11,7 @@
  */
 
 /** GitHub `owner/repo` whose releases carry aura's binaries. */
-export const DIST_REPO: string = "elide-dev/BREAKDANCE";
+export const DIST_REPO: string = "elide-dev/aura";
 
 /**
  * How release metadata is discovered.
@@ -38,7 +38,7 @@ export const DIST_NPM_REGISTRY: string = "https://registry.npmjs.org/";
 export const DIST_HOMEBREW_FORMULA: string = "elide-dev/tap/aura";
 
 /** mise tool coordinate for aura installs. */
-export const DIST_MISE_TOOL: string = "github:elide-dev/BREAKDANCE";
+export const DIST_MISE_TOOL: string = "github:elide-dev/aura";
 
 /** Where a user should go to (re)install when self-update cannot proceed. */
-export const DIST_INSTALL_URL: string = "https://github.com/elide-dev/BREAKDANCE/releases";
+export const DIST_INSTALL_URL: string = "https://github.com/elide-dev/aura/releases";

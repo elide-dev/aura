@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-27
 **Status:** approved design, pre-implementation
-**Repos:** BREAKDANCE (Aura/OMP fork) and WHIPLASH (runtime source/build)
+**Repos:** aura (Aura/OMP fork) and WHIPLASH (runtime source/build)
 
 ## Summary
 

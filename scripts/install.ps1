@@ -1,12 +1,12 @@
 # Aura Coding Agent Installer for Windows
-# Usage: irm https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.ps1 | iex
 #
 # Or with options:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.ps1))) -Source
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.ps1))) -Binary
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.ps1))) -Source -Ref v3.20.1
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.ps1))) -Source -Ref main
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.ps1))) -Binary -Ref v3.20.1
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.ps1))) -Source
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.ps1))) -Binary
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.ps1))) -Source -Ref v3.20.1
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.ps1))) -Source -Ref main
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.ps1))) -Binary -Ref v3.20.1
 
 param(
     [switch]$Source,
@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "elide-dev/BREAKDANCE"
+$Repo = "elide-dev/aura"
 $Package = "@oh-my-pi/pi-coding-agent"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\aura" }
 $BinaryName = "aura-windows-x64.exe"

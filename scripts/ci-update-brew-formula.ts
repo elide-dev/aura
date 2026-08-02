@@ -11,8 +11,8 @@
 
 import { $ } from "bun";
 
-const REPO = process.env.OMP_REPO ?? "elide-dev/BREAKDANCE";
-const HOMEPAGE = "https://github.com/elide-dev/BREAKDANCE";
+const REPO = process.env.OMP_REPO ?? "elide-dev/aura";
+const HOMEPAGE = "https://github.com/elide-dev/aura";
 const DESC = "Coding agent with the IDE wired in";
 
 interface ReleaseAsset {

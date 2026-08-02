@@ -4,9 +4,9 @@
 
 **Goal:** Deploy a private-queryable Cloudflare Worker grievance collector at `qa.elide.dev` and make it Aura's verified default Auto-QA endpoint.
 
-**Architecture:** A new WHIPLASH infrastructure package exposes the existing OMP `POST /v1/grievances` contract, validates bounded batches, and stores individual entries in a dedicated D1 database with 90-day retention. BREAKDANCE changes only the default endpoint and related user-facing copy; explicit setting and environment overrides remain unchanged.
+**Architecture:** A new WHIPLASH infrastructure package exposes the existing OMP `POST /v1/grievances` contract, validates bounded batches, and stores individual entries in a dedicated D1 database with 90-day retention. aura changes only the default endpoint and related user-facing copy; explicit setting and environment overrides remain unchanged.
 
-**Tech Stack:** Cloudflare Workers, D1, Wrangler, TypeScript, Bun tests, BREAKDANCE settings and Auto-QA client.
+**Tech Stack:** Cloudflare Workers, D1, Wrangler, TypeScript, Bun tests, aura settings and Auto-QA client.
 
 ## Global Constraints
 
@@ -17,14 +17,14 @@
 - Expose no public read API; operators query D1 through authenticated Cloudflare tooling.
 - Delete records older than 90 days through a scheduled Worker trigger.
 - Keep Auto-QA consent, local SQLite retention, batching, and endpoint override precedence unchanged.
-- Do not commit: BREAKDANCE repository rules prohibit commits unless the user explicitly asks.
+- Do not commit: aura repository rules prohibit commits unless the user explicitly asks.
 - Do not begin embedded runtime repair in this plan. After the collector records a controlled reproduction, diagnose the runtime failure and write a root-cause-specific repair plan.
 
 ---
 
 ## File structure
 
-### WHIPLASH
+### runtime
 
 - `package.json`: add `project/infra/qa` to the root workspace list.
 - `bun.lock`: record the new workspace package after installation.
@@ -38,7 +38,7 @@
 - `project/infra/qa/worker.test.ts`: observable HTTP, persistence, and retention contracts with an in-memory store.
 - `project/infra/qa/worker-apis.d.ts`: generated Wrangler environment types.
 
-### BREAKDANCE
+### aura
 
 - `packages/coding-agent/src/config/settings-schema.ts`: default endpoint and settings UI description.
 - `packages/coding-agent/src/tools/report-tool-issue.ts`: stale default-host documentation only; no push behavior change.

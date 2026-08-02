@@ -2,7 +2,7 @@
 set -e
 
 # Aura Coding Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/elide-dev/BREAKDANCE/main/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/elide-dev/aura/main/scripts/install.sh | sh
 #
 # Options:
 #   --source       Install via bun (installs bun if needed)
@@ -10,7 +10,7 @@ set -e
 #   --ref <ref>    Install specific tag/commit/branch
 #   -r <ref>       Shorthand for --ref
 
-REPO="elide-dev/BREAKDANCE"
+REPO="elide-dev/aura"
 PACKAGE="@oh-my-pi/pi-coding-agent"
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.14"
