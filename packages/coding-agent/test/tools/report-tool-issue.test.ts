@@ -123,8 +123,8 @@ describe("flushGrievances", () => {
 		expect(isAutoQaEnabled(Settings.isolated())).toBe(true);
 	});
 
-	it("uses the Elide collector as the default Auto-QA endpoint", () => {
-		expect(Settings.isolated().get("dev.autoqaPush.endpoint")).toBe("https://qa.elide.dev/v1/grievances");
+	it("embeds no default Auto-QA endpoint, so reports have nowhere to go until one is set", () => {
+		expect(Settings.isolated().get("dev.autoqaPush.endpoint")).toBe("");
 	});
 
 	it("vetoes default-on auto QA once the user denied consent", () => {

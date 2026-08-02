@@ -1,8 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
-import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
-import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "../live/voices";
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../stt/models";
 import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../stt/submit-trigger";
@@ -320,13 +318,6 @@ const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 const DEFAULT_TELEMETRY_SIGNALS: string[] = ["logs", "metrics"];
-
-/** Default OTLP destination: the team Grafana Cloud stack (us-west-0, instance 1421560). */
-const DEFAULT_TELEMETRY_ENDPOINT = "https://otlp-gateway-prod-us-west-0.grafana.net/otlp";
-const DEFAULT_TELEMETRY_HEADERS: Record<string, string> = {
-	Authorization:
-		"Basic MTQyMTU2MDpnbGNfZXlKdklqb2lNVFUzTkRnMU9DSXNJbTRpT2lKemRHRmpheTB4TkRJeE5UWXdMVzkwYkhBdGQzSnBkR1V0WVhWeVlTMTJNQ0lzSW1zaU9pSTNOMmxsUm00d1Z6bFNNWGN5T0UwelpXaE5PVUU0UW5JaUxDSnRJanA3SW5JaU9pSndjbTlrTFhWekxYZGxjM1F0TUNKOWZRPT0=",
-};
 
 /** Apply the user-controlled bash interceptor toggle to every configured rule. */
 export function activeBashInterceptorRules(
@@ -2076,10 +2067,15 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// Collab
+	// Collab.
+	//
+	// No default relay or share server: new outbound traffic starts only where the user or the
+	// operator points it. `DEFAULT_RELAY_URL`/`DEFAULT_SHARE_URL` stay in `@oh-my-pi/pi-wire`
+	// as historical *parsing* constants, so an existing shortened link still resolves — they
+	// are just no longer where a fresh room or upload goes by default.
 	"collab.relayUrl": {
 		type: "string",
-		default: DEFAULT_RELAY_URL,
+		default: "",
 		ui: {
 			tab: "interaction",
 			group: "Collab",
@@ -2113,7 +2109,7 @@ export const SETTINGS_SCHEMA = {
 
 	"share.serverUrl": {
 		type: "string",
-		default: DEFAULT_SHARE_URL,
+		default: "",
 		ui: {
 			tab: "interaction",
 			group: "Collab",
@@ -5569,12 +5565,14 @@ export const SETTINGS_SCHEMA = {
 
 	"dev.autoqaPush.endpoint": {
 		type: "string",
-		default: "https://qa.elide.dev/v1/grievances" as const,
+		// No default collector: with nothing set here, no `AURA_QA_URL`/`PI_AUTO_QA_PUSH_URL`
+		// and no `AURA_DOMAIN`, consented grievances are recorded locally and stay queued.
+		default: "",
 		ui: {
 			tab: "tools",
 			group: "Developer",
 			label: "Auto QA Push Endpoint",
-			description: "Full URL receiving Auto QA JSON reports (default https://qa.elide.dev/v1/grievances)",
+			description: "Full URL receiving Auto QA JSON reports; empty keeps reports queued locally",
 		},
 	},
 
@@ -5603,6 +5601,55 @@ export const SETTINGS_SCHEMA = {
 		default: "unset" as const,
 	},
 
+	// ── Aura cloud switches ─────────────────────────────────────────────────
+	//
+	// One switch per cloud consumer. Each removes *only* that consumer's Aura tiers — the
+	// exact `AURA_*` override variable and the `AURA_DOMAIN` derivation. A per-call argument,
+	// a persisted endpoint setting and the legacy environment variables are untouched, so an
+	// operator pointing a surface at their own host keeps that host whatever these say.
+	// Resolution lives in `src/cloud/deployment.ts`; the names and defaults here are mirrored
+	// by `CLOUD_CONSUMER_SETTINGS`/`CLOUD_SWITCH_DEFAULTS` there.
+	//
+	// Config-file only (no UI) for now: these are deployment-shaped decisions, usually made
+	// once by whoever sets `AURA_DOMAIN`, not per-session preferences.
+
+	/** Aura account/auth endpoints (login, token refresh). */
+	"cloud.account.enabled": { type: "boolean", default: true },
+
+	/** Aura model broker. */
+	"cloud.broker.enabled": { type: "boolean", default: true },
+
+	/** Aura API gateway. Off by default: opt-in routing of provider traffic. */
+	"cloud.gateway.enabled": { type: "boolean", default: false },
+
+	/** Aura settings/context/memory sync. Off by default: uploads local state. */
+	"cloud.settingsSync.enabled": { type: "boolean", default: false },
+
+	/**
+	 * Aura-derived telemetry destination. Off by default and stays off after login and after
+	 * a domain is configured — signing in is not consent to be measured. `telemetry.endpoint`
+	 * and the `OTEL_EXPORTER_OTLP_*` variables are unaffected either way.
+	 */
+	"cloud.telemetry.enabled": { type: "boolean", default: false },
+
+	/** Aura-derived Auto QA collector. Legacy/`dev.autoqaPush.*` tiers stay operator-owned. */
+	"cloud.qa.enabled": { type: "boolean", default: true },
+
+	/** Aura-derived collab relay and web UI for new rooms. */
+	"cloud.collab.enabled": { type: "boolean", default: true },
+
+	/** Aura-derived share server for new uploads/views/deletes. */
+	"cloud.share.enabled": { type: "boolean", default: true },
+
+	/** Aura-hosted update manifests and objects. */
+	"cloud.distribution.enabled": { type: "boolean", default: true },
+
+	/** Aura runtime mirror. */
+	"cloud.runtimeMirror.enabled": { type: "boolean", default: true },
+
+	/** Aura catalog mirror. */
+	"cloud.catalogMirror.enabled": { type: "boolean", default: true },
+
 	// Telemetry: OpenTelemetry export (off by default; OTEL_* env always wins)
 	"telemetry.enabled": {
 		type: "boolean",
@@ -5616,9 +5663,12 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// No default endpoint: telemetry ships where the operator says and nowhere else. An unset
+	// value means "no collector", not "our collector" — export stays inert until this, an
+	// `OTEL_EXPORTER_OTLP_*` variable, or an Aura telemetry tier supplies a destination.
 	"telemetry.endpoint": {
 		type: "string",
-		default: DEFAULT_TELEMETRY_ENDPOINT,
+		default: "",
 		ui: {
 			tab: "tools",
 			group: "Telemetry",
@@ -5629,10 +5679,11 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Config-file only (no UI): free-form key/value shapes the settings panel
-	// has no editor for, same as `gc.*` and `task.agentPrewalk`.
+	// has no editor for, same as `gc.*` and `task.agentPrewalk`. Empty by default —
+	// headers belong to whoever owns the endpoint, so no credential is embedded here.
 	"telemetry.headers": {
 		type: "record",
-		default: DEFAULT_TELEMETRY_HEADERS,
+		default: EMPTY_STRING_RECORD,
 	},
 
 	"telemetry.signals": {

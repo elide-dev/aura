@@ -417,6 +417,76 @@ describe("Settings", () => {
 			expect(getDefault("providers.maxInFlightRequests")).toEqual({});
 		});
 
+		// The switches and the removed endpoint defaults are two halves of one rule: nothing
+		// reaches a network host unless the user or the operator named it. Asserted against
+		// live `Settings` rather than the schema literal so a resolution-layer default
+		// (migration, overlay, hard-coded fallback) cannot reintroduce a host behind them.
+		it("ships the Aura cloud switches with their documented defaults", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			const expected = {
+				"cloud.account.enabled": true,
+				"cloud.broker.enabled": true,
+				"cloud.gateway.enabled": false,
+				"cloud.settingsSync.enabled": false,
+				"cloud.telemetry.enabled": false,
+				"cloud.qa.enabled": true,
+				"cloud.collab.enabled": true,
+				"cloud.share.enabled": true,
+				"cloud.distribution.enabled": true,
+				"cloud.runtimeMirror.enabled": true,
+				"cloud.catalogMirror.enabled": true,
+			} as const;
+			const paths = Object.keys(expected) as SettingPath[];
+			const live: Record<string, unknown> = {};
+			const defaults: Record<string, unknown> = {};
+			for (const path of paths) {
+				live[path] = settings.get(path);
+				defaults[path] = getDefault(path);
+			}
+			expect(live).toEqual(expected);
+			expect(defaults).toEqual(expected);
+		});
+
+		it("keeps cloud switches independently settable", async () => {
+			const settings = Settings.isolated({ "cloud.telemetry.enabled": true, "cloud.qa.enabled": false });
+			expect(settings.get("cloud.telemetry.enabled")).toBe(true);
+			expect(settings.get("cloud.qa.enabled")).toBe(false);
+			// Flipping one leaves the rest at their defaults.
+			expect(settings.get("cloud.collab.enabled")).toBe(true);
+			expect(settings.get("cloud.gateway.enabled")).toBe(false);
+		});
+
+		it("embeds no endpoint default for telemetry, Auto QA, collab or share", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			for (const path of [
+				"telemetry.endpoint",
+				"dev.autoqaPush.endpoint",
+				"collab.relayUrl",
+				"share.serverUrl",
+			] as const) {
+				expect({ path, value: settings.get(path) }).toEqual({ path, value: "" });
+				expect({ path, value: getDefault(path) }).toEqual({ path, value: "" });
+			}
+			// And no embedded shared credential riding along with the telemetry endpoint.
+			expect(settings.get("telemetry.headers")).toEqual({});
+			expect(getDefault("telemetry.headers")).toEqual({});
+		});
+
+		it("still accepts explicit self-hosted endpoints", () => {
+			const settings = Settings.isolated({
+				"telemetry.endpoint": "http://otel.internal:4318",
+				"telemetry.headers": { "x-api-key": "k" },
+				"dev.autoqaPush.endpoint": "https://qa.internal/v1/grievances",
+				"collab.relayUrl": "wss://relay.internal:8443",
+				"share.serverUrl": "https://share.internal/s",
+			});
+			expect(settings.get("telemetry.endpoint")).toBe("http://otel.internal:4318");
+			expect(settings.get("telemetry.headers")).toEqual({ "x-api-key": "k" });
+			expect(settings.get("dev.autoqaPush.endpoint")).toBe("https://qa.internal/v1/grievances");
+			expect(settings.get("collab.relayUrl")).toBe("wss://relay.internal:8443");
+			expect(settings.get("share.serverUrl")).toBe("https://share.internal/s");
+		});
+
 		it("exposes all tool calling mode options", () => {
 			const values = getEnumValues("tools.format");
 			expect(values).toEqual([
