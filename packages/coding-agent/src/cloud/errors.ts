@@ -3,9 +3,18 @@
  *
  * Every failure the client surfaces collapses into one of {@link AURA_CLOUD_ERROR_CODES},
  * plus an optional HTTP status and a coarse classification of the host that was contacted.
- * Nothing else is retained: no tokens, no URLs (which may carry credentials in userinfo or
- * query parameters), no response bodies, no synchronized values. That keeps the error safe
- * to log, serialize, and attach to telemetry verbatim.
+ * Nothing else is reachable from the error object: no tokens, no URLs (which may carry
+ * credentials in userinfo or query parameters), no response bodies, no synchronized values.
+ * That keeps the error safe to log, serialize, and attach to telemetry verbatim.
+ *
+ * "Verbatim" specifically includes inspect-style logging. A wrapped `cause` is deliberately
+ * *not* stored as the standard `Error.cause` property: `Object.keys` hides it, but
+ * `Bun.inspect`/`util.inspect` walk and print the whole cause chain, and the top-level CLI
+ * error path (`src/cli.ts`) dumps `Bun.inspect(err)` to stderr. A `TypeError` from `fetch`
+ * routinely embeds the full request URL in its message, so retaining it as `cause` would
+ * print `?access_token=…` to the terminal. Causes are held in a module-private WeakMap and
+ * reachable only through the explicit {@link auraCloudErrorCause} accessor, which makes
+ * surfacing one a deliberate act rather than a side effect of `console.error`.
  */
 
 /** The complete, closed set of cloud client failure codes. */
@@ -45,9 +54,20 @@ export interface AuraCloudErrorOptions {
 	readonly status?: number;
 	/** The endpoint that was contacted. Classified via {@link classifyHost} and then discarded. */
 	readonly host?: string;
-	/** Underlying error, kept non-enumerable by `Error`'s own `cause` handling. */
+	/**
+	 * Underlying error. Held off the error object entirely (see the file header) and
+	 * retrievable only via {@link auraCloudErrorCause}.
+	 */
 	readonly cause?: unknown;
 }
+
+/**
+ * Causes, held outside the error object so no inspect/serialize path can reach them.
+ *
+ * A `WeakMap` rather than a private field or symbol property: private fields still show up
+ * in `util.inspect`, and symbol-keyed properties are printed by inspect at default options.
+ */
+const CAUSES = new WeakMap<AuraCloudError, unknown>();
 
 const HOST_CLASS_UNKNOWN: AuraCloudHostClass = "unknown";
 
@@ -147,16 +167,28 @@ export class AuraCloudError extends Error {
 	constructor(code: AuraCloudErrorCode, options: AuraCloudErrorOptions = {}) {
 		const status = typeof options.status === "number" ? options.status : undefined;
 		const hostClass = classifyHost(options.host);
-		super(formatMessage(code, status, hostClass), "cause" in options ? { cause: options.cause } : undefined);
+		super(formatMessage(code, status, hostClass));
 		this.code = code;
 		this.status = status;
 		this.hostClass = hostClass;
+		if ("cause" in options) CAUSES.set(this, options.cause);
 	}
 
 	/** Only ever emits code, status and host class. */
 	toJSON(): AuraCloudErrorJson {
 		return { code: this.code, status: this.status, hostClass: this.hostClass };
 	}
+}
+
+/**
+ * Retrieve the underlying error an {@link AuraCloudError} was constructed from, if any.
+ *
+ * The returned value has had no redaction applied and may embed request URLs, tokens, or
+ * response bodies. It is for interactive debugging and narrow structural checks only —
+ * never write it to logs, telemetry, support bundles, or user-facing output.
+ */
+export function auraCloudErrorCause(error: AuraCloudError): unknown {
+	return CAUSES.get(error);
 }
 
 /** Narrow an unknown thrown value to an {@link AuraCloudError}. */

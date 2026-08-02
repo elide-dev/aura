@@ -20,6 +20,7 @@ export {
 	type AuraCloudErrorJson,
 	type AuraCloudErrorOptions,
 	type AuraCloudHostClass,
+	auraCloudErrorCause,
 	classifyHost,
 	isAuraCloudError,
 } from "./errors";

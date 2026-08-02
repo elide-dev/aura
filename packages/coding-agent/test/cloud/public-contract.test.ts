@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { inspect } from "node:util";
 import * as cloud from "../../src/cloud";
-import { AURA_CLOUD_ERROR_CODES, AuraCloudError, classifyHost, isAuraCloudError } from "../../src/cloud/errors";
+import {
+	AURA_CLOUD_ERROR_CODES,
+	AuraCloudError,
+	auraCloudErrorCause,
+	classifyHost,
+	isAuraCloudError,
+} from "../../src/cloud/errors";
 
 /** Every code the plan pins for the cloud client, in plan order. */
 const EXPECTED_CODES = [
@@ -33,6 +40,16 @@ const FORBIDDEN_EXPORT_PATTERNS = [
 ];
 
 const SECRET = "sk-live-DEADBEEFCAFE";
+
+/**
+ * A realistic `fetch` TypeError message: the full request URL, credentials and all.
+ *
+ * Declared here, far from any construction site, on purpose. `Bun.inspect` prints a window
+ * of *source lines* around where an error was constructed, so a sensitive literal sitting
+ * next to the `new AuraCloudError(...)` call would show up in the dump as source text and
+ * make the assertions below fail for a reason that has nothing to do with redaction.
+ */
+const CAUSE_MESSAGE = `fetch failed: https://cloud.example.dev/v1/token?access_token=${SECRET}`;
 
 describe("cloud barrel public contract", () => {
 	test("re-exports the error taxonomy", () => {
@@ -108,11 +125,14 @@ describe("AuraCloudError taxonomy", () => {
 		}
 	});
 
-	test("preserves an underlying cause without enumerating it", () => {
+	test("keeps an underlying cause off the error object, reachable only via the accessor", () => {
 		const cause = new Error("socket hang up");
 		const err = new AuraCloudError("unavailable", { cause });
-		expect(err.cause).toBe(cause);
+		expect(auraCloudErrorCause(err)).toBe(cause);
+		expect(err.cause).toBeUndefined();
 		expect(Object.keys(err)).not.toContain("cause");
+		expect(Object.getOwnPropertyNames(err)).not.toContain("cause");
+		expect(auraCloudErrorCause(new AuraCloudError("unavailable"))).toBeUndefined();
 	});
 });
 
@@ -156,6 +176,44 @@ describe("AuraCloudError redaction", () => {
 		for (const value of Object.values(sensitive)) {
 			expect(JSON.stringify(value ?? null)).not.toContain(SECRET);
 		}
+	});
+
+	// Regression: `Error.cause` is hidden from `Object.keys` but IS walked and printed by
+	// inspect. `src/cli.ts` dumps `Bun.inspect(err)` to stderr on any unhandled CLI failure,
+	// and a `fetch` TypeError embeds the full request URL in its message.
+	describe("wrapped causes never reach an inspect/console path", () => {
+		const wrapped = new AuraCloudError("unavailable", { status: 503, cause: new TypeError(CAUSE_MESSAGE) });
+
+		test("Bun.inspect — the exact call `src/cli.ts` makes on an unhandled CLI error", () => {
+			for (const colors of [false, true]) {
+				const dumped = Bun.inspect(wrapped, { colors, depth: 10 });
+				expect(dumped).not.toContain(SECRET);
+				expect(dumped).not.toContain("access_token");
+				expect(dumped).not.toContain("cloud.example.dev");
+				expect(dumped).not.toContain("fetch failed");
+			}
+			// The redacted summary still survives, so the dump stays useful.
+			expect(Bun.inspect(wrapped)).toContain("unavailable");
+		});
+
+		test("util.inspect at full depth, including hidden properties", () => {
+			for (const options of [{ depth: 10 }, { depth: 10, showHidden: true }]) {
+				const dumped = inspect(wrapped, options);
+				expect(dumped).not.toContain(SECRET);
+				expect(dumped).not.toContain("fetch failed");
+			}
+		});
+
+		test("String(), stack and JSON paths", () => {
+			for (const rendered of [String(wrapped), wrapped.stack ?? "", JSON.stringify(wrapped)]) {
+				expect(rendered).not.toContain(SECRET);
+				expect(rendered).not.toContain("fetch failed");
+			}
+		});
+
+		test("the cause is still recoverable for deliberate debugging", () => {
+			expect((auraCloudErrorCause(wrapped) as Error).message).toBe(CAUSE_MESSAGE);
+		});
 	});
 
 	test("messages are derived from the code, so callers cannot inject detail", () => {
