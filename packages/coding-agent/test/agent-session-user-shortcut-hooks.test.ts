@@ -134,6 +134,36 @@ describe("AgentSession user shortcut hooks", () => {
 		});
 	});
 
+	it("routes the local Python shell action through the run tool", async () => {
+		const executePythonSpy = vi.spyOn(pythonExecutor, "executePython");
+		createSession();
+		const execute = vi.fn().mockResolvedValue({
+			content: [{ type: "text", text: "embedded output" }],
+			details: { exitCode: 0, stdout: "embedded output\n", stderr: "", durationMs: 2, killed: false },
+			isError: false,
+		});
+		vi.spyOn(session, "getToolByName").mockReturnValue({ execute } as never);
+		const chunks: string[] = [];
+
+		const result = await session.executePythonShell("print('embedded')", chunk => chunks.push(chunk), {
+			excludeFromContext: true,
+		});
+
+		expect(executePythonSpy).not.toHaveBeenCalled();
+		expect(execute).toHaveBeenCalledWith(
+			expect.any(String),
+			{ code: "print('embedded')", language: "python", cwd: expect.any(String) },
+			expect.any(AbortSignal),
+		);
+		expect(result).toMatchObject({ output: "embedded output", exitCode: 0, cancelled: false });
+		expect(chunks).toEqual(["embedded output"]);
+		expect(session.messages.at(-1)).toMatchObject({
+			role: "pythonExecution",
+			output: "embedded output",
+			excludeFromContext: true,
+		});
+	});
+
 	it("falls back to normal execution when hook does not return a replacement", async () => {
 		const extensionRunner = {
 			hasHandlers: vi.fn((eventType: string) => eventType === "user_bash" || eventType === "user_python"),

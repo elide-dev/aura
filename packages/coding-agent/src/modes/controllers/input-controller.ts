@@ -4,7 +4,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import { isSettingsInitialized, settings } from "../../config/settings";
+import { isPythonShellEnabled, isSettingsInitialized, settings } from "../../config/settings";
 import { resolveLocalRoot } from "../../internal-urls";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { extractImagePathFromText } from "../../modes/components/custom-editor";
@@ -529,7 +529,8 @@ export class InputController {
 			const wasPythonMode = this.ctx.isPythonMode;
 			const trimmed = text.trimStart();
 			this.ctx.isBashMode = trimmed.startsWith("!");
-			this.ctx.isPythonMode = parsePythonCommandInput(trimmed) !== undefined;
+			this.ctx.isPythonMode =
+				isPythonShellEnabled(this.ctx.session.settings) && parsePythonCommandInput(trimmed) !== undefined;
 			if (wasBashMode !== this.ctx.isBashMode || wasPythonMode !== this.ctx.isPythonMode) {
 				this.ctx.updateEditorBorderColor();
 			}
@@ -711,7 +712,10 @@ export class InputController {
 					this.ctx.editor.setText("");
 					return;
 				}
-				if (text.startsWith("!") || parsePythonCommandInput(text)) {
+				if (
+					text.startsWith("!") ||
+					(isPythonShellEnabled(this.ctx.session.settings) && parsePythonCommandInput(text))
+				) {
 					this.ctx.showStatus("Local execution is host-only during a collab session");
 					this.ctx.editor.setText("");
 					return;
@@ -764,7 +768,9 @@ export class InputController {
 
 			// Handle python command (`$ <code>` for normal, `$$ <code>` for excluded from context).
 			// Shell-style variables such as `$HOME` are normal prose unless a space follows the sigil.
-			const pythonCommand = parsePythonCommandInput(text);
+			const pythonCommand = isPythonShellEnabled(this.ctx.session.settings)
+				? parsePythonCommandInput(text)
+				: undefined;
 			if (pythonCommand) {
 				const { code, isExcluded } = pythonCommand;
 				if (code) {
@@ -936,7 +942,12 @@ export class InputController {
 			}
 			return;
 		}
-		if (text && (text.startsWith("/") || text.startsWith("!") || parsePythonCommandInput(text))) {
+		if (
+			text &&
+			(text.startsWith("/") ||
+				text.startsWith("!") ||
+				(isPythonShellEnabled(this.ctx.session.settings) && parsePythonCommandInput(text)))
+		) {
 			this.ctx.showStatus("Commands run in the main session — press ←← to return first");
 			return; // editor text not cleared: Editor does not auto-clear on submit
 		}

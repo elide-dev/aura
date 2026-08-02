@@ -36,6 +36,14 @@ describe("WelcomeComponent tips", () => {
 		expect(welcomeRegular.tip).toBeDefined();
 	});
 
+	it("withholds the Python action tip unless the capability is enabled", () => {
+		const disabled = new WelcomeComponent("1.0.0", "model", "provider").render(100).join("\n");
+		const enabled = new WelcomeComponent("1.0.0", "model", "provider", [], [], true).render(100).join("\n");
+
+		expect(disabled).not.toContain("to run python");
+		expect(enabled).toContain("to run python");
+	});
+
 	it("weights [NEW] tips above ordinary tips in selection", () => {
 		// Data-independent: tips.txt may legitimately carry zero "[NEW]" tips, so
 		// exercise the weighting contract on a synthetic list.

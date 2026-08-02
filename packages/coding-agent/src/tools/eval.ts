@@ -225,7 +225,8 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	const allowJl = backends.julia;
 
 	if (language === "python") {
-		if (!allowPy) throw new ToolError("Python backend is disabled (PI_PY=0 or eval.py = false).");
+		if (!allowPy)
+			throw new ToolError("Python backend is disabled (python.enabled = false, eval.py = false, or PI_PY=0).");
 		if (!(await pythonBackend.isAvailable(session))) {
 			const alternatives = [allowJs ? '"js"' : null, allowRb ? '"rb"' : null, allowJl ? '"jl"' : null].filter(
 				Boolean,

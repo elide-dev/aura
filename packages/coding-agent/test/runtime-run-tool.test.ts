@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	acquireRuntimeServiceLease,
 	disposeCachedRuntimeService,
@@ -14,14 +15,30 @@ import { RuntimeRunTool } from "../src/tools/runtime-run";
 
 function sessionWith(overrides: {
 	enabled?: boolean;
+	pythonEnabled?: boolean;
+	pythonEmbedded?: boolean;
 	run?: (p: unknown, signal?: AbortSignal, sessionId?: string) => Promise<RuntimeExecResult>;
 }): ToolSession {
 	const service = overrides.run ? { run: overrides.run } : undefined;
 	return {
-		settings: { get: (key: string) => (key === "runtime.enabled" ? (overrides.enabled ?? true) : undefined) },
+		settings: {
+			get: (key: string) => {
+				if (key === "runtime.enabled") return overrides.enabled ?? true;
+				if (key === "python.enabled") return overrides.pythonEnabled ?? true;
+				if (key === "python.embedded") return overrides.pythonEmbedded ?? true;
+				return undefined;
+			},
+		},
 		getRuntimeService: () => (overrides.enabled === false ? undefined : (service as never)),
 		getSessionId: () => "session-a",
 	} as unknown as ToolSession;
+}
+
+function runLanguages(tool: RuntimeRunTool): string[] {
+	const wire = toolWireSchema(tool as unknown as AgentTool) as {
+		properties?: { language?: { enum?: string[] } };
+	};
+	return [...(wire.properties?.language?.enum ?? [])].sort();
 }
 
 describe("run tool", () => {
@@ -34,6 +51,33 @@ describe("run tool", () => {
 		expect(tool?.name).toBe("run");
 		expect(tool?.loadMode).toBe("essential");
 		expect(tool?.approval).toBe("exec");
+	});
+
+	test("withholds embedded Python from the model contract when its capability is disabled", () => {
+		const tool = RuntimeRunTool.createIf(sessionWith({ pythonEmbedded: false }));
+
+		expect(tool).not.toBeNull();
+		expect(runLanguages(tool!)).toEqual(["java", "js", "kotlin", "ts"]);
+		expect(tool?.summary).not.toContain("Python");
+		expect(tool?.description).not.toContain("Python");
+	});
+
+	test("the parent Python capability overrides an enabled embedded child", () => {
+		const tool = RuntimeRunTool.createIf(sessionWith({ pythonEnabled: false, pythonEmbedded: true }));
+
+		expect(tool).not.toBeNull();
+		expect(runLanguages(tool!)).not.toContain("python");
+	});
+
+	test.each([
+		{ name: "inline language", params: { code: "print(1)", language: "python" } },
+		{ name: "inferred path language", params: { path: "hello.py" } },
+	])("rejects $name before dispatch when embedded Python is disabled", async ({ params }) => {
+		const run = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "", durationMs: 1, killed: false }));
+		const tool = RuntimeRunTool.createIf(sessionWith({ pythonEmbedded: false, run }));
+
+		await expect(tool?.execute("id", params as never)).rejects.toThrow(/python\.embedded/);
+		expect(run).not.toHaveBeenCalled();
 	});
 
 	test("execute forwards params to the service and formats the result", async () => {
@@ -95,7 +139,9 @@ describe("run tool", () => {
 				new RuntimeRpcError("internal", "Embedded runtime execution worker failed."),
 			);
 			const session = {
-				settings: { get: (key: string) => key === "runtime.enabled" },
+				settings: {
+					get: (key: string) => key === "runtime.enabled" || key === "python.enabled" || key === "python.embedded",
+				},
 				runtimeServiceScope: scope,
 				getRuntimeService: () => getOrCreateRuntimeService(options, undefined, scope),
 			} as unknown as ToolSession;

@@ -16,7 +16,7 @@ type FakeEditor = {
 	pendingImageLinks: (string | undefined)[];
 };
 
-function createContext() {
+function createContext(pythonEnabled = true, pythonShellEnabled = false, pythonEmbeddedEnabled = true) {
 	let editorText = "";
 	const submitted: unknown[] = [];
 	const handlePythonCommand = vi.fn(async (_code: string, _isExcluded: boolean) => {});
@@ -48,6 +48,14 @@ function createContext() {
 			isCompacting: false,
 			isBashRunning: false,
 			isEvalRunning: false,
+			settings: {
+				get(key: string) {
+					if (key === "python.enabled") return pythonEnabled;
+					if (key === "python.shell") return pythonShellEnabled;
+					if (key === "python.embedded") return pythonEmbeddedEnabled;
+					return undefined;
+				},
+			},
 			extensionRunner: undefined,
 			maybeStartTitleGeneration: vi.fn(),
 			prompt,
@@ -141,7 +149,7 @@ describe("InputController Python prompt prefix", () => {
 	});
 
 	it("keeps space-separated Python shortcuts available", async () => {
-		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext();
+		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(true, true);
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 
@@ -152,7 +160,7 @@ describe("InputController Python prompt prefix", () => {
 	});
 
 	it("keeps excluded Python shortcuts space-separated too", async () => {
-		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext();
+		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(true, true);
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 
@@ -160,5 +168,38 @@ describe("InputController Python prompt prefix", () => {
 
 		expect(handlePythonCommand).toHaveBeenCalledWith("print(1)", true);
 		expect(onInputCallback).not.toHaveBeenCalled();
+	});
+
+	it("submits Python-prefixed text normally when the shell action is disabled", async () => {
+		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext();
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await editor.onSubmit?.("$ print(1)");
+
+		expect(handlePythonCommand).not.toHaveBeenCalled();
+		expect(onInputCallback).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the shell action disabled when the parent Python capability is off", async () => {
+		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(false, true);
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await editor.onSubmit?.("$ print(1)");
+
+		expect(handlePythonCommand).not.toHaveBeenCalled();
+		expect(onInputCallback).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the shell action disabled when embedded Python is off", async () => {
+		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(true, true, false);
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await editor.onSubmit?.("$ print(1)");
+
+		expect(handlePythonCommand).not.toHaveBeenCalled();
+		expect(onInputCallback).toHaveBeenCalledTimes(1);
 	});
 });

@@ -115,7 +115,7 @@ Environment variables are **not** a single settings layer. Each is read by the f
 | `PI_SLOW_MODEL` | `modelRoles.slow` | Also exposed as `--slow`. |
 | `PI_PLAN_MODEL` | `modelRoles.plan` | Also exposed as `--plan`. |
 | `PI_NO_PTY=1` | (disables PTY bash) | Equivalent to `--no-pty` for the process. |
-| `PI_PY` | `eval.py` | `PI_PY=0` disables the Python eval backend. |
+| `PI_PY` | `python.enabled`, `eval.py` | `PI_PY=0` disables the Python eval backend. `PI_PY=1` may enable `eval.py` only when the legacy `python.enabled` capability is already on; it cannot bypass the umbrella gate. |
 | `PI_JS` | `eval.js` | `PI_JS=0` disables the JavaScript eval backend. |
 | `PI_TINY_DEVICE` | `providers.tinyModelDevice` | ONNX execution provider for local tiny models. |
 | `PI_TINY_DTYPE` | `providers.tinyModelDtype` | ONNX precision for local tiny models. |
@@ -496,6 +496,11 @@ tools:
 
 Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, and `web_search.enabled`. The `inspect_image` tool is controlled by the tri-state `inspect_image.mode` (`auto`|`on`|`off`, default `auto`): `auto` exposes it only when the active model lacks native image input, and the `/vision` slash command overrides the mode per session.
 
+Python has a parent/child capability hierarchy. `python.enabled` is the parent
+gate for every Python surface. `python.embedded` controls Python in the managed
+`run`, `insights`, and `profile` tools. `python.shell` controls the local
+`$`/`$$` snake action through that runtime, so it also requires `python.embedded`.
+
 ### Runtime
 
 The `run`, `check`, `insights`, and `profile` tools execute on a managed runtime binary, as do four JVM specialists (`jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps`). Java and Kotlin execution is part of `run`. The `serve` long-running flow is supervised as a `hub` job rather than by the runtime layer. All nine tools are gated on `runtime.enabled`; when it is off, none register.
@@ -579,6 +584,9 @@ eval:
   js: true
 
 python:
+  enabled: true             # parent gate for every Python capability
+  embedded: true            # Python in run, insights, and profile
+  shell: false              # local $/$$ snake action
   kernelMode: session       # session, per-call
   interpreter: ""
 
@@ -596,7 +604,10 @@ lsp:
 | `launch.enabled` | boolean | `true` | Enable the launch tool for shared long-running project processes. |
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
-| `eval.py` | boolean | `true` | Python eval backend. `PI_PY=0` disables for the process. |
+| `python.enabled` | boolean | `true` | Parent gate for every Python capability. When false, child settings cannot re-enable Python. |
+| `python.embedded` | boolean | `true` | Permit Python in the managed `run`, `insights`, and `profile` tools when `python.enabled` is true. Disabled sessions omit Python from those tools' schemas and descriptions. |
+| `python.shell` | boolean | `false` | Enable the local `$`/`$$` snake action through the managed runtime when both `python.enabled` and `python.embedded` are true. Disabled sessions treat sigil input as ordinary prompt text and omit the action from welcome and hotkey guidance. |
+| `eval.py` | boolean | `true` | Permit the Python eval backend when `python.enabled` is also true. `PI_PY=0` disables it for the process; `PI_PY=1` cannot bypass `python.enabled`. |
 | `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
 | `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |
 | `python.interpreter` | string | `""` | Path to a Python interpreter; empty = auto-detect. |

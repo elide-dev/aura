@@ -1,4 +1,5 @@
 import { $flag } from "@oh-my-pi/pi-utils";
+import { isPythonEnabled } from "../config/settings";
 import type { ToolSession } from ".";
 
 export interface EvalBackendsAllowance {
@@ -19,14 +20,14 @@ export function readEvalBackendsAllowance(session: ToolSession): EvalBackendsAll
 }
 
 /**
- * Materialize the active eval backend allowance: PI_PY / PI_JS / PI_RB / PI_JL
- * env flags override the per-key settings; otherwise settings win (py/js default
- * on, rb/jl default off).
+ * Materialize the active eval backend allowance. The legacy Python capability
+ * is an umbrella gate: PI_PY may narrow eval.py, but cannot re-enable Python
+ * when python.enabled is false. Other env flags override their per-key setting.
  */
 export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance {
 	const settings = readEvalBackendsAllowance(session);
 	return {
-		python: $flag("PI_PY", settings.python),
+		python: isPythonEnabled(session.settings) && $flag("PI_PY", settings.python),
 		js: $flag("PI_JS", settings.js),
 		ruby: $flag("PI_RB", settings.ruby),
 		julia: $flag("PI_JL", settings.julia),

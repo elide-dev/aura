@@ -3672,7 +3672,37 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// Runtime knobs (consumed by eval backends and the /python slash command)
+	"python.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "shell",
+			group: "Eval & Runtimes",
+			label: "Python",
+			description: "Enable Python capabilities. This parent setting overrides all Python-specific child settings.",
+		},
+	},
+	"python.embedded": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "shell",
+			group: "Eval & Runtimes",
+			label: "Embedded Python",
+			description: "Allow Python execution through the managed runtime tools, including run, insights, and profile.",
+		},
+	},
+	"python.shell": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "shell",
+			group: "Eval & Runtimes",
+			label: "Python Shell Action",
+			description: "Enable the local $/$$ Python action through the managed runtime.",
+		},
+	},
+	// Python eval-kernel knobs
 	"python.kernelMode": {
 		type: "enum",
 		values: ["session", "per-call"] as const,

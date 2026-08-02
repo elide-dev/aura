@@ -76,12 +76,13 @@ describe("EvalTool language dispatch", () => {
 	});
 
 	it('dispatches to the Python backend when cell.language === "py"', async () => {
+		const settings = Settings.isolated();
 		vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 		vi.spyOn(evalIndex.pythonBackend, "isAvailable").mockResolvedValue(true);
 		const pythonExecuteSpy = vi.spyOn(evalIndex.pythonBackend, "execute").mockResolvedValue(mockResult);
 		const jsExecuteSpy = vi.spyOn(evalIndex.jsBackend, "execute");
 
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeSession(settings));
 		await tool.execute("call-py", {
 			language: "py",
 			code: "print('hi')",
@@ -92,12 +93,13 @@ describe("EvalTool language dispatch", () => {
 	});
 
 	it("dispatches each call to the backend named by its language", async () => {
+		const settings = Settings.isolated();
 		vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 		vi.spyOn(evalIndex.pythonBackend, "isAvailable").mockResolvedValue(true);
 		const pythonExecuteSpy = vi.spyOn(evalIndex.pythonBackend, "execute").mockResolvedValue(mockResult);
 		const jsExecuteSpy = vi.spyOn(evalIndex.jsBackend, "execute").mockResolvedValue(mockResult);
 
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeSession(settings));
 		await tool.execute("call-py", { language: "py", code: "x = 1" });
 		await tool.execute("call-js", { language: "js", code: "const y = 2;" });
 
@@ -117,6 +119,16 @@ describe("EvalTool language dispatch", () => {
 		).rejects.toThrow(/eval\.py = false/);
 	});
 
+	it("withholds the Python eval backend when the parent Python capability is disabled", () => {
+		Bun.env.PI_PY = "1";
+		const settings = Settings.isolated({
+			"python.enabled": false,
+			"eval.py": true,
+		});
+
+		expect(resolveEvalBackends(makeSession(settings)).python).toBe(false);
+	});
+
 	it("rejects js cells when eval.js is disabled", async () => {
 		const settings = Settings.isolated();
 		settings.set("eval.js", false);
@@ -132,6 +144,7 @@ describe("EvalTool language dispatch", () => {
 	it("uses settings for eval backends whose env flag is unset", () => {
 		Bun.env.PI_PY = "1";
 		const settings = Settings.isolated();
+		settings.set("python.enabled", true);
 		settings.set("eval.py", false);
 		settings.set("eval.js", false);
 

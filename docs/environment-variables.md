@@ -299,7 +299,7 @@ Use `ANTHROPIC_SEARCH_BASE_URL` (optionally with `ANTHROPIC_SEARCH_API_KEY`) to 
 
 | Variable                | Default / behavior                                                                                                  |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `PI_PY`                 | Boolean-like override for the Python eval backend: truthy (`1`/`true`/`yes`/`on`) enables, any other value disables; unset defers to the `eval.py` setting (default enabled)        |
+| `PI_PY`                 | Boolean-like override for `eval.py`; it may narrow the eval backend when `python.enabled` is on, but cannot bypass the parent Python capability gate |
 | `PI_JS`                 | Same boolean-like override for the JavaScript eval backend; unset defers to the `eval.js` setting (default enabled)                                                                 |
 | `PI_PYTHON_SKIP_CHECK`  | If `1`, skips Python interpreter availability checks (subprocess runner still starts on demand)                     |
 | `PI_PYTHON_INTEGRATION` | If `1`, opts gated integration tests in (e.g. `python-runner.integration.test.ts`) into running against real Python |

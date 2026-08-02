@@ -2,6 +2,7 @@ import type { AppKeybinding, KeybindingsManager } from "../../config/keybindings
 
 export interface HotkeysMarkdownBindings {
 	keybindings: Pick<KeybindingsManager, "getDisplayString">;
+	pythonShellEnabled: boolean;
 }
 
 function appKey(bindings: HotkeysMarkdownBindings, action: AppKeybinding): string {
@@ -58,7 +59,8 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		"| `/` | Slash commands |",
 		"| `!` | Run bash command |",
 		"| `!!` | Run bash command (excluded from context) |",
-		"| `$` | Run Python in shared kernel |",
-		"| `$$` | Run Python (excluded from context) |",
+		...(bindings.pythonShellEnabled
+			? ["| `$` | Run Python with the managed runtime |", "| `$$` | Run Python (excluded from context) |"]
+			: []),
 	].join("\n");
 }

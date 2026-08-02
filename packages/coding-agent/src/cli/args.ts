@@ -404,7 +404,7 @@ ${chalk.bold("Available Tools (default-enabled unless noted):")}
   grep          - Search file contents
   glob          - Find files by glob pattern
   lsp           - Language server protocol (code intelligence)
-  python        - Execute Python code (requires: ${APP_NAME} setup python)
+  run           - Execute Python, JavaScript, TypeScript, Java, or Kotlin with the managed runtime
   notebook      - Edit Jupyter notebooks
   inspect_image - Analyze images with a vision model
   browser       - Browser automation (Puppeteer)

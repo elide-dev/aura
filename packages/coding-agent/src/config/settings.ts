@@ -2443,3 +2443,18 @@ export const settings = new Proxy({} as Settings, {
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
+
+/** Whether any Python capability may be exposed. */
+export function isPythonEnabled(config: Pick<Settings, "get">): boolean {
+	return config.get("python.enabled") === true;
+}
+
+/** Whether managed runtime tools may execute Python. */
+export function isEmbeddedPythonEnabled(config: Pick<Settings, "get">): boolean {
+	return isPythonEnabled(config) && config.get("python.embedded") === true;
+}
+
+/** Whether the TUI may interpret $/$$ input as the local Python action. */
+export function isPythonShellEnabled(config: Pick<Settings, "get">): boolean {
+	return isEmbeddedPythonEnabled(config) && config.get("python.shell") === true;
+}

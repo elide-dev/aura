@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { RuntimeExecResult } from "../src/runtime/protocol";
 import type { ToolSession } from "../src/tools";
 import { RuntimeInsightsTool } from "../src/tools/runtime-insights";
@@ -6,11 +8,28 @@ import { RuntimeProfileTool } from "../src/tools/runtime-profile";
 
 const OK: RuntimeExecResult = { exitCode: 0, stdout: "report", stderr: "", durationMs: 10, killed: false };
 
-function sessionWith(service: object | undefined, enabled = true): ToolSession {
+function sessionWith(
+	service: object | undefined,
+	enabled = true,
+	pythonEnabled = true,
+	pythonEmbedded = true,
+): ToolSession {
 	return {
-		settings: { get: (key: string) => (key === "runtime.enabled" ? enabled : undefined) },
+		settings: {
+			get: (key: string) => {
+				if (key === "runtime.enabled") return enabled;
+				if (key === "python.enabled") return pythonEnabled;
+				if (key === "python.embedded") return pythonEmbedded;
+				return undefined;
+			},
+		},
 		getRuntimeService: () => service as never,
 	} as unknown as ToolSession;
+}
+
+function languages(tool: unknown): string[] {
+	const wire = toolWireSchema(tool as AgentTool) as { properties?: { language?: { enum?: string[] } } };
+	return [...(wire.properties?.language?.enum ?? [])].sort();
 }
 
 describe("insights/profile tools", () => {
@@ -27,6 +46,26 @@ describe("insights/profile tools", () => {
 		expect(p!.name).toBe("profile");
 		expect(p!.loadMode).toBe("discoverable");
 		expect(p!.approval).toBe("exec");
+	});
+
+	test("both withhold and reject Python when embedded Python is disabled", async () => {
+		const insightsCall = vi.fn(async () => OK);
+		const profileCall = vi.fn(async () => OK);
+		const insights = RuntimeInsightsTool.createIf(sessionWith({ insights: insightsCall }, true, true, false));
+		const profile = RuntimeProfileTool.createIf(sessionWith({ profile: profileCall }, true, true, false));
+
+		expect(languages(insights!)).toEqual(["js", "ts"]);
+		expect(languages(profile!)).toEqual(["js", "ts"]);
+		expect(insights?.description).not.toContain("Python");
+		expect(profile?.description).not.toContain("Python");
+		await expect(insights?.execute("id", { code: "print(1)", language: "python" } as never)).rejects.toThrow(
+			/python\.embedded/,
+		);
+		await expect(
+			profile?.execute("id", { code: "print(1)", language: "python", mode: "cpusampling" } as never),
+		).rejects.toThrow(/python\.embedded/);
+		expect(insightsCall).not.toHaveBeenCalled();
+		expect(profileCall).not.toHaveBeenCalled();
 	});
 
 	test("insights forwards insight script params", async () => {

@@ -32,6 +32,7 @@ describe("buildHotkeysMarkdown", () => {
 					return displayStrings[action] ?? "Disabled";
 				},
 			},
+			pythonShellEnabled: false,
 		});
 
 		const lines = markdown.split("\n");
@@ -45,6 +46,7 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
 		expect(markdown).toContain("| `#<number>` | GitHub issue/PR reference");
 		expect(markdown).toContain("| `#` / `#<text>` | Prompt actions");
+		expect(markdown).not.toContain("Run Python");
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			expect(line.startsWith(" ")).toBe(false);
@@ -68,9 +70,24 @@ describe("buildHotkeysMarkdown", () => {
 					return "Ctrl+K";
 				},
 			},
+			pythonShellEnabled: false,
 		});
 
 		expect(markdown).toContain("| `Disabled` | Select model (temporary) |");
 		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
+	});
+
+	it("describes Python shortcuts only when the runtime-backed shell action is enabled", () => {
+		const markdown = buildHotkeysMarkdown({
+			keybindings: {
+				getDisplayString() {
+					return "Ctrl+K";
+				},
+			},
+			pythonShellEnabled: true,
+		});
+
+		expect(markdown).toContain("| `$` | Run Python with the managed runtime |");
+		expect(markdown).toContain("| `$$` | Run Python (excluded from context) |");
 	});
 });

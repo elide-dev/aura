@@ -61,6 +61,7 @@ import { KeybindingsManager } from "../config/keybindings";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import {
+	isPythonShellEnabled,
 	isSettingsInitialized,
 	onModelRolesChanged,
 	onStatusLineSessionAccentChanged,
@@ -952,6 +953,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				providerName,
 				recentSessions,
 				this.#getWelcomeLspServers(),
+				isPythonShellEnabled(this.session.settings),
 			);
 
 			// Setup UI layout

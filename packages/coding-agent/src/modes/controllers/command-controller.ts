@@ -13,6 +13,7 @@ import {
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
+import { isPythonShellEnabled } from "../../config/settings";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
 import { parseExportArgs } from "../../export/html/args";
@@ -582,7 +583,10 @@ export class CommandController {
 	}
 
 	handleHotkeysCommand(): void {
-		const hotkeys = buildHotkeysMarkdown({ keybindings: this.ctx.keybindings });
+		const hotkeys = buildHotkeysMarkdown({
+			keybindings: this.ctx.keybindings,
+			pythonShellEnabled: isPythonShellEnabled(this.ctx.session.settings),
+		});
 		showMarkdownPanel(this.ctx, "Keyboard Shortcuts", hotkeys);
 	}
 
@@ -1197,7 +1201,7 @@ export class CommandController {
 		this.ctx.ui.requestRender();
 
 		try {
-			const result = await this.ctx.session.executePython(
+			const result = await this.ctx.session.executePythonShell(
 				code,
 				chunk => {
 					if (this.ctx.pythonComponent) {

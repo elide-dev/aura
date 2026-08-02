@@ -84,19 +84,16 @@ describe("eval tool dynamic schema", () => {
 		}
 	});
 
-	it("hides rb/jl from the wire schema, summary, description, and examples by default", () => {
+	it("advertises Python in the model-facing eval contract by default", () => {
 		const tool = new EvalTool(makeSession({}));
 		const fields = wireCellFields(tool);
-		// Default config: rb/jl off → the wire schema is byte-identical to the pre-feature py/js one.
 		expect(fields.languages).toEqual(["js", "py"]);
 		expect(fields.languageDescription).toBe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM');
 		expect(fields.codeDescription).toBe("code to run in this eval call, verbatim. Use top-level await freely.");
 		expect(tool.summary).toBe("Execute Python or JavaScript code in an in-process eval backend");
 		expect(tool.description).not.toMatch(/ruby|julia/i);
-		// Examples must not advertise a disabled backend.
 		const exampleLangs = tool.examples.map(ex => ("call" in ex ? ex.call.language : null));
 		expect(exampleLangs).toEqual(["py", "py", "py"]);
-		expect(tool.examples.some(ex => "call" in ex && ex.call.language === "rb")).toBe(false);
 	});
 
 	it("advertises rb/jl across enum, descriptions, summary, and prelude once enabled", () => {

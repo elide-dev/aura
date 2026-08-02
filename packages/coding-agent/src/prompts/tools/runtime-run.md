@@ -1,4 +1,4 @@
-Execute JavaScript, TypeScript, Python, Java, or Kotlin directly. Use `bash` for
+Execute JavaScript, TypeScript,{{#if python}} Python,{{/if}} Java, or Kotlin directly. Use `bash` for
 shell commands and `eval` for persistent notebook exploration.
 
 Provide exactly one of `code` or `path`; a path retains project-relative imports
