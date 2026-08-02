@@ -203,6 +203,29 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		}
 	}
 
+	/**
+	 * Identity of the bytes currently on disk, for callers that cache expensive
+	 * work derived from this file and need to know whether to redo it. `null`
+	 * when the file is absent.
+	 *
+	 * Deliberately not an mtime. Linux stamps file times from a coarse clock, so
+	 * two writes inside the same tick are indistinguishable by mtime — measured
+	 * at 200/200 identical for back-to-back rewrites, and identical at
+	 * nanosecond precision too, so `mtimeNs` buys nothing. A gate built on mtime
+	 * equality therefore drops the second of two quick edits on the floor.
+	 * Hashing the content is the only check that cannot go stale, and one small
+	 * read is cheap next to the reload it guards.
+	 */
+	getContentSignature(): string | null {
+		try {
+			const content = fs.readFileSync(this.#resolveReadPath());
+			return `${content.byteLength}:${Bun.hash(content).toString(36)}`;
+		} catch (err) {
+			if (isEnoent(err)) return null;
+			throw err;
+		}
+	}
+
 	async getMtimeMsAsync(): Promise<number | null> {
 		const file = Bun.file(this.path());
 		if (!(await file.exists())) return null;

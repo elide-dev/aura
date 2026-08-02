@@ -801,7 +801,7 @@ export class ModelRegistry {
 	#modelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
 	#configError: ConfigError | undefined = undefined;
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
-	#lastStaticLoadMtime: number | null = null;
+	#lastStaticLoadSignature: string | null = null;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -1050,9 +1050,11 @@ export class ModelRegistry {
 	}
 
 	#reloadStaticModels(): void {
-		const currentMtime = this.#modelsConfigFile.getMtimeMs();
-		if (currentMtime !== null && currentMtime === this.#lastStaticLoadMtime) {
-			// Models config unchanged since last load; reloading would be redundant.
+		const currentSignature = this.#modelsConfigFile.getContentSignature();
+		if (currentSignature !== null && currentSignature === this.#lastStaticLoadSignature) {
+			// Models config byte-identical to the last load; reloading would be redundant.
+			// Compared by content, not mtime: coarse filesystem timestamps make two
+			// edits in the same tick look unchanged, which would strand the second one.
 			return;
 		}
 		this.#modelsConfigFile.invalidate();
@@ -1121,7 +1123,7 @@ export class ModelRegistry {
 				this.#cachedAuthoritativeProviders.add(provider);
 			}
 		}
-		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
+		this.#lastStaticLoadSignature = this.#modelsConfigFile.getContentSignature();
 	}
 
 	#resetStaticComposition(): void {
@@ -2495,7 +2497,7 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.delete(providerName);
 			this.#clearRuntimeProviderState(providerName);
 		}
-		this.#lastStaticLoadMtime = null;
+		this.#lastStaticLoadSignature = null;
 		this.#reloadStaticModels();
 	}
 
@@ -2573,7 +2575,7 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.set(providerName, sourceId);
 		}
 		if (sourceHandoff) {
-			this.#lastStaticLoadMtime = null;
+			this.#lastStaticLoadSignature = null;
 			this.#reloadStaticModels();
 		}
 

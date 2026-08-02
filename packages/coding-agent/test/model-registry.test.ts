@@ -1457,6 +1457,42 @@ describe("ModelRegistry", () => {
 			).toBe("Second Name");
 		});
 
+		test("refresh() picks up an edit that lands in the same filesystem timestamp tick", async () => {
+			// The reload gate used to skip when models.yml's mtime was unchanged.
+			// Linux stamps file times from a coarse clock, so two writes inside one
+			// tick are byte-for-byte indistinguishable by mtime — identical even at
+			// nanosecond precision — and the second edit was silently dropped. That
+			// made the sibling tests above flaky under load, where scheduling jitter
+			// decides whether a tick elapses mid-test. Here the collision is forced,
+			// so the gate must be reading content rather than timestamps.
+			const write = (name: string) =>
+				writeRawModelsJson({
+					openrouter: { modelOverrides: { "anthropic/claude-sonnet-4": { name } } },
+				});
+
+			// Pin both writes to one whole-second timestamp. In the wild the
+			// collision comes from the coarse clock and is a coin flip; stamping it
+			// makes the regression deterministic instead of load-dependent, and a
+			// whole second survives the round trip through utimes without the
+			// sub-millisecond precision loss a copied stat would suffer.
+			const pinned = new Date(1_700_000_000_000);
+			write("First Name");
+			fs.utimesSync(modelsJsonPath, pinned, pinned);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(
+				getModelsForProvider(registry, "openrouter").find(m => m.id === "anthropic/claude-sonnet-4")?.name,
+			).toBe("First Name");
+
+			write("Second Name");
+			fs.utimesSync(modelsJsonPath, pinned, pinned);
+			expect(fs.statSync(modelsJsonPath).mtimeMs).toBe(pinned.getTime());
+
+			await registry.refresh("offline");
+			expect(
+				getModelsForProvider(registry, "openrouter").find(m => m.id === "anthropic/claude-sonnet-4")?.name,
+			).toBe("Second Name");
+		});
+
 		test("removing model override restores built-in values", async () => {
 			writeRawModelsJson({
 				openrouter: {

@@ -74,44 +74,60 @@ async function findLinuxPortHolder(port: number): Promise<PortHolder | null> {
 		return null;
 	}
 
+	const pids: number[] = [];
 	for (const entry of processes) {
-		if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-		const pid = Number.parseInt(entry.name, 10);
-		let descriptors: string[];
-		try {
-			descriptors = await fs.readdir(`/proc/${pid}/fd`);
-		} catch {
-			continue;
-		}
-
-		let ownsSocket = false;
-		for (const descriptor of descriptors) {
-			try {
-				const target = await fs.readlink(`/proc/${pid}/fd/${descriptor}`);
-				const match = /^socket:\[(\d+)]$/.exec(target);
-				if (match?.[1] && socketInodes.has(match[1])) {
-					ownsSocket = true;
-					break;
-				}
-			} catch {}
-		}
-		if (!ownsSocket) continue;
-
-		let commandLine = "";
-		try {
-			const rawCommandLine = await Bun.file(`/proc/${pid}/cmdline`).text();
-			commandLine = rawCommandLine.split("\0").filter(Boolean).join(" ");
-		} catch {}
-
-		try {
-			const executable = await fs.readlink(`/proc/${pid}/exe`);
-			return { pid, image: path.basename(executable), commandLine };
-		} catch {
-			const executable = commandLine.split(" ", 1)[0];
-			return { pid, image: executable ? path.basename(executable) : "unknown", commandLine };
-		}
+		if (entry.isDirectory() && /^\d+$/.test(entry.name)) pids.push(Number.parseInt(entry.name, 10));
 	}
-	return null;
+
+	// Locating the owner means a readlink per open descriptor across every
+	// process on the box. Awaited one at a time that is ~300ms idle and multiple
+	// seconds on a loaded machine — long enough that `omp stats` looks hung
+	// before it can even report the conflict. procfs reads are latency-bound,
+	// not CPU-bound, so issuing them in batches collapses the wall time by an
+	// order of magnitude. Batches are consumed in /proc readdir order and hits
+	// resolved in-batch order, so the winner is the same process the serial scan
+	// would have picked when several share the listening socket (forked workers).
+	const PID_SCAN_BATCH = 32;
+	let owner: number | null = null;
+	for (let start = 0; start < pids.length && owner === null; start += PID_SCAN_BATCH) {
+		const batch = pids.slice(start, start + PID_SCAN_BATCH);
+		const matches = await Promise.all(
+			batch.map(async pid => {
+				let descriptors: string[];
+				try {
+					descriptors = await fs.readdir(`/proc/${pid}/fd`);
+				} catch {
+					// Vanished mid-scan, or owned by another user — either way not ours to inspect.
+					return null;
+				}
+				const targets = await Promise.all(
+					descriptors.map(descriptor => fs.readlink(`/proc/${pid}/fd/${descriptor}`).catch(() => "")),
+				);
+				return targets.some(target => {
+					const match = /^socket:\[(\d+)]$/.exec(target);
+					return !!match?.[1] && socketInodes.has(match[1]);
+				})
+					? pid
+					: null;
+			}),
+		);
+		owner = matches.find(pid => pid !== null) ?? null;
+	}
+	if (owner === null) return null;
+
+	let commandLine = "";
+	try {
+		const rawCommandLine = await Bun.file(`/proc/${owner}/cmdline`).text();
+		commandLine = rawCommandLine.split("\0").filter(Boolean).join(" ");
+	} catch {}
+
+	try {
+		const executable = await fs.readlink(`/proc/${owner}/exe`);
+		return { pid: owner, image: path.basename(executable), commandLine };
+	} catch {
+		const executable = commandLine.split(" ", 1)[0];
+		return { pid: owner, image: executable ? path.basename(executable) : "unknown", commandLine };
+	}
 }
 
 async function findMacPortHolder(port: number): Promise<PortHolder | null> {

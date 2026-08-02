@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,6 +31,16 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 	afterAll(() => {
 		sharedAuthStorage.close();
 		removeSyncWithRetries(sharedTempDir);
+	});
+
+	// Every assertion here reads the process-global singleton, so the file needs a
+	// clean one to start from — not just to leave behind. Under a whole-repo
+	// `bun test` an earlier file that creates a top-level session without
+	// disposing it leaves its manager installed; the first spawn below then never
+	// takes ownership, and `dispose()` correctly declines to clear a singleton it
+	// does not own.
+	beforeEach(() => {
+		AsyncJobManager.resetForTests();
 	});
 
 	afterEach(async () => {

@@ -64,6 +64,24 @@ export interface RegisterInput {
 	status?: AgentStatus;
 }
 
+/**
+ * Teardown callbacks for the process-globals that capture
+ * `AgentRegistry.global()` once, at construction — currently `IrcBus` and
+ * `AgentLifecycleManager`. They register themselves at module scope, so a hook
+ * exists exactly when the corresponding global could be holding a registry.
+ *
+ * `resetGlobalForTests` swaps the registry *instance*; without this, those
+ * globals keep serving the discarded one. To a later test file in the same
+ * process that looks empty — `IrcBus.global().send()` reports every agent the
+ * test just registered as `Unknown agent`, and an awaited reply never arrives.
+ */
+const globalResetHooks = new Set<() => void>();
+
+/** Register a teardown for a global derived from `AgentRegistry.global()`. Test-support. */
+export function onGlobalRegistryReset(hook: () => void): void {
+	globalResetHooks.add(hook);
+}
+
 export class AgentRegistry {
 	static #global: AgentRegistry | undefined;
 
@@ -74,9 +92,10 @@ export class AgentRegistry {
 		return AgentRegistry.#global;
 	}
 
-	/** Reset the global registry. Test-only. */
+	/** Reset the global registry and every global derived from it. Test-only. */
 	static resetGlobalForTests(): void {
 		AgentRegistry.#global = new AgentRegistry();
+		for (const hook of globalResetHooks) hook();
 	}
 
 	readonly #refs = new Map<string, AgentRef>();

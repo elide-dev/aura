@@ -53,8 +53,25 @@ describe("MCP tool ownership with prefix-colliding server names", () => {
 		removeSyncWithRetries(workDir);
 	});
 
+	/**
+	 * `connectServers` resolves on a 250 ms startup budget and deliberately leaves
+	 * slower servers connecting in the background (#2100), registering their tools
+	 * later through `onToolsChanged`. Two spawned bun subprocesses clear that
+	 * budget on an idle machine and miss it on a loaded one, so asserting straight
+	 * after the await is a race — under the chunked CI harness it lands as
+	 * `getTools() === []`. Wait for the tool set the assertions actually need.
+	 */
+	async function waitForToolCount(expected: number): Promise<void> {
+		for (let waited = 0; waited < 20_000; waited += 25) {
+			if (manager.getTools().length >= expected) return;
+			await Bun.sleep(25);
+		}
+		throw new Error(`MCP tools never finished registering: expected ${expected}, saw ${manager.getTools().length}`);
+	}
+
 	it("refreshing one server keeps the sibling server's tools registered", async () => {
 		await manager.connectServers({ [SHORT_SERVER]: fixtureConfig(), [COLON_SERVER]: fixtureConfig() }, {});
+		await waitForToolCount(MANY_TOOL_COUNT * 2);
 		const names = () => manager.getTools().map(t => t.name);
 		expect(names()).toContain(SHORT_TOOL);
 		expect(names()).toContain(COLON_TOOL);
@@ -81,6 +98,7 @@ describe("MCP tool ownership with prefix-colliding server names", () => {
 
 	it("disconnecting a server with sanitized name characters removes exactly its tools", async () => {
 		await manager.connectServers({ [SHORT_SERVER]: fixtureConfig(), [COLON_SERVER]: fixtureConfig() }, {});
+		await waitForToolCount(MANY_TOOL_COUNT * 2);
 		const payloads: string[][] = [];
 		manager.setOnToolsChanged(tools => {
 			payloads.push(tools.map(t => t.name));

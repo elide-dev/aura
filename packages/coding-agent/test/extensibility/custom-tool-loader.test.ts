@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import { loadCustomTools, type ToolPathWithSource } from "../../src/extensibility/custom-tools/loader";
 
 let tempRoot: string | undefined;
@@ -173,104 +174,136 @@ describe("custom tool loader", () => {
 		expect(result.errors[0]?.error).toContain("index 1");
 	});
 
-	it("restores host stdin after a tool hijacks it at import time (#5618)", async () => {
-		// A ~/.claude/tools MCP server attaches a stdin consumer at module top
-		// level (a bare `resume()` here stands in for `new StdioServerTransport()`).
-		// Without the stdin guard this steals Bun's single stdin reader and the
-		// TUI goes permanently deaf after one keypress. The tool also exports a
-		// valid default, so the guard must restore stdin on the success path too.
-		const hijackTool = await writeTool(
-			"stdin-hijack.js",
-			[
-				'process.stdin.on("data", () => {});',
-				"process.stdin.resume();",
-				"export default api => ({",
-				'\tname: "stdin_hijack_tool",',
-				'\tdescription: "Loads fine but hijacks stdin at import",',
-				"\tparameters: api.zod.object({}),",
-				"\tasync execute() {",
-				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
-				"\t},",
-				"});",
-			].join("\n"),
-		);
+	describe("host stdin guard", () => {
+		// `withHostGuard` fences the process-global `process.stdin`, and under a
+		// whole-repo `bun test` the real one is usually unusable by the time this
+		// file runs: the first suite that resumes a non-interactive stdin drains it
+		// to EOF, after which Bun destroys the stream and `pause()` becomes a
+		// permanent no-op (`isPaused()` is stuck at false). A paused-state
+		// assertion against a destroyed stream can neither hold nor mean anything.
+		// Stand in a live stream instead: the guard, the loaded tool module, and the
+		// assertions all read `process.stdin`, so they stay in agreement and the
+		// guard contract is exercised for real regardless of run order.
+		const hostStdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+		let standIn: PassThrough | undefined;
 
-		const dataBefore = process.stdin.listenerCount("data");
-		const pausedBefore = process.stdin.isPaused();
-		try {
-			const result = await loadCustomTools([{ path: hijackTool }], requireTempRoot(), []);
-			expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_hijack_tool"]);
-			expect(process.stdin.listenerCount("data")).toBe(dataBefore);
-			expect(process.stdin.isPaused()).toBe(pausedBefore);
-		} finally {
-			// Defensive: if the guard regressed and leaked a listener, drop the
-			// extras so this test cannot poison later files in the suite.
-			const leaked = process.stdin.listeners("data").slice(dataBefore);
-			for (const listener of leaked) {
-				process.stdin.removeListener("data", listener as (...args: unknown[]) => void);
+		beforeEach(() => {
+			standIn = new PassThrough();
+			// Paused is the state worth pinning: it is what the host looks like
+			// before `terminal.start()` arms its reader, and it is the only baseline
+			// under which "the guard put stdin back" is observable at all — from an
+			// already-flowing stream a hijacking `resume()` is indistinguishable
+			// from a correct restore.
+			standIn.pause();
+			Object.defineProperty(process, "stdin", { value: standIn, configurable: true });
+		});
+
+		afterEach(() => {
+			if (hostStdinDescriptor) Object.defineProperty(process, "stdin", hostStdinDescriptor);
+			else Reflect.deleteProperty(process, "stdin");
+			standIn?.destroy();
+			standIn = undefined;
+		});
+
+		it("restores host stdin after a tool hijacks it at import time (#5618)", async () => {
+			// A ~/.claude/tools MCP server attaches a stdin consumer at module top
+			// level (a bare `resume()` here stands in for `new StdioServerTransport()`).
+			// Without the stdin guard this steals Bun's single stdin reader and the
+			// TUI goes permanently deaf after one keypress. The tool also exports a
+			// valid default, so the guard must restore stdin on the success path too.
+			const hijackTool = await writeTool(
+				"stdin-hijack.js",
+				[
+					'process.stdin.on("data", () => {});',
+					"process.stdin.resume();",
+					"export default api => ({",
+					'\tname: "stdin_hijack_tool",',
+					'\tdescription: "Loads fine but hijacks stdin at import",',
+					"\tparameters: api.zod.object({}),",
+					"\tasync execute() {",
+					'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+					"\t},",
+					"});",
+				].join("\n"),
+			);
+
+			const dataBefore = process.stdin.listenerCount("data");
+			const pausedBefore = process.stdin.isPaused();
+			try {
+				const result = await loadCustomTools([{ path: hijackTool }], requireTempRoot(), []);
+				expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_hijack_tool"]);
+				expect(process.stdin.listenerCount("data")).toBe(dataBefore);
+				expect(process.stdin.isPaused()).toBe(pausedBefore);
+			} finally {
+				// Defensive: if the guard regressed and leaked a listener, drop the
+				// extras so this test cannot poison later files in the suite.
+				const leaked = process.stdin.listeners("data").slice(dataBefore);
+				for (const listener of leaked) {
+					process.stdin.removeListener("data", listener as (...args: unknown[]) => void);
+				}
+				if (pausedBefore && !process.stdin.isPaused()) process.stdin.pause();
 			}
-			if (pausedBefore && !process.stdin.isPaused()) process.stdin.pause();
-		}
-	});
+		});
 
-	it("resumes host stdin when a tool pauses it at import time", async () => {
-		const pausedBefore = process.stdin.isPaused();
-		if (pausedBefore) process.stdin.resume();
-		const pauseTool = await writeTool(
-			"stdin-pause.js",
-			[
-				"process.stdin.pause();",
-				"export default api => ({",
-				'\tname: "stdin_pause_tool",',
-				'\tdescription: "Pauses host stdin at import",',
-				"\tparameters: api.zod.object({}),",
-				"\tasync execute() {",
-				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
-				"\t},",
-				"});",
-			].join("\n"),
-		);
-		try {
-			const result = await loadCustomTools([{ path: pauseTool }], requireTempRoot(), []);
-			expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_pause_tool"]);
-			expect(process.stdin.isPaused()).toBeFalse();
-		} finally {
-			if (pausedBefore) process.stdin.pause();
-			else process.stdin.resume();
-		}
-	});
+		it("resumes host stdin when a tool pauses it at import time", async () => {
+			const pausedBefore = process.stdin.isPaused();
+			if (pausedBefore) process.stdin.resume();
+			const pauseTool = await writeTool(
+				"stdin-pause.js",
+				[
+					"process.stdin.pause();",
+					"export default api => ({",
+					'\tname: "stdin_pause_tool",',
+					'\tdescription: "Pauses host stdin at import",',
+					"\tparameters: api.zod.object({}),",
+					"\tasync execute() {",
+					'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+					"\t},",
+					"});",
+				].join("\n"),
+			);
+			try {
+				const result = await loadCustomTools([{ path: pauseTool }], requireTempRoot(), []);
+				expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_pause_tool"]);
+				expect(process.stdin.isPaused()).toBeFalse();
+			} finally {
+				if (pausedBefore) process.stdin.pause();
+				else process.stdin.resume();
+			}
+		});
 
-	it("reinstates a host stdin listener a tool removes at import time (#5744)", async () => {
-		// A tool factory that calls process.stdin.removeAllListeners("data")
-		// during (re)load — e.g. a subagent re-running preloaded factories while
-		// the parent TUI is live — must not permanently strip ProcessTerminal's
-		// input handler. The guard reconciles stdin back to the pre-load snapshot,
-		// reinstating any listener the module removed.
-		const stripTool = await writeTool(
-			"stdin-strip.js",
-			[
-				'process.stdin.removeAllListeners("data");',
-				"export default api => ({",
-				'\tname: "stdin_strip_tool",',
-				'\tdescription: "Removes host data listeners at import",',
-				"\tparameters: api.zod.object({}),",
-				"\tasync execute() {",
-				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
-				"\t},",
-				"});",
-			].join("\n"),
-		);
+		it("reinstates a host stdin listener a tool removes at import time (#5744)", async () => {
+			// A tool factory that calls process.stdin.removeAllListeners("data")
+			// during (re)load — e.g. a subagent re-running preloaded factories while
+			// the parent TUI is live — must not permanently strip ProcessTerminal's
+			// input handler. The guard reconciles stdin back to the pre-load snapshot,
+			// reinstating any listener the module removed.
+			const stripTool = await writeTool(
+				"stdin-strip.js",
+				[
+					'process.stdin.removeAllListeners("data");',
+					"export default api => ({",
+					'\tname: "stdin_strip_tool",',
+					'\tdescription: "Removes host data listeners at import",',
+					"\tparameters: api.zod.object({}),",
+					"\tasync execute() {",
+					'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+					"\t},",
+					"});",
+				].join("\n"),
+			);
 
-		const hostListener = (): void => {};
-		process.stdin.on("data", hostListener);
-		const dataBefore = process.stdin.listenerCount("data");
-		try {
-			const result = await loadCustomTools([{ path: stripTool }], requireTempRoot(), []);
-			expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_strip_tool"]);
-			expect(process.stdin.listenerCount("data")).toBe(dataBefore);
-			expect(process.stdin.listeners("data")).toContain(hostListener);
-		} finally {
-			process.stdin.removeListener("data", hostListener);
-		}
+			const hostListener = (): void => {};
+			process.stdin.on("data", hostListener);
+			const dataBefore = process.stdin.listenerCount("data");
+			try {
+				const result = await loadCustomTools([{ path: stripTool }], requireTempRoot(), []);
+				expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_strip_tool"]);
+				expect(process.stdin.listenerCount("data")).toBe(dataBefore);
+				expect(process.stdin.listeners("data")).toContain(hostListener);
+			} finally {
+				process.stdin.removeListener("data", hostListener);
+			}
+		});
 	});
 });

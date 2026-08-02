@@ -17,7 +17,7 @@
 
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID, onGlobalRegistryReset } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 
 export interface IrcMessage {
@@ -378,3 +378,7 @@ export class IrcBus {
 		}
 	}
 }
+
+// The global bus binds AgentRegistry.global() once, at construction, so a
+// test that swaps the global registry must drop the bus with it.
+onGlobalRegistryReset(() => IrcBus.resetGlobalForTests());

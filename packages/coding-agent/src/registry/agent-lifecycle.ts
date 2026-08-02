@@ -27,6 +27,7 @@ import {
 	type AgentRefExpectation,
 	AgentRegistry,
 	MAIN_AGENT_ID,
+	onGlobalRegistryReset,
 	type RegistryEvent,
 } from "./agent-registry";
 
@@ -453,3 +454,8 @@ export class AgentLifecycleManager {
 		}
 	}
 }
+
+// The global manager binds AgentRegistry.global() once and subscribes to its
+// change stream, so a test that swaps the global registry must drop the
+// manager with it — otherwise it keeps listening to the discarded registry.
+onGlobalRegistryReset(() => AgentLifecycleManager.resetGlobalForTests());
