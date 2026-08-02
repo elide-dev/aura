@@ -15,6 +15,12 @@
  * served there fetches the blob (gist ids are hex; server ids never are),
  * decrypts with the fragment key — which never leaves the browser — and
  * renders the same template as `/export`.
+ *
+ * There is no default share server. `share.serverUrl` ships empty, and an empty
+ * setting means "unconfigured", not "use the public one": sharing fails with a
+ * message pointing at the setting rather than uploading a sealed session
+ * somewhere the user never named. That applies to the gist store too — a gist
+ * blob is unreadable without a viewer base to hang the `#key` link off.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -22,7 +28,6 @@ import * as path from "node:path";
 import type { AgentMessage, AgentState } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { $which, logger } from "@oh-my-pi/pi-utils";
-import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { $ } from "bun";
 import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
 import { type SessionEntry, type SessionHeader, TITLE_CHANGE_ENTRY_TYPE } from "../session/session-entries";
@@ -30,7 +35,9 @@ import type { SessionManager } from "../session/session-manager";
 import type { OutputMeta } from "../tools/output-meta";
 import { buildSessionData, type SessionData, type SubSession } from "./html";
 
-export { DEFAULT_SHARE_URL };
+/** What `/share` says when `share.serverUrl` is empty. Mirrors `/collab`'s "no relay" refusal. */
+export const SHARE_SERVER_UNCONFIGURED =
+	"No share server is configured. Set share.serverUrl in /settings to a share server you control.";
 
 /** Hard cap for blobs accepted by the share server (mirrors relay shareMaxBytes). */
 export const SERVER_MAX_SEALED_BYTES = 1_000_000;
@@ -53,7 +60,7 @@ const IMAGE_OMITTED_TEXT = "[image omitted from share]";
 export type ShareStore = "blob" | "gist";
 
 export interface ShareSessionOptions {
-	/** Share server/viewer base URL; defaults to {@link DEFAULT_SHARE_URL}. */
+	/** Share server/viewer base URL. Required: empty or absent makes sharing fail, not default. */
 	serverUrl?: string;
 	/**
 	 * Where to upload the sealed blob. `"blob"` (default) posts to the share
@@ -485,6 +492,9 @@ export async function shareSession(sm: SessionManager, options?: ShareSessionOpt
 	const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
 	const keyText = Buffer.from(keyBytes).toString("base64url");
 	const base = normalizeShareServerUrl(options?.serverUrl);
+	// Unconfigured means unconfigured: there is no default share server, so there is nowhere to
+	// upload and no viewer base to build a link against (a gist blob is useless without one).
+	if (!base) throw new Error(SHARE_SERVER_UNCONFIGURED);
 
 	if (options?.store === "gist") {
 		const forGist = await sealToFit(key, data, GIST_MAX_SEALED_BYTES);
@@ -505,10 +515,15 @@ export async function shareSession(sm: SessionManager, options?: ShareSessionOpt
 	return shareViaServer(key, data, base, keyText);
 }
 
-/** Strip trailing slashes so `<base>/<id>` composes cleanly. */
+/**
+ * Strip trailing slashes so `<base>/<id>` composes cleanly.
+ *
+ * Returns `""` when nothing is configured — unset, blank, or slashes only. There is no default
+ * share server: `share.serverUrl` ships empty and an empty setting must not silently resolve to
+ * a public endpoint. Callers treat `""` as "unconfigured" and refuse to upload.
+ */
 export function normalizeShareServerUrl(serverUrl?: string): string {
-	const base = (serverUrl ?? DEFAULT_SHARE_URL).trim().replace(/\/+$/, "");
-	return base || DEFAULT_SHARE_URL;
+	return (serverUrl ?? "").trim().replace(/\/+$/, "");
 }
 
 interface SealedSession {

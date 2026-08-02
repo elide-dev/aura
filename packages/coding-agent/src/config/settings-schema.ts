@@ -2070,9 +2070,12 @@ export const SETTINGS_SCHEMA = {
 	// Collab.
 	//
 	// No default relay or share server: new outbound traffic starts only where the user or the
-	// operator points it. `DEFAULT_RELAY_URL`/`DEFAULT_SHARE_URL` stay in `@oh-my-pi/pi-wire`
-	// as historical *parsing* constants, so an existing shortened link still resolves — they
-	// are just no longer where a fresh room or upload goes by default.
+	// operator points it. Both settings ship empty, and empty means *unconfigured* at the point
+	// of use — `/collab` refuses to start a room and `/share` refuses to upload, rather than
+	// silently resolving to a public endpoint. `DEFAULT_RELAY_URL` stays in `@oh-my-pi/pi-wire`
+	// as a historical *parsing* constant (`collab/protocol.ts` still expands bare `<room>.<key>`
+	// links against it), so an existing shortened link resolves; `DEFAULT_SHARE_URL` is no
+	// longer read anywhere in the client at all.
 	"collab.relayUrl": {
 		type: "string",
 		default: "",

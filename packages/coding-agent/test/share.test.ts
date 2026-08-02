@@ -533,11 +533,16 @@ describe("buildShareSnapshot", () => {
 });
 
 describe("normalizeShareServerUrl", () => {
-	test("strips trailing slashes and falls back to the default", () => {
+	test("strips trailing slashes", () => {
 		expect(normalizeShareServerUrl("https://my.omp.sh/s/")).toBe("https://my.omp.sh/s");
 		expect(normalizeShareServerUrl("https://example.com/s///")).toBe("https://example.com/s");
-		expect(normalizeShareServerUrl(undefined)).toBe("https://my.omp.sh/s");
-		expect(normalizeShareServerUrl("   ")).toBe("https://my.omp.sh/s");
+	});
+
+	test("an unset or blank setting is unconfigured, not a default endpoint", () => {
+		expect(normalizeShareServerUrl(undefined)).toBe("");
+		expect(normalizeShareServerUrl("")).toBe("");
+		expect(normalizeShareServerUrl("   ")).toBe("");
+		expect(normalizeShareServerUrl("///")).toBe("");
 	});
 });
 
@@ -581,4 +586,51 @@ describe("shareSession", () => {
 			server.stop(true);
 		}
 	});
+
+	// Regression: `share.serverUrl` defaults to `""`, and `""` used to fall through to
+	// `DEFAULT_SHARE_URL` — so the documented "no default share server" invariant was false and
+	// an unconfigured `/share` uploaded the sealed session to my.omp.sh. Assert on the request
+	// path, not the setting: what URL, if any, does an unconfigured share actually hit?
+	describe("with no share server configured", () => {
+		function stubbedSessionManager(): SessionManager {
+			const entries = [messageEntry("e1", null, "share me")];
+			return {
+				getHeader: () => sessionData([], "x").header,
+				getEntries: () => entries,
+				getLeafId: () => "e1",
+			} as unknown as SessionManager;
+		}
+
+		test.each([
+			["the schema default (empty string)", ""],
+			["an omitted option", undefined],
+			["whitespace", "   "],
+		])("refuses to upload anywhere for %s", async (_label, serverUrl) => {
+			const realFetch = globalThis.fetch;
+			const attempted: string[] = [];
+			globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+				attempted.push(String(input));
+				return realFetch(input as never, init);
+			}) as typeof fetch;
+			try {
+				await expect(shareWithSetting(stubbedSessionManager(), serverUrl)).rejects.toThrow(
+					/no share server is configured/i,
+				);
+				expect(attempted).toEqual([]);
+			} finally {
+				globalThis.fetch = realFetch;
+			}
+		});
+
+		test("does not fall back to a gist upload either", async () => {
+			await expect(shareSession(stubbedSessionManager(), { serverUrl: "", store: "gist" })).rejects.toThrow(
+				/no share server is configured/i,
+			);
+		});
+	});
 });
+
+/** `/share` with whatever `share.serverUrl` holds — the exact shape both call sites use. */
+function shareWithSetting(sm: SessionManager, serverUrl: string | undefined): Promise<unknown> {
+	return shareSession(sm, { serverUrl, store: "blob" });
+}
