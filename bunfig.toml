@@ -15,8 +15,11 @@ exact = true
 saveTextLockfile = true
 
 # Generated protobuf SDKs for elide.cloud.v1 come from the Buf Schema Registry's
-# npm bridge. The registry is private; auth is read from ~/.npmrc
-# (`//buf.build/gen/npm/v1/:_authToken=…`) and must never be committed here.
+# npm bridge, which npm.org cannot resolve — hence the scope mapping. The module
+# buf.build/elide/cloud is public, so this fetch is anonymous: no credentials
+# here, and none needed on a CI runner. Should it ever go private again, the
+# token belongs in ~/.npmrc (`//buf.build/gen/npm/v1/:_authToken=…`) or a CI
+# secret — never in this file.
 [install.scopes]
 "@buf" = "https://buf.build/gen/npm/v1/"
 
