@@ -26,7 +26,8 @@
  * list is never assumed, and an email address never implies a membership.
  */
 
-import { AuraCloudError } from "./errors";
+import { AuraCloudError, isLoopbackHostname } from "./errors";
+import { isPlainObject, normalizeOrigin } from "./internal";
 import {
 	type AuraAuthResponse,
 	type AuraFetch,
@@ -51,8 +52,6 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const SLOW_DOWN_STEP_MS = 5_000;
 const MAX_POLL_INTERVAL_MS = 300_000;
 const MAX_URI_LENGTH = 2_048;
-
-const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /** What the user is shown while approval is pending. All strings are the server's own. */
 export interface AuraDeviceApproval {
@@ -126,21 +125,6 @@ export interface AuraAuthClientOptions {
 	readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeOrigin(value: string): string {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new AuraCloudError("invalid_configuration");
-	}
-	if (url.origin === "null") throw new AuraCloudError("invalid_configuration");
-	return url.origin;
-}
-
 function invalid(): never {
 	throw new AuraCloudError("invalid_response");
 }
@@ -171,8 +155,11 @@ function validateVerificationUri(
 		return invalid();
 	}
 	if (url.origin !== options.authOrigin) invalid();
-	const loopback = LOOPBACK_HOSTNAMES.has(url.hostname);
-	if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) invalid();
+	// Same membership question as `deployment.ts` and `classifyHost`, one answer. The policy is
+	// this call site's own: an approved http verification URI is only reachable at all because
+	// the origin already had to match the configured auth origin, which `deployment.ts` would
+	// only have accepted over http on the same loopback set.
+	if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname))) invalid();
 	if (url.username !== "" || url.password !== "" || url.hash !== "") invalid();
 	if (url.pathname !== VERIFY_PATH) invalid();
 

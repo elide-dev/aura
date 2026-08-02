@@ -27,7 +27,7 @@
  * derivation table below is the complete set of hosts this client will ever construct.
  */
 
-import { AuraCloudError } from "./errors";
+import { AuraCloudError, isLoopbackHostname } from "./errors";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -172,9 +172,6 @@ function validateDomain(value: string): string {
 /** Generous but finite: no legitimate endpoint base approaches this. */
 const MAX_URL_LENGTH = 2048;
 
-/** The exact hosts that may drop TLS. Anything that merely *looks* local is not on the list. */
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
 /**
  * Percent-encoded sequences that would let a path segment lie about its own structure:
  * encoded forward slash, backslash, dot, percent, and any encoded C0/DEL control character.
@@ -226,7 +223,10 @@ function validateAuraUrl(raw: string, variable: string, rules: UrlRules): string
 		return fail("must be an absolute URL");
 	}
 
-	const loopback = LOOPBACK_HOSTS.has(url.hostname);
+	// TLS may be dropped only where there is no network to eavesdrop on. The membership question
+	// — "is this host this machine?" — is answered in one place; the policy below is this call
+	// site's own. Anything that merely *looks* local is not loopback and must still use TLS.
+	const loopback = isLoopbackHostname(url.hostname);
 	const allowedProtocols = new Set(["https:"]);
 	if (rules.allowWebSocket) allowedProtocols.add("wss:");
 	if (loopback) {

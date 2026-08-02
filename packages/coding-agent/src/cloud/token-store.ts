@@ -31,6 +31,7 @@ import { Database } from "bun:sqlite";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { hardenSqliteFileModes, openHardenedSqlite, SQLITE_BUSY_TIMEOUT_MS } from "@oh-my-pi/pi-utils/sqlite-hardening";
 import { AuraCloudError } from "./errors";
+import { isUlid } from "./internal";
 
 // =============================================================================
 // Public contract
@@ -187,7 +188,6 @@ const SCHEMA_VERSION = 1;
 const TOKEN_PREFIX_LENGTH = 8;
 /** Crockford base32, excluding I/L/O/U. */
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 /**
  * Generate an uppercase Crockford ULID.
@@ -207,10 +207,6 @@ function newUlid(nowMs: number = Date.now()): string {
 	let suffix = "";
 	for (const byte of random) suffix += ULID_ALPHABET[byte % 32];
 	return time + suffix;
-}
-
-function isUlid(value: unknown): value is string {
-	return typeof value === "string" && ULID_RE.test(value);
 }
 
 function requireNamespace(ns: AuraAccountNamespace | undefined): AuraAccountNamespace {

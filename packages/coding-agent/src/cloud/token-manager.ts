@@ -31,6 +31,7 @@
  */
 
 import { AuraCloudError } from "./errors";
+import { isPlainObject, isUlid, normalizeOrigin } from "./internal";
 import {
 	AURA_SURFACE_SCOPES,
 	type AuraAccessToken,
@@ -64,7 +65,6 @@ export const AURA_JWKS_CACHE_MS = 300_000;
 /** How long to keep waiting for another process to finish its rotation. */
 export const AURA_REFRESH_WAIT_BUDGET_MS = 60_000;
 
-const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const FORM_CONTENT_TYPE = "application/x-www-form-urlencoded;charset=UTF-8";
 
@@ -321,14 +321,6 @@ export interface AuraKeyResolver {
 /** Anything a token fails on is `invalid_response`: the server sent something untrustworthy. */
 function reject(): never {
 	throw new AuraCloudError("invalid_response");
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isUlid(value: unknown): value is string {
-	return typeof value === "string" && ULID_RE.test(value);
 }
 
 function decodeSegment(segment: string): Uint8Array<ArrayBuffer> {
@@ -598,17 +590,6 @@ export class AuraAuthKeys implements AuraKeyResolver {
 		}
 		return { keys, fetchedAtMs: this.#now() };
 	}
-}
-
-function normalizeOrigin(value: string): string {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new AuraCloudError("invalid_configuration");
-	}
-	if (url.origin === "null") throw new AuraCloudError("invalid_configuration");
-	return url.origin;
 }
 
 // =============================================================================

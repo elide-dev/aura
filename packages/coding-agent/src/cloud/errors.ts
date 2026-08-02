@@ -71,8 +71,53 @@ const CAUSES = new WeakMap<AuraCloudError, unknown>();
 
 const HOST_CLASS_UNKNOWN: AuraCloudHostClass = "unknown";
 
-/** Hostnames that always mean "this machine". */
-const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
+/** Exact hostnames that always mean "this machine", in the forms `URL.hostname` produces. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "::", "[::]"]);
+
+/**
+ * The one answer to "is this host this machine?".
+ *
+ * There used to be three sets with three different memberships — this module's, the
+ * `http`-may-drop-TLS set in `deployment.ts`, and the verification-URI set in `auth.ts` — so
+ * `http://0.0.0.0:8080` was reported as `loopback` in an error while being refused the loopback
+ * TLS exemption, and `127.0.0.2` was reported as `private`. The *policies* those call sites
+ * apply legitimately differ; the membership question must not.
+ *
+ * Membership, and why:
+ *
+ * - `localhost` and anything under it (RFC 6761: `localhost.` and its subdomains always resolve
+ *   to the loopback interface). `localhost.corp.example` is not under it, and is not included.
+ * - The whole of `127.0.0.0/8`, not just `127.0.0.1` — RFC 1122 reserves the entire block, and a
+ *   dev server on `127.0.0.2` is exactly as unreachable from the network as one on `127.0.0.1`.
+ * - `::1`, bracketed or not, as `URL.hostname` may report either depending on the caller.
+ * - The unspecified addresses `0.0.0.0` and `::`. They are not loopback addresses in the
+ *   addressing sense, but they answer *this* question the same way: a connection opened to the
+ *   unspecified address is defined to reach the local host, so the traffic cannot leave the
+ *   machine. That is what both call-site policies actually depend on — honest classification
+ *   for one, "TLS may be dropped only where there is no network to eavesdrop on" for the other.
+ *   Classifying `0.0.0.0` as `public` (which is where it lands otherwise, having dots and no
+ *   private prefix) would be the actively misleading answer.
+ *
+ * Takes a bare hostname, not a URL: callers already hold `url.hostname`, and accepting a URL
+ * would invite passing a raw operator string that has not been screened yet.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+	if (hostname === "") return false;
+	const host = hostname.toLowerCase();
+	if (LOOPBACK_HOSTNAMES.has(host)) return true;
+	if (host.endsWith(".localhost")) return true;
+	return isLoopbackIpv4(host);
+}
+
+/** `127.0.0.0/8` in dotted-quad form. */
+function isLoopbackIpv4(hostname: string): boolean {
+	const octets = hostname.split(".");
+	if (octets.length !== 4) return false;
+	for (const part of octets) {
+		if (!/^\d{1,3}$/.test(part) || Number(part) > 255) return false;
+	}
+	return octets[0] === "127";
+}
 
 /** Suffixes conventionally resolved on the local network rather than the public internet. */
 const PRIVATE_SUFFIXES = [".local", ".internal", ".home.arpa"];
@@ -86,7 +131,10 @@ function isPrivateIpv4(hostname: string): boolean {
 	const parsed = octets.map(part => (/^\d{1,3}$/.test(part) ? Number(part) : Number.NaN));
 	if (parsed.some(value => Number.isNaN(value) || value > 255)) return false;
 	const [a, b] = parsed as [number, number, number, number];
-	if (a === 10 || a === 127) return true;
+	// `127.0.0.0/8` is deliberately absent: it is loopback, and {@link isLoopbackHostname} has
+	// already claimed it by the time this runs. Listing it here too would be a second answer to
+	// a question that now has one.
+	if (a === 10) return true;
 	if (a === 192 && b === 168) return true;
 	if (a === 172 && b >= 16 && b <= 31) return true;
 	if (a === 169 && b === 254) return true;
@@ -108,8 +156,7 @@ export function classifyHost(host: string | undefined): AuraCloudHostClass {
 		return HOST_CLASS_UNKNOWN;
 	}
 	if (!hostname) return HOST_CLASS_UNKNOWN;
-	// RFC 6761: `localhost` and anything under it always resolves to the loopback interface.
-	if (LOOPBACK_HOSTNAMES.has(hostname) || hostname.endsWith(".localhost")) return "loopback";
+	if (isLoopbackHostname(hostname)) return "loopback";
 	if (isPrivateIpv4(hostname)) return "private";
 	if (hostname.startsWith("[")) {
 		return PRIVATE_IPV6_PREFIXES.some(prefix => hostname.startsWith(prefix)) ? "private" : "public";

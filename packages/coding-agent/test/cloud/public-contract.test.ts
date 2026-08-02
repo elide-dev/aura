@@ -8,6 +8,7 @@ import {
 	auraCloudErrorCause,
 	classifyHost,
 	isAuraCloudError,
+	isLoopbackHostname,
 } from "../../src/cloud/errors";
 
 /** Every code the plan pins for the cloud client, in plan order. */
@@ -124,8 +125,58 @@ describe("AuraCloudError taxonomy", () => {
 		expect(new AuraCloudError("unavailable", { host: "not a url" }).hostClass).toBe("unknown");
 	});
 
+	// One membership question, one answer: `isLoopbackHostname` is the single predicate behind
+	// this classification, the `http`-on-loopback exemption in `deployment.ts`, and the
+	// verification-URI check in `auth.ts`. Three sets with three different memberships is how
+	// `http://0.0.0.0:8080` came to be reported as `loopback` in an error while being refused
+	// the loopback TLS exemption.
+	describe("isLoopbackHostname", () => {
+		test("is every hostname that cannot leave this machine", () => {
+			for (const hostname of [
+				"localhost",
+				"api.localhost",
+				"deep.nested.localhost",
+				"127.0.0.1",
+				"127.0.0.2",
+				"127.1.2.3",
+				"127.255.255.254",
+				"[::1]",
+				"::1",
+				// The unspecified addresses: a connection to them is defined to reach this host,
+				// so they answer the same question the same way.
+				"0.0.0.0",
+				"[::]",
+			]) {
+				expect({ hostname, loopback: isLoopbackHostname(hostname) }).toEqual({ hostname, loopback: true });
+			}
+		});
+
+		test("rejects everything that merely looks local", () => {
+			for (const hostname of [
+				"localhost.corp.example",
+				"my-localhost",
+				"localhosts",
+				"[::2]",
+				"128.0.0.1",
+				"10.0.0.1",
+				"192.168.1.1",
+				"169.254.1.1",
+				"0.0.0.1",
+				"",
+			]) {
+				expect({ hostname, loopback: isLoopbackHostname(hostname) }).toEqual({ hostname, loopback: false });
+			}
+		});
+	});
+
 	test("classifyHost covers loopback, private and public host shapes", () => {
-		for (const host of ["http://localhost:3000", "https://api.localhost", "http://[::1]:8787"]) {
+		for (const host of [
+			"http://localhost:3000",
+			"https://api.localhost",
+			"http://[::1]:8787",
+			"http://127.0.0.2:9000",
+			"http://0.0.0.0:8080",
+		]) {
 			expect(classifyHost(host)).toBe("loopback");
 		}
 		for (const host of [

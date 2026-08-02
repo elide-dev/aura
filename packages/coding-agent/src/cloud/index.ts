@@ -45,6 +45,7 @@ export {
 	auraCloudErrorCause,
 	classifyHost,
 	isAuraCloudError,
+	isLoopbackHostname,
 } from "./errors";
 /**
  * Storage types only. `export type` is erased at build time, so the shapes are importable from

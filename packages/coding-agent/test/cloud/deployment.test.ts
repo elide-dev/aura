@@ -298,12 +298,15 @@ describe("override URL validation", () => {
 		expectInvalidConfiguration(() => deploy({ AURA_COLLAB_ORIGIN: "ws://rooms.corp.example" }));
 	});
 
-	test("the three exact loopback hosts may use plain HTTP", () => {
-		for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+	// The exemption exists because loopback traffic never reaches a network, so it is scoped to
+	// exactly the hosts that cannot leave the machine — the same membership `classifyHost` and
+	// `auth.ts` use, via the one shared `isLoopbackHostname`.
+	test("loopback hosts may use plain HTTP", () => {
+		for (const host of ["localhost", "api.localhost", "127.0.0.1", "127.0.0.2", "[::1]", "0.0.0.0"]) {
 			expect(deploy({ AURA_AUTH_URL: `http://${host}:8787` }).authOrigin?.url).toBe(`http://${host}:8787`);
 		}
 		// Near-misses are not loopback: they must still be HTTPS.
-		for (const host of ["127.0.0.2", "localhost.corp.example", "my-localhost", "[::2]", "0.0.0.0"]) {
+		for (const host of ["localhost.corp.example", "my-localhost", "[::2]", "128.0.0.1", "10.0.0.1"]) {
 			expectInvalidConfiguration(() => deploy({ AURA_AUTH_URL: `http://${host}:8787` }));
 		}
 	});
