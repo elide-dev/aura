@@ -6,8 +6,8 @@ import type { RuntimeExecResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
 const runtimeCheckSchema = type({
-	"cwd?": type("string").describe("project directory (defaults to the session cwd)"),
-	"timeoutMs?": type("number").describe("kill the validation after this many milliseconds"),
+	"cwd?": type("string").describe("project directory (session cwd)"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
 });
 
 export type RuntimeCheckToolParams = typeof runtimeCheckSchema.infer;

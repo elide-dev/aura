@@ -8,8 +8,8 @@ import { jvmLanguage, renderJvmPayload, requireRuntimeService } from "./jvm-comm
 
 const jvmFormatSchema = type({
 	language: jvmLanguage.describe("source language"),
-	code: type("string").describe("Java or Kotlin source to format"),
-	"timeoutMs?": type("number").describe("kill the formatter after this many milliseconds"),
+	code: type("string").describe("source to format"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
 });
 
 export type JvmFormatToolParams = typeof jvmFormatSchema.infer;

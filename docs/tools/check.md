@@ -32,11 +32,11 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 5. `timeoutMs` and the caller abort signal both kill the process and set `killed`.
 
 ## Modes / Variants
-- Single mode. `check` is the validation-only sibling of `build`: same underlying build driver, empty target list. Use `build` when artifacts are the goal.
+- Single mode: resolve dependencies and compile source sets without producing artifacts. Use the project's declared build command when artifacts are required.
 
 ## Side Effects
 - Filesystem: the runtime's own dependency resolution may populate its caches and lockfiles in the project directory; no build artifacts are produced.
-- Subprocesses: one runtime binary spawn per call — the runtime itself. Compilation never runs user code; use `run` (or `build` with a target that has a build script) when execution is intended.
+- Subprocesses: one runtime binary spawn per call. Compilation never runs user code; use `run` when execution is intended.
 - Network: dependency resolution may fetch; first use may download the managed runtime when `runtime.autoDownload` is on.
 - Approval: `approval = "exec"`.
 
@@ -53,4 +53,4 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 
 ## Notes
 - `loadMode = "essential"`, so `check` stays top-level in the callable schema.
-- Use `check` as the fast "does the project still hold together" gate after edits; reach for `build` only when artifacts are the goal.
+- Use `check` as the fast "does the project still hold together" gate after edits. This is not project-specific static analysis or a TypeScript typecheck.

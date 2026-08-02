@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - Removed the public `jvm_run` tool; execute Java and Kotlin through the unified `run` tool with `language`, optional `mainClass`, and the existing args/stdin/cwd controls.
+- Removed the `runtime_debug` tool and CDP/DAP launch protocol; use Aura's interactive `debug` tool until runtime-backed debugging is integrated there.
 
 ### Added
 
@@ -18,7 +19,7 @@
 - Clarified that managed `check` validates supported runtime project builds but does not replace project-declared TypeScript static typechecking.
 - Changed JavaScript and TypeScript `run` calls to use an isolated Bun child by default while keeping the embedded engine selectable; Python, Java, and Kotlin use the embedded engine.
 - Reduced persistent system and runtime tool prompt text while preserving tool-selection and safety contracts.
-- Promoted managed runtime selection and core Superpowers workflows into inherent system policy, removed their implicit skill/UI surface, added bounded session-safe per-call runtime telemetry, and added a two-task smoke/matched benchmark for adoption and prompt efficiency.
+- Promoted managed runtime selection and core Superpowers workflows into inherent system policy; removed their implicit skill/UI surface; kept only `run` and `check` essential; moved insights, profiling, serving, and four JVM operations behind discovery; removed redundant runtime build/advice/Javadoc tools; and added bounded per-call telemetry plus a two-task adoption/prompt-efficiency benchmark.
 
 ### Fixed
 

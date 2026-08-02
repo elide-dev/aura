@@ -88,7 +88,10 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 								},
 							}
 						: request;
-				const response = await this.#requestElide(routedRequest, signal);
+				const response =
+					this.#adapter === "auto" && target.language === "python"
+						? await this.#process.request(routedRequest, signal)
+						: await this.#requestElide(routedRequest, signal);
 				if ("error" in response) return response;
 				return okResponse(request.id, {
 					...(response.result as Record<string, unknown>),

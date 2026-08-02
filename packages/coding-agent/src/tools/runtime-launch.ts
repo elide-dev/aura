@@ -1,15 +1,9 @@
 /**
- * Shared plumbing for the two long-running runtime flows (`runtime_debug`,
- * `serve`).
+ * Shared plumbing for the supervised `serve` flow.
  *
- * The split of responsibility is deliberate. `runtime/spawn` composes a launch
- * descriptor — argv, cwd, an environment overlay, and the rules for recognizing
- * the endpoint the process prints — and owns no lifecycle. The `hub` supervisor
- * owns the lifecycle: session-scoped names, log capture, readiness, `stop`,
- * `restart`, `describe`. So these tools hold no process map of their own; the
- * handle they return is a hub job name, which means `hub logs` and `hub stop`
- * work on a debugger or a static server for free, and there is no second
- * process registry to keep honest.
+ * `runtime/spawn` composes a launch descriptor and owns no lifecycle. The `hub`
+ * supervisor owns naming, logs, readiness, stop, restart, and describe. This
+ * module therefore holds no second process registry.
  */
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -40,7 +34,6 @@ const STARTUP_LOG_LINES = 200;
 const HUB_LOG_STATUS_SUFFIX = /\n?\[[^\n\]]*\]\s*$/;
 
 export interface RuntimeJobDetails {
-	mode: "debug" | "serve";
 	/** The hub job name — the handle for `hub logs` / `hub stop` / `hub restart`. */
 	jobName: string;
 	/** The scraped endpoint, absent when nothing matched or nothing could be extracted. */
@@ -66,7 +59,6 @@ export interface RuntimeJobDetails {
 export interface StartRuntimeJobOptions {
 	/** Prefix for the minted job name; the suffix keeps concurrent jobs distinct. */
 	namePrefix: string;
-	mode: "debug" | "serve";
 	waitSeconds?: number;
 	signal?: AbortSignal;
 	/** Tests supply a stub; production uses the real hub operation. */
@@ -202,7 +194,6 @@ export async function startRuntimeJob(
 		matchRuntimeEndpoint(startupOutput, descriptor.endpointPattern);
 	return {
 		details: {
-			mode: opts.mode,
 			jobName,
 			endpoint,
 			state: daemon?.state,
@@ -237,8 +228,7 @@ export function hubToolAvailable(session: ToolSession): boolean {
 }
 
 /**
- * The line every one of these tools ends on: how to look at the job and how to
- * stop it.
+ * The line the tool ends on: how to look at the job and how to stop it.
  *
  * The hub-less branch deliberately offers no in-session route, because there
  * isn't one. Broker-supervised daemons are reachable only through
@@ -289,7 +279,7 @@ export function noEndpointReport(
 	return [lead, jobHandleLine(details, hubAvailable), `Startup output:\n${output || "(no output yet)"}`].join("\n");
 }
 
-/** Compose the tool result shared by both flows from a body and the job details. */
+/** Compose the serve result from a body and the job details. */
 export function runtimeJobResult(
 	body: string,
 	job: StartedRuntimeJob,

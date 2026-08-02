@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 export type RuntimeCapabilityGroup = "execution" | "project" | "debugging" | "profiling" | "jvm";
 
-export type TaskRuntimeTool = "insights" | "profile" | "jvm_disassemble" | "jvm_jar" | "jvm_deps" | "jvm_javadoc";
+export type TaskRuntimeTool = "insights" | "profile" | "jvm_disassemble" | "jvm_jar" | "jvm_deps";
 
 export interface RuntimeTaskDefinition {
 	id: string;
@@ -242,11 +242,11 @@ test "$(java -jar app.jar 6 7)" = "42"
 jar --list --file app.jar | grep -q 'Main.class'`),
 	},
 	{
-		id: "jvm-dependency-docs",
+		id: "jvm-dependencies",
 		group: "jvm",
-		runtimeTools: ["jvm_deps", "jvm_javadoc"],
+		runtimeTools: ["jvm_deps"],
 		instruction:
-			"Compile /app/Report.java, write its real module dependencies to /app/deps.txt using dependency analysis, and generate Javadoc under /app/api-docs. Both outputs must describe the supplied source rather than placeholders.",
+			"Compile /app/Report.java, write its real module dependencies to /app/deps.txt, and verify it prints 1970-01-01. Use the most direct available dependency-analysis capability; the report must include java.sql.",
 		files: {
 			"Report.java":
 				'/** Formats a deterministic SQL date. */\npublic class Report { /** Returns the epoch date. */ public static String epoch(){ return java.sql.Date.valueOf("1970-01-01").toString(); } public static void main(String[] a){System.out.println(epoch());} }\n',
@@ -254,7 +254,6 @@ jar --list --file app.jar | grep -q 'Main.class'`),
 		verify: verifier(`cd /app
 javac --release 17 Report.java
 grep -q 'java.sql' deps.txt
-test -f api-docs/index.html
 test "$(java Report)" = "1970-01-01"`),
 	},
 ];

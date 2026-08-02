@@ -10,6 +10,18 @@ const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 const INHERENT_TREATMENT_FILES = [
 	"packages/coding-agent/src/prompts/system/system-prompt.md",
+	"packages/coding-agent/src/prompts/tools/runtime-run.md",
+	"packages/coding-agent/src/prompts/tools/runtime-check.md",
+	"packages/coding-agent/src/prompts/tools/runtime-insights.md",
+	"packages/coding-agent/src/prompts/tools/runtime-profile.md",
+	"packages/coding-agent/src/prompts/tools/runtime-serve.md",
+	"packages/coding-agent/src/prompts/tools/jvm-disassemble.md",
+	"packages/coding-agent/src/prompts/tools/jvm-format.md",
+	"packages/coding-agent/src/prompts/tools/jvm-jar.md",
+	"packages/coding-agent/src/prompts/tools/jvm-deps.md",
+	"packages/coding-agent/src/tools/builtin-names.ts",
+	"packages/coding-agent/src/tools/essential-tools.ts",
+	"packages/coding-agent/src/tools/index.ts",
 	"packages/coding-agent/src/discovery/claude-plugins.ts",
 	"packages/coding-agent/src/discovery/index.ts",
 	"packages/coding-agent/src/capability/skill.ts",
@@ -36,8 +48,12 @@ const CORE_SKILLS: Readonly<Record<string, true>> = {
 	"executing-plans": true,
 };
 
-export const INHERENT_BENCHMARK_TASK_IDS = ["typescript-execution", "runtime-debugging"] as const;
-export const INHERENT_BENCHMARK_TOOLS = runtimeToolsForTask("typescript-execution");
+export const INHERENT_BENCHMARK_TASK_IDS = ["typescript-execution", "jvm-dependencies"] as const;
+export type InherentBenchmarkTaskId = (typeof INHERENT_BENCHMARK_TASK_IDS)[number];
+
+export function inherentBenchmarkToolsForTask(taskId: InherentBenchmarkTaskId): string[] {
+	return runtimeToolsForTask(taskId);
+}
 
 export type InherentBenchmarkArm = "legacy" | "inherent";
 
@@ -61,7 +77,7 @@ export interface InherentBenchmarkLaunch {
 }
 
 export interface InherentTranscriptFacts {
-	firstExecutionTool: "run" | "bash" | undefined;
+	firstCapabilityTool: "run" | "check" | "jvm_deps" | "bash" | undefined;
 	coreSkillLoads: number;
 }
 
@@ -124,7 +140,7 @@ export function buildInherentBenchmarkLaunches(
 					`--gateway-url=${opts.gatewayUrl}`,
 					`--job-name=${jobName}`,
 					"--agent-arg=--tools",
-					`--agent-arg=${INHERENT_BENCHMARK_TOOLS.join(",")}`,
+					`--agent-arg=${inherentBenchmarkToolsForTask(taskId).join(",")}`,
 				];
 				if (opts.hostNetwork) args.push("--host-network");
 				launches.push({ arm, taskId, attempt, jobName, args });
@@ -136,24 +152,28 @@ export function buildInherentBenchmarkLaunches(
 
 /** Extract prompt-architecture signals from a runner JSONL transcript. */
 export function scanInherentTranscript(content: string): InherentTranscriptFacts {
-	let firstExecutionTool: "run" | "bash" | undefined;
+	let firstCapabilityTool: InherentTranscriptFacts["firstCapabilityTool"];
 	let coreSkillLoads = 0;
 	for (const line of content.split("\n")) {
 		if (!line.startsWith("{")) continue;
 		try {
 			const event: unknown = JSON.parse(line);
 			if (!isRecord(event) || event.type !== "tool_execution_start" || typeof event.toolName !== "string") continue;
-			if (firstExecutionTool === undefined && (event.toolName === "run" || event.toolName === "bash")) {
-				firstExecutionTool = event.toolName;
+			if (
+				firstCapabilityTool === undefined &&
+				(event.toolName === "run" ||
+					event.toolName === "check" ||
+					event.toolName === "jvm_deps" ||
+					event.toolName === "bash")
+			) {
+				firstCapabilityTool = event.toolName;
 			}
 			if (event.toolName !== "read" || !isRecord(event.args) || typeof event.args.path !== "string") continue;
 			const match = /^skill:\/\/(?:superpowers:)?([^/:?#]+)/.exec(event.args.path);
-			if (match && CORE_SKILLS[match[1]] === true) coreSkillLoads += 1;
-		} catch {
-			// Interrupted trials may leave one partial JSON line.
-		}
+			if (match?.[1] && CORE_SKILLS[match[1]]) coreSkillLoads++;
+		} catch {}
 	}
-	return { firstExecutionTool, coreSkillLoads };
+	return { firstCapabilityTool, coreSkillLoads };
 }
 
 function parseTelemetryFact(value: unknown): InherentTelemetryFact {
@@ -228,7 +248,15 @@ export function analyzeInherentBenchmark(
 ): InherentBenchmarkAnalysis {
 	const comparison = legacy !== undefined;
 	const inherentPassRate = inherent.trials === 0 ? 0 : inherent.pass / inherent.trials;
-	const selectedCorrectly = inherentTranscripts.filter(entry => entry.facts.firstExecutionTool === "run").length;
+	const expectedFirstTool: Readonly<Record<InherentBenchmarkTaskId, "run" | "jvm_deps">> = {
+		"typescript-execution": "run",
+		"jvm-dependencies": "jvm_deps",
+	};
+	const selectedCorrectly = inherentTranscripts.filter(
+		entry =>
+			INHERENT_BENCHMARK_TASK_IDS.includes(entry.taskId as InherentBenchmarkTaskId) &&
+			entry.facts.firstCapabilityTool === expectedFirstTool[entry.taskId as InherentBenchmarkTaskId],
+	).length;
 	const firstExecutionSelectionRate =
 		inherentTranscripts.length === 0 ? 0 : selectedCorrectly / inherentTranscripts.length;
 	const coreSkillLoads = inherentTranscripts.reduce((sum, entry) => sum + entry.facts.coreSkillLoads, 0);
@@ -429,7 +457,12 @@ function formatInherentReport(
 		`- Model: \`${opts.model}\`\n` +
 		`- Attempts per task: ${opts.attempts}\n` +
 		`- Tasks: ${INHERENT_BENCHMARK_TASK_IDS.map(task => `\`${task}\``).join(", ")}\n` +
-		`- Identical tools: ${INHERENT_BENCHMARK_TOOLS.map(tool => `\`${tool}\``).join(", ")}\n` +
+		`- Task tools: ${INHERENT_BENCHMARK_TASK_IDS.map(
+			task =>
+				`\`${task}\` = ${inherentBenchmarkToolsForTask(task)
+					.map(tool => `\`${tool}\``)
+					.join(", ")}`,
+		).join("; ")}\n` +
 		`- Current treatment SHA-256: \`${identities.currentSourceSha256}\`\n` +
 		`- Telemetry preflight: \`${telemetry.success.outcome}\` → \`${telemetry.failure.outcome}\` (` +
 		`${telemetry.success.language}, ${telemetry.success.durationMs.toFixed(3)}/${telemetry.failure.durationMs.toFixed(3)} ms)\n` +

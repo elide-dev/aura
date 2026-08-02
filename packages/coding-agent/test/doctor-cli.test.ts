@@ -506,14 +506,12 @@ describe("resolveToolGating", () => {
 	const RUNTIME_TOOLS = [
 		"run",
 		"check",
-		"build",
 		"insights",
 		"profile",
 		"jvm_disassemble",
 		"jvm_format",
 		"jvm_jar",
 		"jvm_deps",
-		"jvm_javadoc",
 	];
 
 	test("everything on registers every name", () => {

@@ -57,7 +57,6 @@ import { JvmDepsTool } from "./jvm-deps";
 import { JvmDisassembleTool } from "./jvm-disassemble";
 import { JvmFormatTool } from "./jvm-format";
 import { JvmJarTool } from "./jvm-jar";
-import { JvmJavadocTool } from "./jvm-javadoc";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
@@ -67,10 +66,7 @@ import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
-import { RuntimeAdviceTool } from "./runtime-advice";
-import { RuntimeBuildTool } from "./runtime-build";
 import { RuntimeCheckTool } from "./runtime-check";
-import { RuntimeDebugTool } from "./runtime-debug";
 import { RuntimeInsightsTool } from "./runtime-insights";
 import { RuntimeProfileTool } from "./runtime-profile";
 import { RuntimeRunTool } from "./runtime-run";
@@ -257,7 +253,7 @@ export interface ToolSession {
 	getHindsightSessionState?: () => HindsightSessionState | undefined;
 	/** Get Mnemopi runtime state for this agent session. */
 	getMnemopiSessionState?: () => MnemopiSessionState | undefined;
-	/** Aura runtime capability service (run/check/build/insights/profile); undefined when runtime.enabled is off. */
+	/** Aura runtime capability service; undefined when runtime.enabled is off. */
 	getRuntimeService?: () => RuntimeService | undefined;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "Main", "AuthLoader"). */
 	getAgentId?: () => string | null;
@@ -453,17 +449,13 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	manage_skill: ManageSkillTool.createIf,
 	run: RuntimeRunTool.createIf,
 	check: RuntimeCheckTool.createIf,
-	build: RuntimeBuildTool.createIf,
 	insights: RuntimeInsightsTool.createIf,
 	profile: RuntimeProfileTool.createIf,
-	runtime_debug: RuntimeDebugTool.createIf,
 	serve: RuntimeServeTool.createIf,
 	jvm_disassemble: JvmDisassembleTool.createIf,
 	jvm_format: JvmFormatTool.createIf,
 	jvm_jar: JvmJarTool.createIf,
 	jvm_deps: JvmDepsTool.createIf,
-	jvm_javadoc: JvmJavadocTool.createIf,
-	project_advice: RuntimeAdviceTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {

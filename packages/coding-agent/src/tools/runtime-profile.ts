@@ -7,13 +7,13 @@ import type { ToolSession } from ".";
 
 const runtimeProfileSchema = type({
 	mode: type("'cputracing' | 'cpusampling'").describe("profiler mode"),
-	"code?": type("string").describe("inline program source (mutually exclusive with path)"),
+	"code?": type("string").describe("inline program (exclusive with path)"),
 	"path?": type("string").describe("existing program file"),
-	"language?": type("'js' | 'ts' | 'python'").describe("program language (default ts for inline code)"),
-	"args?": type("string[]").describe("arguments passed to the program"),
-	"stdin?": type("string").describe("data piped to stdin"),
-	"timeoutMs?": type("number").describe("kill the run after this many milliseconds"),
-	"cwd?": type("string").describe("working directory (defaults to the session cwd)"),
+	"language?": type("'js' | 'ts' | 'python'").describe("inline language (default ts)"),
+	"args?": type("string[]").describe("program arguments"),
+	"stdin?": type("string").describe("program stdin"),
+	"timeoutMs?": type("number").describe("timeout (ms)"),
+	"cwd?": type("string").describe("working directory (session cwd)"),
 });
 
 export type RuntimeProfileToolParams = typeof runtimeProfileSchema.infer;

@@ -25,14 +25,15 @@ All agent tools already receive generic `execute_tool` spans. Those spans carry 
 - Add runtime call telemetry at the `RuntimeService` boundary.
 - Classify non-zero, killed, cancelled, timed-out, and thrown runtime calls correctly in generic tool spans.
 - Add the smallest repeatable behavior benchmark that exercises runtime selection and verification.
+- Keep `run` and `check` essential; move high-cost runtime capabilities behind tool discovery.
+- Collapse Java/Kotlin execution into `run`, retain four distinct JVM artifact/analysis tools, and remove redundant build, project-advice, and Javadoc runtime tools.
 
 ### Out of scope
 
-- Changing runtime protocol methods or wire schemas.
-- Changing runtime execution, adapter selection, or lifecycle behavior.
+- Changing runtime execution, adapter selection, or lifecycle behavior beyond deleting obsolete protocol methods.
 - Hiding domain-specific skills.
 - Adding a general prompt-fragment discovery framework.
-- Replacing the existing twelve-task runtime effectiveness suite.
+- Replacing the compact broad runtime effectiveness suite.
 
 ## Prompt architecture
 
@@ -46,8 +47,8 @@ The runtime subsection renders only when at least one runtime tool is registered
 - persistent incremental exploration uses `eval`;
 - shell commands and installed CLIs use `bash`;
 - validation without artifacts uses `check`;
-- artifact production uses `build`;
-- instrumentation, profiling, stateful debugging, serving, project advice, and JVM specialists use their registered named tools;
+- project artifact production uses declared external build commands;
+- instrumentation, profiling, externally attachable debugging, serving, and four JVM artifact/analysis operations use their registered named tools;
 - the runtime binary is never invoked through `bash`.
 
 Each statement is guarded by actual tool availability so the prompt never advertises an unavailable capability. Tool prompt Markdown remains the sole argument and failure-shape reference.
@@ -88,7 +89,7 @@ A project or user skill with the same name remains loadable because it comes fro
 
 ### Instrumentation boundary
 
-`RuntimeService.#call` is the single instrumentation boundary for every runtime protocol request. It records exactly one completion event for success, protocol error, cancellation, timeout, or unexpected failure. This avoids per-tool drift and covers `run`, `check`, `build`, `insights`, `profile`, JVM actions, debug/serve launch composition, project advice, and status probes.
+`RuntimeService.#call` is the single instrumentation boundary for every remaining runtime protocol request. It records exactly one completion event for success, protocol error, cancellation, timeout, or unexpected failure. This avoids per-tool drift and covers `run`, `check`, `insights`, `profile`, four JVM actions, debug/serve launch composition, and status probes.
 
 The event contains:
 
@@ -100,7 +101,7 @@ The event contains:
 - exit code and killed flag for execution results;
 - bounded error type/code, never source or program output.
 
-Language resolution uses the returned `RuntimeRunResult.language` for `run`; request language or the existing runtime target resolver for instrumentation/profile/JVM calls. Build, check, advice, spawn, and status omit the dimension rather than emitting `unknown`.
+Language resolution uses the returned `RuntimeRunResult.language` for `run`; request language or the existing runtime target resolver for instrumentation/profile/JVM calls. Check, spawn, and status omit the dimension rather than emitting `unknown`.
 
 ### OpenTelemetry spans
 
@@ -139,14 +140,22 @@ Remove:
 
 Update general skill tests to stop carrying the removed toggle. Remove obsolete files rather than leaving aliases or deprecated settings.
 
+The final runtime tool surface is deliberately asymmetric:
+
+- Essential on every runtime-enabled request: `run`, `check`.
+- Discoverable through `xd://`: `insights`, `profile`, `serve`, `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`.
+- Removed entirely: `build`, `project_advice`, `runtime_debug` and its CDP/DAP launch protocol, `jvm_javadoc`, and the `jvm_run` alias.
+
+The remaining provider schemas must stay compact. `run` owns standalone language execution; specialized JVM tools own only bytecode, formatting, JAR, and dependency workflows. Project-declared builds remain external toolchain commands.
+
 ## Minimal benchmark
 
-Reuse the existing deterministic metaharness fixtures and runner. Add a focused current-configuration mode rather than a second benchmark framework.
+Reuse the existing deterministic metaharness fixtures, runner, measurements, and report primitives in a focused two-task orchestrator rather than creating a second benchmark framework.
 
 The default inherent-capability smoke runs:
 
 1. `typescript-execution` — validates direct runtime selection and successful execution.
-2. `runtime-debugging` — validates edit plus observable execution verification.
+2. `jvm-dependencies` — validates selection of `jvm_deps` over generic execution or shell commands.
 
 Run one attempt for a smoke gate and three alternating attempts when comparing revisions. Record existing pass, duration, token, tool-call, and runtime-adoption measurements plus the new runtime telemetry.
 
@@ -154,11 +163,11 @@ Smoke gate:
 
 - both tasks pass;
 - every completed task invokes a runtime tool;
-- runtime call metrics report the expected language;
-- success and intentional failure probes produce distinct outcomes;
+- each task selects its expected capability (`run` or `jvm_deps`) before `bash`;
+- success and intentional failure probes produce distinct telemetry outcomes;
 - no runtime or core-workflow skill is loaded because those capabilities are absent from the skill catalog.
 
-The twelve-task suite remains the broader regression run. The two-task mode is the optimization loop, not evidence of general model quality.
+The compact ten-task suite remains the broader regression run. The two-task mode is the optimization loop, not evidence of general model quality.
 
 ## Verification
 

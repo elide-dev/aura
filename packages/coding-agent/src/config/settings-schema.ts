@@ -477,7 +477,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Runtime",
 			label: "Enable runtime capabilities",
-			description: "Innate run/check/build/insights/profile tools executed on the managed runtime.",
+			description: "Innate run/check/insights/profile and JVM tools executed on the managed runtime.",
 		},
 	},
 	"runtime.adapter": {

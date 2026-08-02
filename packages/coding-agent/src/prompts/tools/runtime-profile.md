@@ -1,5 +1,3 @@
-Profile a program on the managed runtime. `mode: "cputracing"` gives exact call
-tracing; `"cpusampling"` gives lower-overhead statistical sampling and SHOULD be
-used for longer runs.
-
-Provide the program via `code` or `path`. Returns a text report.
+Profile JavaScript, TypeScript, or Python. `cputracing` records exact calls;
+`cpusampling` collects lower-overhead statistical samples and SHOULD be used for
+longer runs. Returns a text report.

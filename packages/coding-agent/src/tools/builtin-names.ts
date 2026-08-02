@@ -30,18 +30,13 @@ export const BUILTIN_TOOL_NAMES = [
 	"manage_skill",
 	"run",
 	"check",
-	"build",
 	"insights",
 	"profile",
-	// `runtime_debug`, not `debug`: `debug` is the interactive stepping debugger.
-	"runtime_debug",
 	"serve",
 	"jvm_disassemble",
 	"jvm_format",
 	"jvm_jar",
 	"jvm_deps",
-	"jvm_javadoc",
-	"project_advice",
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];

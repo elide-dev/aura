@@ -26,21 +26,17 @@ const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 const RUNTIME_TOOL_NAMES: Record<string, true> = {
 	run: true,
 	check: true,
-	build: true,
 	insights: true,
 	profile: true,
-	runtime_debug: true,
 	serve: true,
 	jvm_disassemble: true,
 	jvm_format: true,
 	jvm_jar: true,
 	jvm_deps: true,
-	jvm_javadoc: true,
-	project_advice: true,
 };
 
 export const BASELINE_TOOLS = ["read", "write", "edit", "bash", "grep", "glob"];
-export const ESSENTIAL_RUNTIME_TOOLS = [...BASELINE_TOOLS, "run", "check", "build"];
+export const ESSENTIAL_RUNTIME_TOOLS = [...BASELINE_TOOLS, "run", "check"];
 
 export type BenchmarkArm = "baseline" | "runtime" | "historical";
 
@@ -976,10 +972,7 @@ export async function runMicrobenchmarks(iterations: number): Promise<MicroResul
 			javaPath,
 			"public class Main { public static void main(String[] a){ long s=0; for(int i=0;i<200000;i++) s+=(long)i*i; System.out.println(s); } }\n",
 		);
-		await Bun.write(
-			path.join(projectDir, "package.json"),
-			'{"name":"runtime-micro-project","type":"module","scripts":{"build":"bun build src.ts --outdir=dist"}}\n',
-		);
+		await Bun.write(path.join(projectDir, "package.json"), '{"name":"runtime-micro-project","type":"module"}\n');
 		await Bun.write(path.join(projectDir, "src.ts"), "export const answer: number = 42;\nconsole.log(answer);\n");
 
 		const results: MicroResult[] = [];
@@ -1025,14 +1018,6 @@ export async function runMicrobenchmarks(iterations: number): Promise<MicroResul
 			() => runProcess([bun, "build", "src.ts", "--outdir=dist"], projectDir),
 			async () => {
 				const result = await service.check({ cwd: projectDir });
-				if (result.exitCode !== 0) throw new Error(result.stderr);
-			},
-		);
-		await add(
-			"Project build",
-			() => runProcess([bun, "run", "build"], projectDir),
-			async () => {
-				const result = await service.build({ cwd: projectDir });
 				if (result.exitCode !== 0) throw new Error(result.stderr);
 			},
 		);

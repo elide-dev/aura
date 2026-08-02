@@ -9,9 +9,7 @@ import {
 	type JvmLanguage,
 	okResponse,
 	RUNTIME_PROTOCOL_VERSION,
-	type RuntimeAdviceParams,
-	type RuntimeBuildParams,
-	type RuntimeDebugProtocol,
+	type RuntimeCheckParams,
 	type RuntimeEndpointRule,
 	type RuntimeExecResult,
 	type RuntimeInsightsParams,
@@ -218,18 +216,13 @@ async function realpathExistingPrefix(target: string): Promise<string> {
 }
 
 /**
- * Resolve a project-writing destination and bound it to somewhere strictly
- * *inside* the working directory. `output: "."` otherwise resolves to the
- * project root, and the javadoc replace path is an `rm -rf` of that
- * destination — so an unbounded `output` plus `overwrite: true` deletes the
- * user's project. `..`, an ancestor, and any absolute path outside the working
- * directory are refused for the same reason.
+ * Resolve a project-writing destination and bound it strictly inside the
+ * working directory. The project root, its parents, and outside absolute paths
+ * are never valid file outputs.
  *
- * The check is run twice: once lexically, and once on the *resolved* pair, since
- * `path.relative` never follows symlinks — `output: "link/docs"` where `link`
- * points outside reads as inside while the recursive remove lands elsewhere. The
- * final component is deliberately left unresolved: a leaf symlink is unlinked
- * rather than followed, so pointing one at a directory elsewhere is harmless.
+ * Check both lexical and resolved paths. `path.relative` does not follow
+ * symlinks, so either a parent or an existing destination symlink could
+ * otherwise redirect a write outside the project.
  */
 async function resolveOutputDest(baseCwd: string, output: string): Promise<string> {
 	const cwd = path.resolve(baseCwd);
@@ -244,50 +237,23 @@ async function resolveOutputDest(baseCwd: string, output: string): Promise<strin
 	};
 	if (!isStrictlyInside(cwd, dest)) refuse();
 	const realCwd = await realpathExistingPrefix(cwd);
-	const realParent = await realpathExistingPrefix(path.dirname(dest));
-	if (!isStrictlyInside(realCwd, path.join(realParent, path.basename(dest)))) refuse();
+	if ((await fs.lstat(dest).catch(() => null))?.isSymbolicLink()) refuse();
+	const realDest = await realpathExistingPrefix(dest);
+	if (!isStrictlyInside(realCwd, realDest)) refuse();
 	return dest;
 }
 
-/**
- * Files javadoc emits that a hand-written site would not. `index.html` alone is
- * not evidence — a static site at `public/` has one too — so a replace needs an
- * `index.html` *and* one of these.
- */
-const JAVADOC_SIGNATURE_FILES = ["element-list", "help-doc.html", "member-search-index.js"];
-
-/**
- * `overwrite: true` on javadoc means "replace the docs I generated last time",
- * and the replacement is a recursive remove. So the destination has to actually
- * look like a docs tree: absent, an empty directory, or a directory that carries
- * both an `index.html` and one of javadoc's own scaffolding files. A directory
- * full of source, a static site, or a plain file is someone else's data and is
- * refused.
- */
-async function assertReplaceableDocsDir(dest: string): Promise<void> {
-	const stat = await fs.stat(dest).catch(() => null);
-	if (stat === null) return;
-	if (stat.isDirectory()) {
-		const entries = await fs.readdir(dest);
-		if (entries.length === 0) return;
-		if (entries.includes("index.html") && entries.some(e => JAVADOC_SIGNATURE_FILES.includes(e))) return;
-	}
-	throw new RuntimeRpcError(
-		"invalid-params",
-		`Refusing to replace ${dest} — it does not look like a previous jvm_javadoc output ` +
-			`(needs index.html plus one of ${JAVADOC_SIGNATURE_FILES.join(", ")}). ` +
-			"Choose a fresh directory, or the output directory of a previous run.",
-		{ output: dest },
-	);
-}
-
-/** A jar is a file: an existing directory in its place is a caller mistake, not an internal failure. */
-async function assertNotDirectory(dest: string): Promise<void> {
+/** A file output may not replace a directory, even when overwrite was authorized. */
+async function assertNotDirectory(dest: string, label = "jar"): Promise<void> {
 	const stat = await fs.stat(dest).catch(() => null);
 	if (stat?.isDirectory() !== true) return;
-	throw new RuntimeRpcError("invalid-params", `Refusing to write the jar to ${dest} — it is an existing directory.`, {
-		output: dest,
-	});
+	throw new RuntimeRpcError(
+		"invalid-params",
+		`Refusing to write the ${label} to ${dest} — it is an existing directory.`,
+		{
+			output: dest,
+		},
+	);
 }
 
 const JAR_CREATE_REQUIREMENTS =
@@ -320,14 +286,8 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 					return okResponse(req.id, await this.execJvm(req.params as RuntimeJvmParams, signal));
 				case "runtime/spawn":
 					return okResponse(req.id, await this.describeSpawn(req.params as RuntimeSpawnParams));
-				case "runtime/advice":
-					return okResponse(req.id, await this.execAdvice(req.params as RuntimeAdviceParams | undefined, signal));
 				case "runtime/check":
-					return okResponse(req.id, await this.execBuild(req.params as RuntimeBuildParams, [], signal));
-				case "runtime/build": {
-					const params = req.params as RuntimeBuildParams;
-					return okResponse(req.id, await this.execBuild(params, params.targets ?? [], signal));
-				}
+					return okResponse(req.id, await this.execCheck(req.params as RuntimeCheckParams, signal));
 				default:
 					return errorResponse(req.id, new RuntimeRpcError("invalid-params", `Unknown method ${req.method}`));
 			}
@@ -472,11 +432,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 					? this.jvmJarInspect(params, signal)
 					: this.jvmJarCreate(params, signal);
 			case "deps":
-				// Truthiness, not presence: an empty `path` must not resolve to the
-				// working directory and quietly analyze the whole project.
-				return params.path ? this.jvmDepsFromPath(params, signal) : this.jvmDepsFromSource(params, signal);
-			case "javadoc":
-				return this.jvmJavadoc(params, signal);
+				return this.jvmDeps(params, signal);
 			default:
 				throw new RuntimeRpcError("invalid-params", `Unknown jvm action ${String(params.action)}.`);
 		}
@@ -709,10 +665,45 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		});
 	}
 
+	private async jvmDeps(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
+		const dest = params.output ? await resolveOutputDest(this.jvmBaseCwd(params), params.output) : undefined;
+		if (dest) {
+			await refuseExistingOutput(dest, params.overwrite);
+			await assertNotDirectory(dest, "dependency report");
+		}
+		// Truthiness, not presence: an empty `path` must not resolve to the
+		// working directory and quietly analyze the whole project.
+		const result = params.path
+			? await this.jvmDepsFromPath(params, signal)
+			: await this.jvmDepsFromSource(params, signal);
+		if (!dest || result.exitCode !== 0 || result.killed) return result;
+		await Bun.write(dest, result.stdout);
+		return { ...result, output: dest };
+	}
+
 	private async jvmDepsFromPath(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
 		const target = path.resolve(this.jvmBaseCwd(params), params.path ?? "");
 		if (!(await pathExists(target))) {
-			throw new RuntimeRpcError("invalid-params", `No class file or jar found at ${target}.`, { path: target });
+			throw new RuntimeRpcError(
+				"invalid-params",
+				`No JVM source, class, JAR, or class directory found at ${target}.`,
+				{
+					path: target,
+				},
+			);
+		}
+		const extension = path.extname(target).toLowerCase();
+		if (extension === ".java" || extension === ".kt") {
+			const code = await Bun.file(target).text();
+			return this.jvmDepsFromSource(
+				{
+					...params,
+					path: undefined,
+					language: extension === ".java" ? "java" : "kotlin",
+					code,
+				},
+				signal,
+			);
 		}
 		const { binaryPath } = await this.ensureBinary();
 		const result = await this.jvmInCwd(params, [binaryPath, "jdeps", "--", target], signal);
@@ -722,7 +713,7 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 	private async jvmDepsFromSource(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
 		const { language, code } = this.requireJvmSource(
 			params,
-			"jvm_deps requires either `path` (existing .class/.jar) or `language` + `code`.",
+			"jvm_deps requires `path` (source, .class, .jar, or class directory) or `language` + `code`.",
 		);
 		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
 			const { className, failure } = await this.compileJvm(wd, bin, run, "deps", language, code, params.mainClass);
@@ -730,35 +721,6 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 			const target = language === "java" ? `${className}.class` : "out";
 			const result = await run([bin, "jdeps", "--", target]);
 			return { ...result, action: "deps", phase: "deps", language, className };
-		});
-	}
-
-	private async jvmJavadoc(params: RuntimeJvmParams, signal?: AbortSignal): Promise<RuntimeJvmResult> {
-		if (params.code === undefined) {
-			throw new RuntimeRpcError("invalid-params", "jvm_javadoc requires `code` (Java source to document).");
-		}
-		const code = params.code;
-		const dest = await resolveOutputDest(this.jvmBaseCwd(params), params.output ?? "javadoc-out");
-		await refuseExistingOutput(dest, params.overwrite);
-		if (params.overwrite === true) await assertReplaceableDocsDir(dest);
-		return this.withJvmWorkdir(params, signal, async (wd, bin, run) => {
-			const className = deriveJvmMainClass("java", code, params.mainClass);
-			await wd.write(`${className}.java`, code);
-			const result = await run([bin, "javadoc", "--", "-d", "apidocs", `${className}.java`]);
-			const base = {
-				...result,
-				action: "javadoc" as const,
-				phase: "javadoc" as const,
-				language: "java" as const,
-				className,
-			};
-			if (result.exitCode !== 0 || result.killed) return base;
-			await fs.rm(dest, { recursive: true, force: true });
-			await fs.mkdir(path.dirname(dest), { recursive: true });
-			await fs.cp(path.join(wd.dir, "apidocs"), dest, { recursive: true });
-			const entries = await fs.readdir(dest, { recursive: true });
-			const topLevel = (await fs.readdir(dest)).sort().slice(0, 12);
-			return { ...base, output: dest, entryCount: entries.length, topLevel };
 		});
 	}
 
@@ -791,35 +753,9 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		};
 	}
 
-	// ── runtime/advice ───────────────────────────────────────────────────────
-	// Read-only, and deliberately the one exec flow with no workdir: the guidance
-	// is produced by *detecting* `elide.pkl` and package manifests, so it has to
-	// run in the real project directory — a temp workdir would always report an
-	// empty project. Nothing is materialized, nothing is written, and the JVM env
-	// hygiene does not apply because no JVM toolchain is invoked.
-
-	// `params` is optional all the way down: every field is, so a caller with
-	// nothing to say may legitimately send no params object at all.
-	private async execAdvice(params: RuntimeAdviceParams | undefined, signal?: AbortSignal): Promise<RuntimeExecResult> {
+	private async execCheck(params: RuntimeCheckParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
 		const { binaryPath } = await this.ensureBinary();
-		return this.spawn(
-			[binaryPath, "project", "advice", "--error-format=plain", "--no-color"],
-			{ cwd: params?.cwd, timeoutMs: params?.timeoutMs },
-			signal,
-		);
-	}
-
-	private async execBuild(
-		params: RuntimeBuildParams,
-		targets: string[],
-		signal?: AbortSignal,
-	): Promise<RuntimeExecResult> {
-		const { binaryPath } = await this.ensureBinary();
-		return this.spawn(
-			[binaryPath, "build", "--no-color", ...targets],
-			{ cwd: params.cwd, timeoutMs: params.timeoutMs },
-			signal,
-		);
+		return this.spawn([binaryPath, "build", "--no-color"], { cwd: params.cwd, timeoutMs: params.timeoutMs }, signal);
 	}
 
 	/** The endpoint's spawn as a {@link RuntimeSpawn}, for workdir-bound flows. */
@@ -924,18 +860,6 @@ const PATH_SHIM_WARNING =
 	"managed install is used — resolution prefers a binary on PATH over auto-downloading, so a wrapper " +
 	"there always wins.";
 
-/** The debug flows' endpoint banners, per wire protocol. */
-const DEBUG_ENDPOINT_RULES: Record<RuntimeDebugProtocol, RuntimeEndpointRule[]> = {
-	// CDP prints a full inspector URL: `Debugger listening on ws://127.0.0.1:9229/<id>/inspect`.
-	// The URL itself is the endpoint, so the whole match is taken.
-	cdp: [{ pattern: "ws://\\S+" }],
-	// DAP prints `[Graal DAP] Starting server and listening on /0.0.0.0:4711` — the
-	// address carries a leading slash (Java's InetSocketAddress formatting for an
-	// unresolved host). It is consumed by the rule rather than captured: `/0.0.0.0:4711`
-	// is not an address any DAP client can attach to.
-	dap: [{ pattern: "listening on\\s+/?(\\S+)", group: 1 }],
-};
-
 /** `serve` prints a bare `host:port`; the scheme is implied. */
 const SERVE_ENDPOINT_RULES: RuntimeEndpointRule[] = [
 	{ pattern: "Serving static files on\\s+(\\S+)", group: 1, prefix: "http://" },
@@ -950,17 +874,6 @@ interface ComposedLaunch {
 /** `stat` of `target`, or null when it does not exist. */
 async function statOrNull(target: string): Promise<Stats | null> {
 	return await fs.stat(target).catch(() => null);
-}
-
-async function requireExistingFile(base: string, value: string | undefined, label: string): Promise<string> {
-	if (!value) throw new RuntimeRpcError("invalid-params", `${label} is required.`);
-	const resolved = path.resolve(base, value);
-	const stat = await statOrNull(resolved);
-	if (stat === null) throw new RuntimeRpcError("invalid-params", `${label} does not exist: ${resolved}`, { resolved });
-	if (!stat.isFile()) {
-		throw new RuntimeRpcError("invalid-params", `${label} is not a file: ${resolved}`, { resolved });
-	}
-	return resolved;
 }
 
 async function requireExistingDirectory(base: string, value: string | undefined, label: string): Promise<string> {
@@ -979,38 +892,13 @@ async function requireExistingDirectory(base: string, value: string | undefined,
  * independent of binary resolution so it can run first — see `describeSpawn`.
  */
 async function composeSpawn(params: RuntimeSpawnParams, cwd: string): Promise<ComposedLaunch> {
-	switch (params.mode) {
-		case "debug":
-			return debugArgv(params, cwd);
-		case "serve":
-			return serveArgv(params, cwd);
-		default:
-			throw new RuntimeRpcError("invalid-params", `Unknown spawn mode ${String(params.mode)}.`);
+	if ("mode" in params) {
+		throw new RuntimeRpcError(
+			"invalid-params",
+			"runtime/spawn no longer accepts a mode; only static serving remains.",
+		);
 	}
-}
-
-/**
- * `run --debugger=<protocol> … <file>`. The program runs suspended until a
- * client attaches, which is exactly why this is a supervised job rather than a
- * request that waits for an exit code.
- */
-async function debugArgv(params: RuntimeSpawnParams, cwd: string): Promise<ComposedLaunch> {
-	const file = await requireExistingFile(cwd, params.path, "debug `path` (the program to debug)");
-	const protocol: RuntimeDebugProtocol = params.protocol ?? "cdp";
-	if (DEBUG_ENDPOINT_RULES[protocol] === undefined) {
-		throw new RuntimeRpcError("invalid-params", `Unknown debug protocol ${String(protocol)}; expected cdp or dap.`);
-	}
-	const language: RuntimeLanguage = params.language ?? inferLanguage(file);
-	const args = ["run", `--debugger=${protocol}`, "--error-format=plain", "--no-color"];
-	if (params.timeoutMs !== undefined) {
-		if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-			throw new RuntimeRpcError("invalid-params", "timeoutMs must be a positive number of milliseconds.");
-		}
-		args.push("--timeout", `${Math.round(params.timeoutMs)}ms`);
-	}
-	args.push("-l", language, file);
-	if (params.args?.length) args.push("--", ...params.args);
-	return { args, endpointPattern: DEBUG_ENDPOINT_RULES[protocol] };
+	return serveArgv(params, cwd);
 }
 
 /** `serve <dir> --no-tui [--port p] [--host h]`. `--no-tui` keeps the output scrapable. */

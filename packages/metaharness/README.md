@@ -36,7 +36,7 @@ direct-vs-runtime microbenchmarks from the repository root:
 bun run bench:runtime
 ```
 
-The command materializes 12 deterministic Harbor tasks, runs paired arms with
+The command materializes 10 deterministic Harbor tasks, runs paired arms with
 alternating AB/BA order, and writes both a frozen launch manifest and comparison
 report:
 
@@ -48,12 +48,12 @@ the runtime tools are added to the second arm. The report pairs outcomes within
 task strata, uses a deterministic 10,000-sample task bootstrap for 95%
 confidence intervals, reports end-to-end arm time separately from trial time,
 and renders the pre-registered decision.
-The runtime arm always exposes the production-essential `run`, `check`, and
-`build` tools, then adds only the discoverable runtime tools applicable to the
-task (for example, `insights` for instrumentation or `jvm_disassemble` for
-bytecode inspection). The frozen manifest records the exact runtime tool list
-per task. This keeps the causal treatment realistic without charging every
-trial for unrelated debugger, profiler, JVM, server, and advisory tool schemas.
+The runtime arm always exposes the production-essential `run` and `check`
+tools, then adds only the discoverable runtime tools applicable to the task
+(for example, `insights` for instrumentation or `jvm_disassemble` for bytecode
+inspection). The frozen manifest records the exact runtime tool list per task.
+This keeps the causal treatment realistic without charging every trial for
+unrelated debugger, profiler, JVM, and server tool schemas.
 
 Before any model trial, the orchestrator builds the generated TypeScript task
 image and runs its verifier against a deterministic valid solution. Every task
@@ -72,8 +72,8 @@ engineering policy:
 bun run bench:inherent --prefix=inherent-smoke
 ```
 
-This runs `typescript-execution` and `runtime-debugging` once against current
-source. The report requires every task to pass, use its task-specific runtime
+This runs `typescript-execution` and `jvm-dependencies` once against current
+source. The report requires every task to pass, select its task-specific runtime
 tool before `bash`, and load no promoted runtime/core-workflow skill.
 
 For a matched comparison, provide a pinned pre-change binary:
@@ -85,9 +85,9 @@ bun run bench:inherent --legacy-binary=/absolute/path/to/aura-linux-x64 \
 
 Comparison mode runs each `(task, attempt)` as its own one-attempt job and
 alternates arm order across three attempts. Both revisions use the same model,
-reasoning level, fixtures, and `read,write,edit,bash,grep,glob,run,check,build`
-tool set. It adds no-increase gates for the median paired tool-call and input-token
-deltas. Reports record a SHA-256 for the current treatment sources and, in
+reasoning level, fixtures, and task-specific tool lists. It adds no-increase
+gates for median paired tool-call and input-token deltas. Reports record a
+SHA-256 for the current treatment sources and, in
 comparison mode, the pinned legacy binary. Set `AURA_LEGACY_BINARY` instead of
 passing the flag when automating repeat runs.
 

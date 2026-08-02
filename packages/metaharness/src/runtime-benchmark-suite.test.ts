@@ -26,7 +26,7 @@ const EXPECTED_TASKS = [
 	"java-execution",
 	"bytecode-inspection",
 	"executable-jar",
-	"jvm-dependency-docs",
+	"jvm-dependencies",
 ];
 
 describe("runtime capability suite", () => {

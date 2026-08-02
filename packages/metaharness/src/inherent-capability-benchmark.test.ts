@@ -3,7 +3,7 @@ import {
 	analyzeInherentBenchmark,
 	buildInherentBenchmarkLaunches,
 	INHERENT_BENCHMARK_TASK_IDS,
-	INHERENT_BENCHMARK_TOOLS,
+	inherentBenchmarkToolsForTask,
 	parseInherentBenchmarkCli,
 	runInherentTelemetryProbe,
 	scanInherentTranscript,
@@ -31,7 +31,7 @@ function summary(
 	}));
 	const taskMeasurements = INHERENT_BENCHMARK_TASK_IDS.map(taskId => ({
 		taskId,
-		group: taskId === "typescript-execution" ? ("execution" as const) : ("debugging" as const),
+		group: taskId === "typescript-execution" ? ("execution" as const) : ("jvm" as const),
 		trials: trials.filter(trial => trial.taskId === taskId),
 	})) satisfies RuntimeTaskMeasurement[];
 	const pass = options.pass ?? trials.length;
@@ -65,20 +65,20 @@ describe("inherent capability benchmark", () => {
 		expect(launches.map(launch => [launch.attempt, launch.arm, launch.taskId])).toEqual([
 			[1, "legacy", "typescript-execution"],
 			[1, "inherent", "typescript-execution"],
-			[1, "inherent", "runtime-debugging"],
-			[1, "legacy", "runtime-debugging"],
+			[1, "inherent", "jvm-dependencies"],
+			[1, "legacy", "jvm-dependencies"],
 			[2, "inherent", "typescript-execution"],
 			[2, "legacy", "typescript-execution"],
-			[2, "legacy", "runtime-debugging"],
-			[2, "inherent", "runtime-debugging"],
+			[2, "legacy", "jvm-dependencies"],
+			[2, "inherent", "jvm-dependencies"],
 			[3, "legacy", "typescript-execution"],
 			[3, "inherent", "typescript-execution"],
-			[3, "inherent", "runtime-debugging"],
-			[3, "legacy", "runtime-debugging"],
+			[3, "inherent", "jvm-dependencies"],
+			[3, "legacy", "jvm-dependencies"],
 		]);
 		for (const launch of launches) {
 			expect(launch.args).toContain("--attempts=1");
-			expect(launch.args).toContain(`--agent-arg=${INHERENT_BENCHMARK_TOOLS.join(",")}`);
+			expect(launch.args).toContain(`--agent-arg=${inherentBenchmarkToolsForTask(launch.taskId).join(",")}`);
 		}
 		expect(launches[0].args).toContain("--binary=/tmp/legacy-omp");
 		expect(launches[1].args).toContain("--install=source");
@@ -91,7 +91,7 @@ describe("inherent capability benchmark", () => {
 		const launches = buildInherentBenchmarkLaunches(options, "/tmp/tasks");
 		expect(launches.map(launch => [launch.arm, launch.taskId])).toEqual([
 			["inherent", "typescript-execution"],
-			["inherent", "runtime-debugging"],
+			["inherent", "jvm-dependencies"],
 		]);
 	});
 
@@ -107,7 +107,7 @@ describe("inherent capability benchmark", () => {
 			}),
 			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "skill://frontend-design" } }),
 		].join("\n");
-		expect(scanInherentTranscript(transcript)).toEqual({ firstExecutionTool: "run", coreSkillLoads: 2 });
+		expect(scanInherentTranscript(transcript)).toEqual({ firstCapabilityTool: "run", coreSkillLoads: 2 });
 	});
 
 	it("passes only when behavior improves without tool-call or token regression", () => {
@@ -117,8 +117,8 @@ describe("inherent capability benchmark", () => {
 		});
 		const inherent = summary("runtime");
 		const traces = Array.from({ length: 3 }, () => [
-			{ taskId: "typescript-execution", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
-			{ taskId: "runtime-debugging", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "jvm-dependencies", facts: { firstCapabilityTool: "jvm_deps" as const, coreSkillLoads: 0 } },
 		]).flat();
 		const analysis = analyzeInherentBenchmark(legacy, inherent, traces);
 		expect(analysis.verdict).toBe("pass");
@@ -137,7 +137,7 @@ describe("inherent capability benchmark", () => {
 			inputTokens: [130, 130, 140, 140, 150, 150],
 		});
 		const analysis = analyzeInherentBenchmark(legacy, inherent, [
-			{ taskId: "typescript-execution", facts: { firstExecutionTool: "bash", coreSkillLoads: 1 } },
+			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "bash", coreSkillLoads: 1 } },
 		]);
 		expect(analysis.verdict).toBe("fail");
 		expect(analysis.reasons).toEqual([
@@ -154,8 +154,8 @@ describe("inherent capability benchmark", () => {
 		const inherent = summary("runtime");
 		inherent.runtimeTrials -= 1;
 		const traces = Array.from({ length: 3 }, () => [
-			{ taskId: "typescript-execution", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
-			{ taskId: "runtime-debugging", facts: { firstExecutionTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "jvm-dependencies", facts: { firstCapabilityTool: "jvm_deps" as const, coreSkillLoads: 0 } },
 		]).flat();
 		const analysis = analyzeInherentBenchmark(undefined, inherent, traces);
 		expect(analysis.verdict).toBe("fail");
