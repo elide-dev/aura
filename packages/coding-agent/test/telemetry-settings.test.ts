@@ -231,7 +231,9 @@ describe("telemetry destination fallback tiers", () => {
 		expect(resolveExporterConfig("trace", settings, { AURA_TELEMETRY_URL: AURA_URL }).url).toBe(
 			`${AURA_URL}/v1/traces`,
 		);
-		expect(resolveTelemetryEnv(settings, { AURA_TELEMETRY_URL: AURA_URL }).OTEL_EXPORTER_OTLP_ENDPOINT).toBe(AURA_URL);
+		expect(resolveTelemetryEnv(settings, { AURA_TELEMETRY_URL: AURA_URL }).OTEL_EXPORTER_OTLP_ENDPOINT).toBe(
+			AURA_URL,
+		);
 		// Domain derivation is an Aura tier too.
 		expect(resolveExporterConfig("trace", settings, { AURA_DOMAIN: "aura.example" }).url).toBe(
 			"https://telemetry.aura.example/v1/traces",
