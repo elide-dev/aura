@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { logger } from "@oh-my-pi/pi-utils";
-import { resolveExporterConfig, resolveTelemetryEnv } from "../src/telemetry/init";
+import {
+	BUILTIN_TELEMETRY_ENDPOINT,
+	BUILTIN_TELEMETRY_HEADERS,
+	resolveExporterConfig,
+	resolveTelemetryEnv,
+} from "../src/telemetry/init";
 
 function fakeSettings(values: Record<string, unknown>) {
 	return { get: (path: string) => values[path] } as never;
@@ -140,7 +145,7 @@ describe("settings-driven OTLP exporter config", () => {
 		).toBeUndefined();
 	});
 
-	it("contributes nothing when telemetry is disabled or unconfigured", () => {
+	it("contributes nothing with no settings instance or with telemetry switched off", () => {
 		expect(resolveExporterConfig("trace", undefined, {})).toEqual({});
 		expect(
 			resolveExporterConfig(
@@ -149,9 +154,124 @@ describe("settings-driven OTLP exporter config", () => {
 				{},
 			),
 		).toEqual({});
+		// `telemetry.enabled: false` also switches the built-in destination off:
+		// the master switch gates every settings-side tier, not just the endpoint.
+		expect(resolveExporterConfig("trace", fakeSettings({ "telemetry.enabled": false }), {})).toEqual({});
+	});
+
+	it("holds headers back when the user configured headers but no destination", () => {
+		// Headers with nothing to attach them to is an incomplete configuration,
+		// not a request to send the user's credential to the built-in stack. The
+		// built-in tier declines rather than pairing a foreign header with it.
 		expect(
-			resolveExporterConfig("trace", fakeSettings({ "telemetry.enabled": true, "telemetry.headers": {} }), {}),
+			resolveExporterConfig(
+				"trace",
+				fakeSettings({ "telemetry.enabled": true, "telemetry.headers": { "x-api-key": "k" } }),
+				{},
+			),
 		).toEqual({});
+	});
+});
+
+/**
+ * Destination tiers below the OTEL env vars.
+ *
+ * Order under test, highest first: `OTEL_EXPORTER_OTLP_*` → explicit
+ * `telemetry.endpoint` → Aura (`AURA_TELEMETRY_URL`/`AURA_DOMAIN`, gated by
+ * `cloud.telemetry.enabled`) → the built-in team Grafana Cloud stack.
+ *
+ * Endpoint and headers of a fallback tier are atomic: the built-in credential
+ * must never ride along with any endpoint other than the built-in one.
+ */
+describe("telemetry destination fallback tiers", () => {
+	const AURA_URL = "https://telemetry.aura.example/otlp";
+
+	it("falls back to the built-in Grafana destination when nothing is configured", () => {
+		const settings = fakeSettings({ "telemetry.enabled": true });
+		expect(resolveExporterConfig("trace", settings, {}).url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
+		expect(resolveExporterConfig("log", settings, {}).url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/logs`);
+		expect(resolveExporterConfig("metric", settings, {}).url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/metrics`);
+		// The credential travels with it, or the endpoint is useless.
+		const headers = resolveExporterConfig("trace", settings, {}).headers;
+		expect(headers?.Authorization).toBe(BUILTIN_TELEMETRY_HEADERS.Authorization);
+		expect(headers?.Authorization?.startsWith("Basic ")).toBe(true);
+		// And the gating view activates the signals, exactly as a settings endpoint would.
+		expect(resolveTelemetryEnv(settings, {}).OTEL_EXPORTER_OTLP_ENDPOINT).toBe(BUILTIN_TELEMETRY_ENDPOINT);
+	});
+
+	it("keeps an explicit telemetry.endpoint above the built-in destination", () => {
+		const settings = fakeSettings({ "telemetry.enabled": true, "telemetry.endpoint": "http://otel.internal:4318" });
+		const config = resolveExporterConfig("trace", settings, {});
+		expect(config.url).toBe("http://otel.internal:4318/v1/traces");
+		expect(config.headers).toBeUndefined();
+		expect(resolveTelemetryEnv(settings, {}).OTEL_EXPORTER_OTLP_ENDPOINT).toBe("http://otel.internal:4318");
+	});
+
+	it("keeps OTEL env above both, and never lends it the built-in credential", () => {
+		const settings = fakeSettings({ "telemetry.enabled": true });
+		const generic = resolveExporterConfig("trace", settings, { OTEL_EXPORTER_OTLP_ENDPOINT: "http://env:4318" });
+		expect(generic.url).toBeUndefined(); // exporter reads env itself
+		expect(generic.headers).toBeUndefined();
+
+		const perSignal = resolveExporterConfig("trace", settings, {
+			OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://env:4318/v1/traces",
+		});
+		expect(perSignal.url).toBeUndefined();
+		expect(perSignal.headers).toBeUndefined();
+		// The env view reports the env endpoint, not the built-in one.
+		expect(
+			resolveTelemetryEnv(settings, { OTEL_EXPORTER_OTLP_ENDPOINT: "http://env:4318" }).OTEL_EXPORTER_OTLP_ENDPOINT,
+		).toBe("http://env:4318");
+	});
+
+	it("cuts over to the Aura tier over the built-in destination", () => {
+		// The whole point of the built-in being the LOWEST tier: the day the Aura
+		// relay is configured, it takes over with no further edit.
+		const settings = fakeSettings({ "telemetry.enabled": true, "cloud.telemetry.enabled": true });
+		expect(resolveExporterConfig("trace", settings, { AURA_TELEMETRY_URL: AURA_URL }).url).toBe(
+			`${AURA_URL}/v1/traces`,
+		);
+		expect(resolveTelemetryEnv(settings, { AURA_TELEMETRY_URL: AURA_URL }).OTEL_EXPORTER_OTLP_ENDPOINT).toBe(AURA_URL);
+		// Domain derivation is an Aura tier too.
+		expect(resolveExporterConfig("trace", settings, { AURA_DOMAIN: "aura.example" }).url).toBe(
+			"https://telemetry.aura.example/v1/traces",
+		);
+	});
+
+	it("never sends the built-in credential to an Aura endpoint", () => {
+		const settings = fakeSettings({ "telemetry.enabled": true, "cloud.telemetry.enabled": true });
+		for (const env of [{ AURA_TELEMETRY_URL: AURA_URL }, { AURA_DOMAIN: "aura.example" }]) {
+			const config = resolveExporterConfig("trace", settings, env);
+			expect(config.url).not.toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
+			expect(config.headers ?? {}).not.toHaveProperty("Authorization");
+			expect(JSON.stringify(config)).not.toContain(BUILTIN_TELEMETRY_HEADERS.Authorization);
+		}
+	});
+
+	it("keeps the built-in destination while cloud.telemetry.enabled is off", () => {
+		// Today's default. The Aura endpoint is present in env but the switch is
+		// off, so the Aura tier is absent and the built-in applies.
+		const settings = fakeSettings({ "telemetry.enabled": true });
+		const config = resolveExporterConfig("trace", settings, { AURA_TELEMETRY_URL: AURA_URL });
+		expect(config.url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
+		expect(config.headers?.Authorization).toBe(BUILTIN_TELEMETRY_HEADERS.Authorization);
+	});
+
+	it("keeps the built-in destination when an Aura variable is malformed", () => {
+		// Telemetry must never take startup down, and a rejected Aura tier is not
+		// a licence to invent one — the next tier down applies.
+		const settings = fakeSettings({ "telemetry.enabled": true, "cloud.telemetry.enabled": true });
+		const config = resolveExporterConfig("trace", settings, { AURA_TELEMETRY_URL: "not a url" });
+		expect(config.url).toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
+	});
+
+	it("keeps explicit user headers with an explicit user endpoint only", () => {
+		const settings = fakeSettings({
+			"telemetry.enabled": true,
+			"telemetry.endpoint": "http://otel.internal:4318",
+			"telemetry.headers": { "x-api-key": "k" },
+		});
+		expect(resolveExporterConfig("trace", settings, {}).headers).toEqual({ "x-api-key": "k" });
 	});
 });
 

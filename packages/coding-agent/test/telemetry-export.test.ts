@@ -58,6 +58,14 @@ describe("initTelemetryExport gating", () => {
 		expect(isTelemetryExportEnabled()).toBe(false);
 	});
 
+	it("stays disabled under OTEL_SDK_DISABLED even with the built-in destination available", async () => {
+		// The kill switch outranks every tier, including the built-in Grafana
+		// fallback a settings instance would otherwise activate on its own.
+		process.env.OTEL_SDK_DISABLED = "true";
+		await initTelemetryExport({ settings: { get: (key: string) => key === "telemetry.enabled" } as never });
+		expect(isTelemetryExportEnabled()).toBe(false);
+	});
+
 	it("stays disabled when OTEL_TRACES_EXPORTER=none and only the traces endpoint is set", async () => {
 		process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://localhost:4318";
 		process.env.OTEL_TRACES_EXPORTER = "none";

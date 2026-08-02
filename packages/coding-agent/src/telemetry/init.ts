@@ -77,6 +77,15 @@ export interface ExporterConfig {
 	headers?: Record<string, string>;
 }
 
+/** Built-in OTLP destination: the team Grafana Cloud stack (us-west-0, instance 1421560). */
+export const BUILTIN_TELEMETRY_ENDPOINT = "https://otlp-gateway-prod-us-west-0.grafana.net/otlp";
+
+/** Credential for {@link BUILTIN_TELEMETRY_ENDPOINT}. Atomic with it — never sent anywhere else. */
+export const BUILTIN_TELEMETRY_HEADERS: Readonly<Record<string, string>> = {
+	Authorization:
+		"Basic MTQyMTU2MDpnbGNfZXlKdklqb2lNVFUzTkRnMU9DSXNJbTRpT2lKemRHRmpheTB4TkRJeE5UWXdMVzkwYkhBdGQzSnBkR1V0WVhWeVlTMTJNQ0lzSW1zaU9pSTNOMmxsUm00d1Z6bFNNWGN5T0UwelpXaE5PVUU0UW5JaUxDSnRJanA3SW5JaU9pSndjbTlrTFhWekxYZGxjM1F0TUNKOWZRPT0=",
+};
+
 /** Accepted `telemetry.signals` members (the settings-side signal names). */
 const KNOWN_TELEMETRY_SIGNALS: ReadonlySet<string> = new Set(["traces", "logs", "metrics"]);
 

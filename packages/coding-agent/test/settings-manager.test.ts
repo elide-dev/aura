@@ -456,18 +456,24 @@ describe("Settings", () => {
 			expect(settings.get("cloud.gateway.enabled")).toBe(false);
 		});
 
-		it("embeds no endpoint default for telemetry, Auto QA, collab or share", async () => {
+		it("embeds no endpoint default for Auto QA, collab or share", async () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			for (const path of [
-				"telemetry.endpoint",
-				"dev.autoqaPush.endpoint",
-				"collab.relayUrl",
-				"share.serverUrl",
-			] as const) {
+			for (const path of ["dev.autoqaPush.endpoint", "collab.relayUrl", "share.serverUrl"] as const) {
 				expect({ path, value: settings.get(path) }).toEqual({ path, value: "" });
 				expect({ path, value: getDefault(path) }).toEqual({ path, value: "" });
 			}
-			// And no embedded shared credential riding along with the telemetry endpoint.
+		});
+
+		it("keeps the telemetry settings empty even though telemetry has a built-in destination", async () => {
+			// Telemetry is the one surface with a built-in fallback: unconfigured
+			// export goes to the team Grafana Cloud stack. That destination lives in
+			// `telemetry/init.ts` as the LOWEST resolution tier, deliberately *not*
+			// as a settings default — a populated default would be indistinguishable
+			// from a user-set value and would outrank the Aura tiers, so the relay
+			// could never take over. These two must therefore stay empty.
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("telemetry.endpoint")).toBe("");
+			expect(getDefault("telemetry.endpoint")).toBe("");
 			expect(settings.get("telemetry.headers")).toEqual({});
 			expect(getDefault("telemetry.headers")).toEqual({});
 		});
