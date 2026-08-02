@@ -188,6 +188,8 @@ export interface RecordedRequest {
 	readonly redirect: string | undefined;
 	readonly form: URLSearchParams | undefined;
 	readonly json: unknown;
+	/** The signal the client passed, so a test can observe whether it cancelled the call. */
+	readonly signal: AbortSignal | undefined;
 }
 
 export type RouteHandler = (request: RecordedRequest) => Response | Promise<Response>;
@@ -265,6 +267,7 @@ export class FakeAuthServer {
 			redirect: init.redirect,
 			form,
 			json,
+			signal: init.signal ?? undefined,
 		};
 		this.requests.push(record);
 		if (init.signal?.aborted) throw new DOMException("aborted", "AbortError");

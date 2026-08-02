@@ -190,8 +190,8 @@ export interface AuraAuthRequestInput {
 	readonly json?: unknown;
 	readonly form?: URLSearchParams;
 	readonly signal?: AbortSignal;
-	/** Invoked the instant a response — any status — arrives. */
-	readonly onResponse?: () => void;
+	/** Invoked with the status the instant a response — any status — arrives. */
+	readonly onResponse?: (status: number) => void;
 }
 
 /**
@@ -213,7 +213,7 @@ export async function auraAuthRequest(input: AuraAuthRequestInput): Promise<Aura
 	const init: RequestInit = { method: input.method ?? (body === undefined ? "GET" : "POST"), headers };
 	if (body !== undefined) init.body = body;
 	const response = await auraTransport(input.fetch, input.url, init, input.signal);
-	input.onResponse?.();
+	input.onResponse?.(response.status);
 	await guardRedirect(response, input.url);
 	return { status: response.status, body: await readCappedJson(response, input.url) };
 }
@@ -530,17 +530,30 @@ export class AuraAuthKeys implements AuraKeyResolver {
 		kid: string,
 		options: { forceRefresh?: boolean; signal?: AbortSignal } = {},
 	): Promise<CryptoKey | undefined> {
-		if (options.forceRefresh) this.#cache = undefined;
+		const fresh = options.forceRefresh === true;
 		const cached = this.#cache;
-		if (cached && this.#now() - cached.fetchedAtMs < AURA_JWKS_CACHE_MS) return cached.keys.get(kid);
-		const loaded = await this.#load(options.signal);
+		// The cache is *not* dropped up front on a forced refresh: a transient JWKS or metadata
+		// failure would otherwise throw away a perfectly good key set and take every subsequent
+		// verification down with it. It is replaced only by a load that actually succeeded.
+		if (!fresh && cached && this.#now() - cached.fetchedAtMs < AURA_JWKS_CACHE_MS) {
+			return cached.keys.get(kid);
+		}
+		const loaded = await this.#load({ signal: options.signal, fresh });
 		return loaded.keys.get(kid);
 	}
 
-	async #load(signal: AbortSignal | undefined): Promise<KeySet> {
+	async #load(options: { signal: AbortSignal | undefined; fresh: boolean }): Promise<KeySet> {
 		const existing = this.#loading;
-		if (existing) return await existing;
-		const pending = this.#fetchKeySet(signal).finally(() => {
+		if (existing) {
+			// A forced refresh must not be satisfied by a load that began before it was asked for:
+			// joining one would hand back pre-rotation keys and silently consume the verifier's
+			// single retry. Wait for it to settle, then decide again.
+			if (!options.fresh) return await existing;
+			await existing.catch(() => {});
+			const started = this.#loading;
+			if (started) return await started;
+		}
+		const pending = this.#fetchKeySet(options.signal).finally(() => {
 			this.#loading = undefined;
 		});
 		this.#loading = pending;
@@ -646,6 +659,21 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+/**
+ * Whether a failed refresh provably left the submitted token unspent.
+ *
+ * `undefined` means no response arrived at all. A rejected 3xx carries no grant, and 408/429/5xx
+ * are the server declining to do work. Every other status — including any 2xx that later failed
+ * to parse or verify — is treated as "may have minted a rotation", which is the conservative
+ * side of the only judgement call in this file.
+ */
+function grantCertainlyNotMinted(status: number | undefined): boolean {
+	if (status === undefined) return true;
+	if (status >= 300 && status < 400) return true;
+	if (status === 408 || status === 429) return true;
+	return status >= 500;
+}
+
 /** Bodies we can hand to `fetch` a second time without having consumed anything. */
 function isReplayableBody(body: RequestInit["body"]): boolean {
 	if (body === undefined || body === null) return true;
@@ -746,8 +774,16 @@ export class TokenManager implements AuraAccessTokenProvider {
 		}
 		const control = this.#control;
 		const pending = this.#inflight;
-		if (!signal || !control) return pending;
+		if (!control) return pending;
+		// Every joined caller is counted, signalled or not. Counting only the signalled ones would
+		// let a single aborting caller satisfy "everyone left" and cancel the shared network call
+		// out from under callers who never asked for cancellation.
 		control.callers += 1;
+		if (!signal) {
+			return pending.finally(() => {
+				control.callers -= 1;
+			});
+		}
 		return new Promise<AuraAccessToken>((resolve, rejectJoin) => {
 			const onAbort = () => {
 				control.aborted += 1;
@@ -798,10 +834,16 @@ export class TokenManager implements AuraAccessTokenProvider {
 		const owner = this.#owner;
 		const url = `${issuer}/token`;
 		const renew = setInterval(() => {
-			this.#store.renewRefreshLease(issuer, owner);
+			// A store closed by a concurrent shutdown must not turn lease renewal into an uncaught
+			// exception on the timer queue; losing the lease is already a handled outcome.
+			try {
+				this.#store.renewRefreshLease(issuer, owner);
+			} catch {
+				// Ignored deliberately: the commit re-checks ownership before it writes.
+			}
 		}, 10_000);
 		(renew as unknown as { unref?: () => void }).unref?.();
-		let responded = false;
+		let status: number | undefined;
 		try {
 			// Written before the request leaves: a crash between the server consuming this token
 			// and the local commit must be detectable by the next process.
@@ -811,23 +853,15 @@ export class TokenManager implements AuraAccessTokenProvider {
 				client: "cli",
 				refresh_token: lease.refreshToken,
 			});
-			let result: AuraAuthResponse;
-			try {
-				result = await auraAuthRequest({
-					fetch: this.#fetch,
-					url,
-					form,
-					signal,
-					onResponse: () => {
-						responded = true;
-					},
-				});
-			} catch (error) {
-				// Only when we know nothing reached the server may the marker be cleared. A 3xx or
-				// an oversized body counts as a response: the token may already be consumed.
-				if (!responded) this.#store.abandonRefreshAttempt(issuer, owner);
-				throw error;
-			}
+			const result = await auraAuthRequest({
+				fetch: this.#fetch,
+				url,
+				form,
+				signal,
+				onResponse: responseStatus => {
+					status = responseStatus;
+				},
+			});
 			const grant = readGrant(result, url);
 			const verified = await verifyAuraToken(
 				grant.accessToken,
@@ -865,6 +899,16 @@ export class TokenManager implements AuraAccessTokenProvider {
 				case "device_mismatch":
 					throw new AuraCloudError("relogin_required");
 			}
+		} catch (error) {
+			// The in-flight marker exists to catch a crash between the server minting a rotation
+			// and this process committing it — so it may only be cleared when the failure proves
+			// no rotation was minted. A 429/5xx/rejected-3xx (and a request that never got a
+			// response at all) provably minted nothing, and stranding the login on one of those
+			// would turn a transient blip into a forced re-login. Anything else — above all a 2xx
+			// whose token failed verification — keeps the marker, because the submitted refresh
+			// token may already be spent.
+			if (grantCertainlyNotMinted(status)) this.#store.abandonRefreshAttempt(issuer, owner);
+			throw error;
 		} finally {
 			clearInterval(renew);
 			this.#store.releaseRefreshLease(issuer, owner);

@@ -691,18 +691,24 @@ describe("logout", () => {
 	});
 
 	for (const status of [301, 302, 307, 308]) {
-		test(`maps a ${status} on revoke to invalid_response and keeps the grant`, async () => {
-			const h = await signedIn();
-			const receiver = `${FOREIGN_ORIGIN}/revoke`;
-			let received = 0;
-			h.server.route(REVOKE_URL, () => h.server.redirectResponse(status, receiver));
-			h.server.route(receiver, () => {
-				received += 1;
-				return jsonResponse({});
+		for (const [label, receiver] of [
+			["same-origin", `${AUTH_ORIGIN}/revoke2`],
+			["cross-origin", `${FOREIGN_ORIGIN}/revoke`],
+		] as const) {
+			test(`maps a ${status} on revoke to a ${label} receiver, keeping the grant`, async () => {
+				const h = await signedIn();
+				let received = 0;
+				h.server.route(REVOKE_URL, () => h.server.redirectResponse(status, receiver));
+				h.server.route(receiver, () => {
+					received += 1;
+					return jsonResponse({});
+				});
+				await expectCloudError(h.client.logout(), "invalid_response");
+				expect(received).toBe(0);
+				expect(h.server.countFor(receiver)).toBe(0);
+				expect(h.server.canceledBodies).toBe(1);
+				expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-1");
 			});
-			await expectCloudError(h.client.logout(), "invalid_response");
-			expect(received).toBe(0);
-			expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-1");
-		});
+		}
 	}
 });

@@ -518,6 +518,42 @@ describe("auth metadata and JWKS", () => {
 		expect(server.countFor(JWKS_URL)).toBe(2);
 	});
 
+	test("a failed forced refresh keeps the previously cached keys usable", async () => {
+		const { server, keys } = keysHarness();
+		expect(await keys.resolve(key.kid)).toBeDefined();
+		server.route(METADATA_URL, () => jsonResponse({ error: "boom" }, 500));
+		await expectCloudError(keys.resolve(key.kid, { forceRefresh: true }), "invalid_response");
+		// The good key set survives the blip: verification keeps working without a new fetch.
+		expect(await keys.resolve(key.kid)).toBeDefined();
+		expect(server.countFor(JWKS_URL)).toBe(1);
+		expect(server.countFor(METADATA_URL)).toBe(2);
+	});
+
+	test("a forced refresh never joins a load that started before it was asked for", async () => {
+		const { server, keys } = keysHarness();
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		let jwksCalls = 0;
+		server.route(JWKS_URL, async () => {
+			jwksCalls += 1;
+			if (jwksCalls === 1) {
+				// The pre-rotation key set, still in flight when the forced refresh is requested.
+				await gate;
+				return jsonResponse(jwksFor(key));
+			}
+			return jsonResponse(jwksFor(key, otherKey));
+		});
+		const pending = keys.resolve(key.kid);
+		const forced = keys.resolve(otherKey.kid, { forceRefresh: true });
+		release?.();
+		expect(await pending).toBeDefined();
+		// Joining the in-flight load would have returned undefined and burned the one retry.
+		expect(await forced).toBeDefined();
+		expect(server.countFor(JWKS_URL)).toBe(2);
+	});
+
 	test("rejects metadata whose issuer is not the configured auth origin", async () => {
 		const { server, keys } = keysHarness({ metadata: { issuer: "https://auth.evil.example", jwks_uri: JWKS_URL } });
 		await expectCloudError(keys.resolve(key.kid), "invalid_response");
@@ -723,14 +759,15 @@ describe("TokenManager access tokens", () => {
 	});
 
 	// The store-level test can only prove the store hands back the committed value. This is the
-	// manager-level half: a manager that has already run one refresh must still submit the value
-	// another process rotated to, not the one it last saw.
+	// manager-level half, and it is deliberately stronger than "nothing is cached at
+	// construction": `early` performs a real refresh *first*, so it has held a refresh token and
+	// rotated it, and only then does another process rotate again. If any refresh value survived
+	// on the manager object, `early`'s second refresh would resubmit the one it minted rather
+	// than the one the other process committed.
 	test("never refreshes from an object-cached refresh token", async () => {
 		await seedLogin(store, "refresh-1");
 		const clock = fakeClock(T0);
 		const early = managerHarness({ clock });
-		// Constructed, and made to observe the current state, before anyone rotates.
-		expect(early.manager.getCachedIdentity()?.userId).toBe(USER);
 
 		const otherStore = await AuraTokenStore.open(dbPath);
 		try {
@@ -750,16 +787,126 @@ describe("TokenManager access tokens", () => {
 					});
 				});
 			}
-			// The other process rotates refresh-1 -> refresh-2.
-			await late.manager.getAccessToken();
-			expect(ledger).toEqual(["refresh-1"]);
-			// The manager constructed beforehand must submit refresh-2, never refresh-1 again.
+			// 1. This manager rotates refresh-1 -> refresh-2 itself, so it has just seen both.
 			await early.manager.getAccessToken();
+			expect(ledger).toEqual(["refresh-1"]);
+			// 2. The other process rotates refresh-2 -> refresh-3 behind its back.
+			await late.manager.getAccessToken();
 			expect(ledger).toEqual(["refresh-1", "refresh-2"]);
-			expect(ledger.filter(value => value === "refresh-1").length).toBe(1);
+			// 3. It must now submit refresh-3, not the refresh-2 it minted a moment ago.
+			await early.manager.getAccessToken({ forceRefresh: true });
+			expect(ledger).toEqual(["refresh-1", "refresh-2", "refresh-3"]);
+			expect(new Set(ledger).size).toBe(3);
 		} finally {
 			otherStore.close();
 		}
+	});
+
+	// A failure that provably minted no grant must not strand the login. The in-flight marker
+	// exists to catch a crash between the server consuming a refresh token and the local commit;
+	// a 429, a 5xx or a rejected redirect never reached that state.
+	for (const [label, failure, code] of [
+		["a 503", () => jsonResponse({ error: "server_error" }, 503), "unavailable"],
+		["a 429", () => jsonResponse({ error: "slow_down" }, 429), "rate_limited"],
+		[
+			"a rejected redirect",
+			(h: ManagerHarness) => h.server.redirectResponse(302, `${FOREIGN_ORIGIN}/x`),
+			"invalid_response",
+		],
+	] as [string, (h: ManagerHarness) => Response, string][]) {
+		test(`recovers from ${label}: the grant stays refreshable`, async () => {
+			await seedLogin(store, "refresh-1");
+			const h = managerHarness();
+			let calls = 0;
+			h.server.route(TOKEN_URL, async request => {
+				calls += 1;
+				h.submitted.push(request.form?.get("refresh_token") ?? "");
+				if (calls === 1) return failure(h);
+				return jsonResponse({
+					access_token: await mintToken(key, userClaims({ ...ids(), nowMs: h.clock.now() })),
+					refresh_token: "refresh-2",
+					token_type: "Bearer",
+					expires_in: 600,
+				});
+			});
+			await expectCloudError(h.manager.getAccessToken(), code);
+			expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-1");
+			// The very next attempt must reach the network again, not fail locally.
+			const token = await h.manager.getAccessToken();
+			expect(token.value).toBeTruthy();
+			expect(h.submitted).toEqual(["refresh-1", "refresh-1"]);
+			expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-2");
+		});
+	}
+
+	// The other half of the same rule: a 2xx that failed verification *may* have minted a grant,
+	// so the marker is deliberately kept and the account requires a fresh login.
+	test("a grant that fails verification is not retried, it requires a new login", async () => {
+		await seedLogin(store, "refresh-1");
+		const h = managerHarness();
+		h.server.route(TOKEN_URL, async () =>
+			jsonResponse({
+				access_token: await mintToken(
+					key,
+					userClaims({ ...ids(), deviceId: ulid("DEVCE9"), nowMs: h.clock.now() }),
+				),
+				refresh_token: "refresh-2",
+				expires_in: 600,
+			}),
+		);
+		await expectCloudError(h.manager.getAccessToken(), "invalid_response");
+		await expectCloudError(h.manager.getAccessToken(), "relogin_required");
+		expect(h.server.countFor(TOKEN_URL)).toBe(1);
+		expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-1");
+	});
+
+	test("one caller's abort never cancels a refresh another caller is waiting on", async () => {
+		await seedLogin(store, "refresh-1");
+		const h = managerHarness();
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		h.server.route(TOKEN_URL, async request => {
+			h.submitted.push(request.form?.get("refresh_token") ?? "");
+			await gate;
+			return jsonResponse({
+				access_token: await mintToken(key, userClaims({ ...ids(), nowMs: h.clock.now() })),
+				refresh_token: "refresh-2",
+				token_type: "Bearer",
+				expires_in: 600,
+			});
+		});
+		const controller = new AbortController();
+		const unsignalled = h.manager.getAccessToken();
+		const signalled = h.manager.getAccessToken({ signal: controller.signal });
+		controller.abort();
+		await expectCloudError(signalled, "aborted");
+		release?.();
+		const token = await unsignalled;
+		expect(token.value).toBeTruthy();
+		expect(h.server.countFor(TOKEN_URL)).toBe(1);
+		expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-2");
+	});
+
+	test("the shared refresh is cancelled only once every joined caller has abandoned it", async () => {
+		await seedLogin(store, "refresh-1");
+		const h = managerHarness();
+		const gate = new Promise<void>(() => {});
+		h.server.route(TOKEN_URL, async () => {
+			await gate;
+			return jsonResponse({});
+		});
+		const first = new AbortController();
+		const second = new AbortController();
+		const a = h.manager.getAccessToken({ signal: first.signal });
+		const b = h.manager.getAccessToken({ signal: second.signal });
+		first.abort();
+		await expectCloudError(a, "aborted");
+		expect(h.server.requestsFor(TOKEN_URL)[0]!.signal?.aborted).toBe(false);
+		second.abort();
+		await expectCloudError(b, "aborted");
+		expect(h.server.requestsFor(TOKEN_URL)[0]!.signal?.aborted).toBe(true);
 	});
 
 	test("requires a login when no auth row exists", async () => {
