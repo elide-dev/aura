@@ -375,7 +375,10 @@ git commit -m "feat(runtime): host embedded ABI in workers"
 **Files:**
 - Create: `packages/coding-agent/src/runtime/transport/embedded.ts`
 - Create: `packages/coding-agent/src/runtime/transport/selected.ts`
+- Modify: `packages/coding-agent/src/runtime/embedded/worker-protocol.ts`
+- Modify: `packages/coding-agent/src/runtime/embedded/worker-core.ts`
 - Modify: `packages/coding-agent/src/runtime/service.ts`
+- Modify: `packages/coding-agent/src/cli/runtime-cli.ts`
 - Modify: `packages/coding-agent/src/runtime/index.ts`
 - Modify: `packages/coding-agent/src/sdk.ts:1616-1670,3100+`
 - Modify: `packages/coding-agent/src/session/agent-session-types.ts`
@@ -384,6 +387,8 @@ git commit -m "feat(runtime): host embedded ABI in workers"
 - Test: `packages/coding-agent/test/runtime-service.test.ts`
 - Test: `packages/coding-agent/test/runtime-singleton.test.ts`
 - Create: `packages/coding-agent/test/runtime-session-lifecycle.test.ts`
+- Modify: `packages/coding-agent/test/runtime-settings-wiring.test.ts`
+- Modify: `packages/coding-agent/test/runtime-cli.test.ts`
 - Modify: `docs/aura/FORK.md`
 
 Extend endpoint lifecycle without changing tool callsites:
@@ -452,7 +457,7 @@ Assert only the main session invokes runtime cleanup, cleanup is idempotent, the
 
 ```bash
 cd packages/coding-agent
-bun test test/runtime-embedded-endpoint.test.ts test/runtime-service.test.ts test/runtime-singleton.test.ts test/runtime-session-lifecycle.test.ts
+bun test test/runtime-embedded-endpoint.test.ts test/runtime-service.test.ts test/runtime-singleton.test.ts test/runtime-session-lifecycle.test.ts test/runtime-settings-wiring.test.ts test/runtime-cli.test.ts
 ```
 
 Keep the lifecycle case in the fork-added runtime test; do not modify an unrelated upstream AgentSession test file.
@@ -465,10 +470,10 @@ Keep `RuntimeService.run/check/build/...` signatures unchanged. Update `sdk.ts` 
 
 ```bash
 cd packages/coding-agent
-bun test test/runtime-embedded-endpoint.test.ts test/runtime-service.test.ts test/runtime-singleton.test.ts test/runtime-session-lifecycle.test.ts
+bun test test/runtime-embedded-endpoint.test.ts test/runtime-service.test.ts test/runtime-singleton.test.ts test/runtime-session-lifecycle.test.ts test/runtime-settings-wiring.test.ts test/runtime-cli.test.ts
 cd ../..
 bun run check:ts
-git add packages/coding-agent/src/runtime packages/coding-agent/src/sdk.ts packages/coding-agent/src/session/agent-session-types.ts packages/coding-agent/src/session/agent-session.ts packages/coding-agent/test/runtime-embedded-endpoint.test.ts packages/coding-agent/test/runtime-service.test.ts packages/coding-agent/test/runtime-singleton.test.ts packages/coding-agent/test/runtime-session-lifecycle.test.ts docs/aura/FORK.md
+git add packages/coding-agent/src/runtime packages/coding-agent/src/cli/runtime-cli.ts packages/coding-agent/src/sdk.ts packages/coding-agent/src/session/agent-session-types.ts packages/coding-agent/src/session/agent-session.ts packages/coding-agent/test/runtime-embedded-endpoint.test.ts packages/coding-agent/test/runtime-service.test.ts packages/coding-agent/test/runtime-singleton.test.ts packages/coding-agent/test/runtime-session-lifecycle.test.ts packages/coding-agent/test/runtime-settings-wiring.test.ts packages/coding-agent/test/runtime-cli.test.ts docs/aura/FORK.md
 git commit -m "feat(runtime): route run through embedded adapter"
 ```
 
@@ -482,6 +487,11 @@ Stage only tests touched by this task; do not use a broad `git add packages/codi
 - Modify: `packages/coding-agent/test/runtime-integration.test.ts`
 - Create: `packages/coding-agent/test/runtime-embedded-integration.test.ts`
 - Modify: CLI smoke tests as needed
+- Modify: `packages/coding-agent/src/runtime/embedded/worker-protocol.ts`
+- Modify: `packages/coding-agent/src/runtime/embedded/worker-core.ts`
+- Modify: `packages/coding-agent/src/runtime/embedded/worker-entry.ts`
+- Modify: `packages/coding-agent/src/runtime/embedded/control-worker-entry.ts`
+- Modify: `docs/aura/FORK.md`
 
 Gate real tests on:
 
@@ -504,7 +514,7 @@ Required real tests:
 9. Explicit embedded with a missing path returns embedded-library guidance and does not spawn the process binary.
 10. Java/Kotlin run and `check` still route to the process adapter while embedded is selected.
 
-- [ ] **Step 1: Add tests and run against WHIPLASH**
+- [x] **Step 1: Add tests and run against WHIPLASH**
 
 ```bash
 cd /home/sam/workspace/labs/BREAKDANCE/packages/coding-agent
@@ -512,18 +522,24 @@ AURA_RUNTIME_EMBEDDED_LIB=/home/sam/workspace/labs/WHIPLASH/.dev/artifacts/dist/
   bun test --timeout 120000 test/runtime-embedded-integration.test.ts test/runtime-integration.test.ts
 ```
 
-- [ ] **Step 2: Run the actual CLI path**
+Observed against the packaged WHIPLASH distribution: 29 tests passed with 97 assertions, covering the ten required cases plus real timeout, FIFO, and process/embedded concurrency.
+
+- [x] **Step 2: Run the actual CLI path**
 
 Use a temporary settings file/profile with `runtime.adapter: embedded` and the explicit library path, then invoke the source CLI's `run` tool through the existing smoke harness. Do not invoke the runtime binary directly as the proof.
 
-- [ ] **Step 3: Run compiled-worker smoke**
+An isolated mock-provider profile exercised the source CLI's real `run` tool; the second provider turn validated the embedded tool result before completing.
+
+- [x] **Step 3: Run compiled-worker smoke**
 
 Build the coding-agent package using the project build command, run `aura --smoke-test`, then repeat one embedded JS run from that built entrypoint. This verifies worker-host re-entry and bundle module inclusion.
 
-- [ ] **Step 4: Commit**
+The compiled CLI passed `--smoke-test`, reported the embedded ABI/schema/path from `runtime status`, and completed the same real `run`-tool flow. Direct Worker fallback entries now use explicit centralized argv selectors because Bun does not set `import.meta.main` for those Workers.
+
+- [x] **Step 4: Commit**
 
 ```bash
-git add packages/coding-agent/test/runtime-embedded-integration.test.ts packages/coding-agent/test/runtime-integration.test.ts
+git add docs/aura/FORK.md packages/coding-agent/src/runtime/embedded/control-worker-entry.ts packages/coding-agent/src/runtime/embedded/worker-core.ts packages/coding-agent/src/runtime/embedded/worker-entry.ts packages/coding-agent/src/runtime/embedded/worker-protocol.ts packages/coding-agent/test/runtime-embedded-integration.test.ts packages/coding-agent/test/runtime-integration.test.ts
 git commit -m "test(runtime): cover embedded adapter end to end"
 ```
 
@@ -542,9 +558,12 @@ Keep the existing capability A/B benchmark intact. Add a separate adapter microb
 ```ts
 export interface AdapterMicroResult {
 	name: string;
-	processMs: number;
-	embeddedMs: number;
-	speedup: number; // processMs / embeddedMs
+	processMs: number | null; // p50; null for embedded-only cold open
+	processP95Ms: number | null;
+	embeddedMs: number; // p50
+	embeddedP95Ms: number;
+	speedup: number | null; // process p50 / embedded p50
+	p95Speedup: number | null;
 }
 ```
 
@@ -589,20 +608,22 @@ Decision gate before changing rollout default in any later work:
 
 This plan does **not** change the default from `process`, even if results exceed the gate.
 
-- [ ] **Step 1: Write formatter/measurement tests first**
+- [x] **Step 1: Write formatter/measurement tests first**
 
 Use deterministic fake operations. Assert alternating order, output validation before sample acceptance, speedup math, and report headings.
 
-- [ ] **Step 2: Implement benchmark additions**
+- [x] **Step 2: Implement benchmark additions**
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 ```bash
 cd packages/metaharness
 bun test src/runtime-benchmark.test.ts
 ```
 
-- [ ] **Step 4: Run the real decision benchmark**
+Observed: 12 tests passed with 34 assertions.
+
+- [x] **Step 4: Run the real decision benchmark**
 
 ```bash
 cd /home/sam/workspace/labs/BREAKDANCE
@@ -613,7 +634,9 @@ bun run bench:runtime --micro-only --micro-iterations 30 \
 
 Inspect the generated report under `runs/harbor/_bench/`. Preserve it as run output; do not commit benchmark artifacts unless explicitly requested.
 
-- [ ] **Step 5: Document usage and fork ledger, then commit**
+The 30-iteration run completed in 65.62s and wrote `runtime-embedded-decision-runtime-comparison.md`. Warm JS was 5.14x faster at p50/4.74x at p95; warm TS was 4.66x/2.87x. Warm Python was only 1.08x at p50 and slower at p95 (0.69x); Python compute was also slower (0.91x/0.74x). The rollout gate therefore failed and `process` remains the default.
+
+- [x] **Step 5: Document usage and fork ledger, then commit**
 
 ```bash
 git add packages/metaharness/src/runtime-benchmark.ts packages/metaharness/src/runtime-benchmark.test.ts packages/metaharness/README.md docs/aura/FORK.md
@@ -628,14 +651,15 @@ git commit -m "bench(runtime): compare process and embedded adapters"
 - Modify: `packages/coding-agent/CHANGELOG.md`
 - Modify: `docs/aura/FORK.md` for any upstream files missed above
 - Modify generated protocol only by rerunning the sync script if WHIPLASH schema changed
+- Modify: final-review lifecycle, routing, FFI, session-scope, CLI, benchmark, and regression-test paths enumerated in `task-7-report.md`
 
 This task starts only after the real end-to-end smoke test and benchmark run succeed.
 
-- [ ] **Step 1: Remove scaffolding and debug-only paths**
+- [x] **Step 1: Remove scaffolding and debug-only paths**
 
 Delete temporary fixture switches, unconditional test paths, or duplicate conversion helpers. Keep the Worker `probe` operation because compiled-package smoke uses it. Do not leave process aliases or fallback shims beyond the intentional adapter modes.
 
-- [ ] **Step 2: Add changelog and fork-ledger entries**
+- [x] **Step 2: Add changelog and fork-ledger entries**
 
 Under `packages/coding-agent/CHANGELOG.md` → `## [Unreleased]` → `### Added`:
 
@@ -645,7 +669,7 @@ Under `packages/coding-agent/CHANGELOG.md` → `## [Unreleased]` → `### Added`
 
 Add `packages/coding-agent/CHANGELOG.md` to the upstream-files table in `docs/aura/FORK.md` if it has no existing row. Confirm the Task 4 rows cover both AgentSession files; do not leave “missed file” cleanup implicit.
 
-- [ ] **Step 3: Prove checked-in protocol output matches WHIPLASH**
+- [x] **Step 3: Prove checked-in protocol output matches WHIPLASH**
 
 ```bash
 bun scripts/sync-embedded-runtime-protocol.ts --check --whiplash /home/sam/workspace/labs/WHIPLASH
@@ -653,7 +677,9 @@ bun scripts/sync-embedded-runtime-protocol.ts --check --whiplash /home/sam/works
 
 Expected: exit 0 with no generated drift. On failure, rerun without `--check`, then rerun codec and integration tests.
 
-- [ ] **Step 4: Run focused package gates**
+Observed: 14 generated files matched schema SHA-256 `8a6b5aa3d4fcc72fda099f9df9f519ca3edc89b2527bb864057a530836718e06`.
+
+- [x] **Step 4: Run focused package gates**
 
 ```bash
 cd packages/coding-agent
@@ -671,7 +697,9 @@ AURA_RUNTIME_EMBEDDED_LIB=/home/sam/workspace/labs/WHIPLASH/.dev/artifacts/dist/
   bun test --timeout 120000 test/runtime-embedded-integration.test.ts test/runtime-integration.test.ts
 ```
 
-- [ ] **Step 5: Run smoke and type/format gates**
+Observed: the consolidated focused runtime suite passed 171/171; real-library integration passed 29/29.
+
+- [x] **Step 5: Run smoke and type/format gates**
 
 ```bash
 cd /home/sam/workspace/labs/BREAKDANCE
@@ -680,21 +708,27 @@ bun run check:ts
 bun --cwd packages/metaharness run check
 ```
 
+Observed: root `check:ts`, metaharness check, source and compiled builds, and compiled `--smoke-test` all passed.
+
 Use `bun check`, never `tsc`/`npx tsc`.
 
-- [ ] **Step 6: Run the real CLI smoke once more**
+- [x] **Step 6: Run the real CLI smoke once more**
 
 Launch the source CLI with an isolated profile configured for `runtime.adapter: embedded`, invoke one JS run, one Python run, cancellation, then session shutdown. Verify the process exits and no runtime Worker remains.
 
-- [ ] **Step 7: Request code review**
+Both source and compiled isolated-profile sessions exercised the real `run` tool and exited after JavaScript/Python execution and bounded cancellation.
+
+- [x] **Step 7: Request code review**
 
 Use `requesting-code-review`. Review priorities: ABI ownership, cancellation races, stale response/request ids, schema mismatch behavior, explicit embedded fallback prohibition, session teardown, and context isolation.
 
-- [ ] **Step 8: Commit cleanup**
+Three independent final reviewers approved the frozen whole-branch diff with no remaining findings at or above 80% confidence.
+
+- [x] **Step 8: Commit cleanup**
 
 ```bash
-git add packages/coding-agent/CHANGELOG.md docs/aura/FORK.md
-git commit -m "docs(runtime): document embedded adapter rollout"
+git add <52 branch-owned final-review paths listed in task-7-report.md>
+git commit -m "fix(runtime): harden embedded adapter lifecycle"
 ```
 
 ---
