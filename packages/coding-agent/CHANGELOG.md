@@ -20,6 +20,7 @@
 - Changed JavaScript and TypeScript `run` calls to use an isolated Bun child by default while keeping the embedded engine selectable; Python, Java, and Kotlin use the embedded engine.
 - Reduced persistent system and runtime tool prompt text while preserving tool-selection and safety contracts.
 - Promoted managed runtime selection and core Superpowers workflows into inherent system policy; removed their implicit skill/UI surface; kept only `run` and `check` essential; moved insights, profiling, serving, and four JVM operations behind discovery; removed redundant runtime build/advice/Javadoc tools; and added bounded per-call telemetry plus a two-task adoption/prompt-efficiency benchmark.
+- Clarified that `insights` instrumentation is a plain JavaScript script using the injected `insight.on(...)` API, and added compact TypeScript reference types for its events, contexts, filters, and handlers.
 - Split Python capability controls into a semantic hierarchy: `python.enabled` gates every Python surface, `python.embedded` gates Python in managed runtime tools, and default-off `python.shell` gates the local `$`/`$$` snake action, routes it through `run`, and controls its user-facing guidance.
 
 ### Fixed
