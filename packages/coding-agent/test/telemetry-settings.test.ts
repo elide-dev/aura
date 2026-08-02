@@ -240,9 +240,14 @@ describe("telemetry destination fallback tiers", () => {
 
 	it("never sends the built-in credential to an Aura endpoint", () => {
 		const settings = fakeSettings({ "telemetry.enabled": true, "cloud.telemetry.enabled": true });
-		for (const env of [{ AURA_TELEMETRY_URL: AURA_URL }, { AURA_DOMAIN: "aura.example" }]) {
+		const cases = [
+			{ env: { AURA_TELEMETRY_URL: AURA_URL }, url: `${AURA_URL}/v1/traces` },
+			{ env: { AURA_DOMAIN: "aura.example" }, url: "https://telemetry.aura.example/v1/traces" },
+		];
+		for (const { env, url } of cases) {
 			const config = resolveExporterConfig("trace", settings, env);
-			expect(config.url).not.toBe(`${BUILTIN_TELEMETRY_ENDPOINT}/v1/traces`);
+			// Not vacuous: the Aura endpoint really is the winner here.
+			expect(config.url).toBe(url);
 			expect(config.headers ?? {}).not.toHaveProperty("Authorization");
 			expect(JSON.stringify(config)).not.toContain(BUILTIN_TELEMETRY_HEADERS.Authorization);
 		}

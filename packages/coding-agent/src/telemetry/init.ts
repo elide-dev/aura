@@ -9,6 +9,11 @@
  * winning per key — so `omp` can be observed by any OTLP collector without
  * vendor coupling.
  *
+ * Absent all of those, export still happens: {@link BUILTIN_TELEMETRY_ENDPOINT}
+ * is the built-in destination for an unconfigured install, sitting at the bottom
+ * of the tier list in {@link resolveDestination}. Every higher tier — including
+ * the Aura relay — displaces it without any setting being edited.
+ *
  * Only the `http/protobuf` transport is supported — an
  * `OTEL_EXPORTER_OTLP*_PROTOCOL` of `grpc` or `http/json` declines rather than
  * misrouting protobuf payloads. The exporter line is pinned to the 0.218/2.7
@@ -33,6 +38,7 @@ import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { auraDeploymentFor, readCloudSwitches, resolveAuraDeployment } from "../cloud/deployment";
 import type { Settings } from "../config/settings";
 import { type ErrorReportedTelemetry, emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
 import { buildResourceAttributes } from "./identity";
@@ -273,8 +279,8 @@ export function resolveTelemetryEnv(
 	const out: Record<string, string | undefined> = { ...processEnv };
 	if (!settings?.get("telemetry.enabled")) return out;
 
-	const endpoint = settings.get("telemetry.endpoint");
-	if (endpoint && !out.OTEL_EXPORTER_OTLP_ENDPOINT) out.OTEL_EXPORTER_OTLP_ENDPOINT = endpoint;
+	const destination = resolveDestination(settings, processEnv);
+	if (destination && !out.OTEL_EXPORTER_OTLP_ENDPOINT) out.OTEL_EXPORTER_OTLP_ENDPOINT = destination.url;
 
 	// A signal absent from the list is switched off explicitly, since the shared
 	// endpoint above would otherwise enable all three.
@@ -306,11 +312,11 @@ export function resolveTelemetryEnv(
  * explicitly only when neither the signal-specific nor the generic env key is
  * set.
  *
- * `telemetry.endpoint` is a BASE endpoint per the OTLP spec, so the per-signal
- * path is appended (`http://host:4318` → `http://host:4318/v1/traces`), matching
- * what the exporters do with `OTEL_EXPORTER_OTLP_ENDPOINT`. Any trailing slashes
- * on the base are trimmed first so the join never doubles up. Headers are passed
- * as a plain record — no `k=v,…` serialization, hence no escaping question.
+ * The destination is a BASE endpoint per the OTLP spec, so the per-signal path
+ * is appended (`http://host:4318` → `http://host:4318/v1/traces`), matching what
+ * the exporters do with `OTEL_EXPORTER_OTLP_ENDPOINT`. Any trailing slashes on
+ * the base are trimmed first so the join never doubles up. Headers are passed as
+ * a plain record — no `k=v,…` serialization, hence no escaping question.
  *
  * Exported for tests.
  */
@@ -324,14 +330,94 @@ export function resolveExporterConfig(
 	const { path, envInfix } = SIGNAL_OTLP[signal];
 
 	const envEndpoint = processEnv[`OTEL_EXPORTER_OTLP_${envInfix}_ENDPOINT`] ?? processEnv.OTEL_EXPORTER_OTLP_ENDPOINT;
-	const endpoint = settings.get("telemetry.endpoint");
-	if (!envEndpoint && endpoint) config.url = `${endpoint.replace(/\/+$/, "")}${path}`;
+	const destination = resolveDestination(settings, processEnv);
+	if (!envEndpoint && destination) config.url = `${destination.url.replace(/\/+$/, "")}${path}`;
 
+	// Headers follow the endpoint that is actually in use. When env owns the
+	// endpoint only the user's own `telemetry.headers` may accompany it — a
+	// destination-owned credential (the built-in one) stays with its destination.
 	const envHeaders = processEnv[`OTEL_EXPORTER_OTLP_${envInfix}_HEADERS`] ?? processEnv.OTEL_EXPORTER_OTLP_HEADERS;
-	const headers = settings.get("telemetry.headers");
-	if (!envHeaders && headers && Object.keys(headers).length > 0) config.headers = { ...headers };
+	const headers = envEndpoint ? settingsHeaders(settings) : destination?.headers;
+	if (!envHeaders && headers) config.headers = { ...headers };
 
 	return config;
+}
+
+/** A destination and the headers that belong to it — resolved together, always. */
+interface TelemetryDestination {
+	readonly url: string;
+	readonly headers?: Readonly<Record<string, string>>;
+}
+
+/** The user's own `telemetry.headers`, or undefined when they set none. */
+function settingsHeaders(settings: Pick<Settings, "get">): Record<string, string> | undefined {
+	const headers = settings.get("telemetry.headers");
+	if (!headers || Object.keys(headers).length === 0) return undefined;
+	return headers;
+}
+
+/**
+ * Where telemetry goes when the `OTEL_EXPORTER_OTLP_*` variables do not say.
+ *
+ * Tiers, highest first:
+ *
+ *  1. **Explicit `telemetry.endpoint`.** The operator named a collector; their
+ *     own `telemetry.headers` ride with it.
+ *  2. **Aura** — `AURA_TELEMETRY_URL`, or a derivation from `AURA_DOMAIN`, and
+ *     only while `cloud.telemetry.enabled` is on (off by default). Carries no
+ *     built-in credential; the Aura relay authenticates its own way.
+ *  3. **The built-in team Grafana Cloud stack**, with the credential that
+ *     belongs to it. This is the destination an unconfigured install exports to.
+ *
+ * Two properties are load-bearing:
+ *
+ *  - **The built-in tier is last.** It is deliberately not a `telemetry.endpoint`
+ *    default: a populated default is indistinguishable from a user-set value at
+ *    read time, so it would occupy tier 1 and permanently shadow the Aura tier.
+ *    Sitting here, it hands over the moment an Aura relay is configured, with no
+ *    edit to any setting.
+ *  - **A tier's endpoint and headers are atomic.** They are returned as one
+ *    object and never recombined, so the built-in credential cannot reach an
+ *    Aura (or env, or operator) host, and a user credential cannot reach the
+ *    built-in stack. The last is why headers-without-endpoint declines the
+ *    built-in tier rather than pairing a foreign header with it.
+ */
+function resolveDestination(
+	settings: Pick<Settings, "get">,
+	processEnv: Record<string, string | undefined>,
+): TelemetryDestination | undefined {
+	const headers = settingsHeaders(settings);
+	const endpoint = settings.get("telemetry.endpoint");
+	if (endpoint) return headers ? { url: endpoint, headers } : { url: endpoint };
+
+	const aura = auraTelemetryEndpoint(settings, processEnv);
+	if (aura) return headers ? { url: aura, headers } : { url: aura };
+
+	if (headers) return undefined;
+	return { url: BUILTIN_TELEMETRY_ENDPOINT, headers: BUILTIN_TELEMETRY_HEADERS };
+}
+
+/**
+ * The Aura telemetry base URL, or undefined when Aura says nothing about it.
+ *
+ * `cloud.telemetry.enabled` gates the tier through the same projection every
+ * other Aura consumer uses, so switching telemetry off removes the Aura tier and
+ * nothing else. A malformed Aura variable is reported and dropped rather than
+ * thrown: telemetry must not be able to take startup down, and refusing the tier
+ * simply lets the next one apply.
+ */
+function auraTelemetryEndpoint(
+	settings: Pick<Settings, "get">,
+	processEnv: Record<string, string | undefined>,
+): string | undefined {
+	try {
+		const deployment = resolveAuraDeployment({ env: processEnv });
+		const switches = readCloudSwitches(settings);
+		return auraDeploymentFor("telemetry", deployment, switches).telemetryBaseUrl?.url;
+	} catch (error) {
+		logger.warn("telemetry: ignoring invalid Aura endpoint configuration", { error: String(error) });
+		return undefined;
+	}
 }
 
 async function registerProviders(signalConfig: SignalConfig, options: InitTelemetryOptions): Promise<void> {

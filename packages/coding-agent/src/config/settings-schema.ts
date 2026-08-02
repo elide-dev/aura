@@ -5631,7 +5631,9 @@ export const SETTINGS_SCHEMA = {
 	/**
 	 * Aura-derived telemetry destination. Off by default and stays off after login and after
 	 * a domain is configured — signing in is not consent to be measured. `telemetry.endpoint`
-	 * and the `OTEL_EXPORTER_OTLP_*` variables are unaffected either way.
+	 * and the `OTEL_EXPORTER_OTLP_*` variables are unaffected either way; switching this on
+	 * inserts the Aura tier *above* the built-in destination, so an Aura relay takes over from
+	 * the built-in Grafana stack automatically.
 	 */
 	"cloud.telemetry.enabled": { type: "boolean", default: false },
 
@@ -5666,9 +5668,14 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// No default endpoint: telemetry ships where the operator says and nowhere else. An unset
-	// value means "no collector", not "our collector" — export stays inert until this, an
-	// `OTEL_EXPORTER_OTLP_*` variable, or an Aura telemetry tier supplies a destination.
+	// Ships empty, but empty does NOT mean "no collector" here: telemetry is the one surface
+	// with a built-in destination. Unconfigured export goes to the team Grafana Cloud stack,
+	// which lives in `telemetry/init.ts` (`BUILTIN_TELEMETRY_ENDPOINT`) as the LOWEST tier of
+	// destination resolution — below `OTEL_EXPORTER_OTLP_*`, below this setting, and below the
+	// Aura tier. It is deliberately not a default *here*: a populated default is
+	// indistinguishable from a user-set value at read time, so it would outrank the Aura tier
+	// and the Aura relay could never take over. Setting a value takes the top settings tier;
+	// `telemetry.enabled: false` (or `OTEL_SDK_DISABLED=true`) switches export off entirely.
 	"telemetry.endpoint": {
 		type: "string",
 		default: "",
@@ -5682,8 +5689,11 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Config-file only (no UI): free-form key/value shapes the settings panel
-	// has no editor for, same as `gc.*` and `task.agentPrewalk`. Empty by default —
-	// headers belong to whoever owns the endpoint, so no credential is embedded here.
+	// has no editor for, same as `gc.*` and `task.agentPrewalk`. Empty by default: headers
+	// belong to whoever owns the endpoint. The built-in destination's own credential lives
+	// with it in `telemetry/init.ts` and is sent only to it — the two are resolved as one
+	// atomic pair, so no credential here can reach the built-in stack and its credential can
+	// reach no other host.
 	"telemetry.headers": {
 		type: "record",
 		default: EMPTY_STRING_RECORD,

@@ -1,8 +1,31 @@
 # Telemetry (OpenTelemetry Export)
 
-Aura can export its own operational telemetry — traces, structured logs, and metrics — to an OpenTelemetry collector over OTLP. **Nothing is exported until you configure an endpoint.** There is no bundled collector, no default endpoint, and no embedded credential: `telemetry.endpoint` ships empty, `telemetry.headers` ships empty, and every signal stays off while there is nowhere to send it.
+Aura exports its own operational telemetry — traces, structured logs, and metrics — to an OpenTelemetry collector over OTLP.
 
-To turn export on, point `telemetry.endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) at a collector you control and supply whatever auth it needs via `telemetry.headers` (or `OTEL_EXPORTER_OTLP_HEADERS`) — env always wins per key. `telemetry.enabled` defaults to `true`, but it is only the master switch for the *settings-driven* route: with it on and no endpoint configured, the exporters are still never constructed. `telemetry.enabled: false` (or `OTEL_SDK_DISABLED=true`) additionally suppresses the settings route entirely.
+**This build exports to the team's Grafana Cloud stack by default.** With nothing configured, `telemetry.enabled` defaults to `true` and export resolves to a built-in OTLP destination (`https://otlp-gateway-prod-us-west-0.grafana.net/otlp`) carrying a built-in `Authorization` credential. That destination and its credential live together in `packages/coding-agent/src/telemetry/init.ts` — not as a settings default — and they are the *lowest* tier of destination resolution, so anything you configure displaces them. See [Privacy](#privacy) for what actually leaves the process; it is pseudonymous, and prompt/completion content is never included.
+
+### Where telemetry goes
+
+Highest tier wins; endpoint and credential always come from the *same* tier, so the built-in credential is never attached to a destination you configured, and a credential you configure is never sent to the built-in stack.
+
+| Tier | Source | Notes |
+| ---- | ------ | ----- |
+| 1 | `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` / `_HEADERS` | Per-signal, standard OTEL env |
+| 2 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` | Generic, standard OTEL env |
+| 3 | `telemetry.endpoint` + `telemetry.headers` | Your explicit setting |
+| 4 | Aura: `AURA_TELEMETRY_URL`, or derived from `AURA_DOMAIN` | Only while `cloud.telemetry.enabled: true` (off by default) |
+| 5 | Built-in team Grafana Cloud stack | Applies when nothing above does |
+
+Two consequences worth knowing:
+
+- **Pointing it somewhere else takes one line.** Set `telemetry.endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) to your own collector and supply its auth via `telemetry.headers` (or `OTEL_EXPORTER_OTLP_HEADERS`) — env still wins per key. The built-in destination drops out entirely; its credential is not sent to your collector.
+- **The Aura relay will take over on its own.** Because the built-in stack sits *below* the Aura tier, switching `cloud.telemetry.enabled` on with an Aura telemetry endpoint configured cuts export over with no further edit.
+
+### Turning it off
+
+- `telemetry.enabled: false` in `config.yml` switches off every settings-side route, including the built-in destination. Standard `OTEL_EXPORTER_OTLP_*` variables still activate export if you set them — that is the operator's own collector, not ours.
+- `OTEL_SDK_DISABLED=true` is the unconditional kill switch: no provider is registered at all, whatever any setting or variable says.
+- `telemetry.signals` narrows which of `traces` / `logs` / `metrics` are exported (default: `logs`, `metrics`), and `OTEL_TRACES_EXPORTER` / `OTEL_LOGS_EXPORTER` / `OTEL_METRICS_EXPORTER` set to `none` switch a signal off from the environment.
 
 Everything below is standard OTLP: any collector that speaks `http/protobuf` (the OpenTelemetry Collector, Grafana Alloy, Honeycomb, Datadog's OTLP intake, a local `otel-tui`, …) works without further adaptation.
 
@@ -126,9 +149,10 @@ The three `telemetry.identity.*` opt-ins are **not** gated on `telemetry.enabled
 ### Precedence
 
 1. **`OTEL_SDK_DISABLED=true` wins over everything.** It is read from the raw process environment only; no setting can re-enable export against it.
-2. **Environment wins per key.** A `telemetry.*` value is used only when neither the signal-specific nor the generic `OTEL_*` key for that value is set. Endpoint and headers are resolved independently, so you can point the endpoint at a collector via env while keeping headers in settings.
-3. **`telemetry.enabled: false` contributes no endpoint, headers, or signal selection** — but env-only activation still works. Setting just `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment enables export without touching settings. The `telemetry.identity.*` opt-ins are the exception: they apply to env-activated telemetry too (see above).
-4. A signal is exported when it has an endpoint (per-signal or base) **and** its `OTEL_*_EXPORTER` is not `none`. Listing `telemetry.signals` without a signal sets that variable to `none` for you.
+2. **Environment wins per key.** A `telemetry.*` value is used only when neither the signal-specific nor the generic `OTEL_*` key for that value is set. Your own `telemetry.headers` are resolved independently of the endpoint, so you can point the endpoint at a collector via env while keeping headers in settings.
+3. **Below the env vars, the destination is resolved as one atomic pair** — endpoint *and* headers from a single tier: your `telemetry.endpoint`, then the Aura tier, then the built-in Grafana stack (see [Where telemetry goes](#where-telemetry-goes)). A tier's credential never travels with another tier's endpoint. Configuring `telemetry.headers` with no endpoint anywhere is an incomplete configuration, not a request to send that credential to the built-in stack: nothing is exported.
+4. **`telemetry.enabled: false` contributes no endpoint, headers, or signal selection** — including the built-in destination — but env-only activation still works. Setting just `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment enables export without touching settings. The `telemetry.identity.*` opt-ins are the exception: they apply to env-activated telemetry too (see above).
+5. A signal is exported when it has an endpoint (per-signal or base) **and** its `OTEL_*_EXPORTER` is not `none`. Listing `telemetry.signals` without a signal sets that variable to `none` for you.
 
 ### `http/protobuf` only
 
@@ -138,7 +162,7 @@ Buffered telemetry is flushed every 30 seconds and again at process exit, so a l
 
 ## Privacy
 
-Aura's telemetry is **pseudonymous by default**. Nothing that identifies you or your work leaves the process unless you opt in.
+Aura's telemetry is **pseudonymous by default**, and by default it goes to the team's Grafana Cloud stack (see [Where telemetry goes](#where-telemetry-goes) to redirect or disable it). Nothing that identifies you or your work leaves the process unless you opt in.
 
 - **`aura.install.id`** is a random UUID minted once per install and stored at `<configRoot>/telemetry-install-id` — `~/.aura/telemetry-install-id` by default, mode `0600`. (`PI_CONFIG_DIR` renames that directory, and an active profile moves it under `profiles/<name>/`. `aura config path` prints the agent directory, whose parent is the config root.) It is random, not derived from anything about your machine, so it is strictly non-reversible. **Delete the file to rotate it.** It is deliberately separate from the general-purpose install id in [install-id.md](install-id.md), so rotating telemetry identity does not disturb unrelated install-scoped state.
 - **`service.name`** defaults to `aura` and **`service.version`** to the running build's version. Those and the install id are the only resource attributes present by default.
