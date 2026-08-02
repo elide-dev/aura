@@ -63,6 +63,21 @@ independent of the agent install. The smoke covers `node:fs`, TypeScript syntax,
 top-level await, and the expected sorted BFS output. A smoke failure stops the
 campaign. The frozen manifest records this verifier Bun's version and SHA-256.
 
+To add a pinned vanilla OMP whole-product control, pass both its revision and
+compiled binary:
+
+```bash
+bun run bench:runtime --agent-only \
+  --historical-revision=<commit> \
+  --historical-binary=/absolute/path/to/omp-linux-x64
+```
+
+The historical arm receives only the Bash-baseline tools and is reported
+separately because it changes the whole product revision. The local Harbor
+adapter writes gateway routing under both `~/.aura/agent` and `~/.omp/agent`,
+so this control uses the same host-side credentials without exposing them to
+the task container.
+
 ### Inherent capability prompt comparison
 
 Run the current-configuration smoke while tuning inherent runtime and
