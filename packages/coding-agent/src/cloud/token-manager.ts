@@ -745,10 +745,18 @@ export class TokenManager implements AuraAccessTokenProvider {
 	 * caller has abandoned it, so one caller's cancellation cannot cancel another's refresh.
 	 */
 	#joinRefresh(signal: AbortSignal | undefined): Promise<AuraAccessToken> {
-		if (!this.#inflight) {
+		// An aborted control is not joinable. `#inflight` stays set until the shared refresh
+		// settles, which is strictly later than the moment the last caller's abort fired the
+		// internal controller — so without this check a caller arriving in that window would be
+		// counted onto a doomed refresh and rejected with `aborted` having never asked for
+		// cancellation. It starts its own instead; the abandoned one is left to unwind.
+		if (!this.#inflight || this.#control?.controller.signal.aborted) {
 			const control: RefreshControl = { controller: new AbortController(), callers: 0, aborted: 0 };
 			this.#control = control;
 			this.#inflight = this.#refresh(control.controller.signal).finally(() => {
+				// Only when still current: an abandoned refresh settling later must not clear the
+				// replacement that took its place.
+				if (this.#control !== control) return;
 				this.#inflight = undefined;
 				this.#control = undefined;
 			});
@@ -888,11 +896,31 @@ export class TokenManager implements AuraAccessTokenProvider {
 			// would turn a transient blip into a forced re-login. Anything else — above all a 2xx
 			// whose token failed verification — keeps the marker, because the submitted refresh
 			// token may already be spent.
-			if (grantCertainlyNotMinted(status)) this.#store.abandonRefreshAttempt(issuer, owner);
+			if (grantCertainlyNotMinted(status)) {
+				// Bookkeeping must not become the reported failure. A store closed by a concurrent
+				// shutdown raises a bare `bun:sqlite` error, which would escape the taxonomy and —
+				// worse — mask whatever the rotation was actually failing with. Not clearing the
+				// marker is the safe direction anyway: the next process re-reads it and asks for a
+				// re-login rather than replaying a token that might be spent.
+				try {
+					this.#store.abandonRefreshAttempt(issuer, owner);
+				} catch {
+					// Ignored deliberately; see above.
+				}
+			}
 			throw error;
 		} finally {
 			clearInterval(renew);
-			this.#store.releaseRefreshLease(issuer, owner);
+			// Same reasoning, and it matters most here: an exception thrown from a `finally`
+			// *replaces* the error travelling through it, so an unguarded release would turn every
+			// concurrent-close into `Error: Database has closed` and lose the real cause. Losing
+			// the lease is already a handled outcome — the commit re-checks ownership before it
+			// writes, and the lease expires on its own TTL.
+			try {
+				this.#store.releaseRefreshLease(issuer, owner);
+			} catch {
+				// Ignored deliberately; see above.
+			}
 		}
 	}
 

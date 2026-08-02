@@ -554,6 +554,20 @@ const CONSUMER_FIELD: Readonly<Record<CloudConsumer, keyof AuraDeployment>> = {
 	catalogMirror: "distribution",
 };
 
+/** Consumers that resolve through {@link resolveServiceEndpoint}; the mirrors do not. */
+const SURFACE_FOR_CONSUMER: Readonly<
+	Partial<Record<CloudConsumer, "auth" | "sync" | "broker" | "gateway" | "telemetry" | "qa" | "collab">>
+> = {
+	account: "auth",
+	settingsSync: "sync",
+	broker: "broker",
+	gateway: "gateway",
+	telemetry: "telemetry",
+	qa: "qa",
+	collab: "collab",
+	share: "collab",
+};
+
 const ALL_CONSUMERS = Object.keys(CONSUMER_FIELD) as CloudConsumer[];
 const ALL_ON: Record<CloudConsumer, boolean> = Object.fromEntries(ALL_CONSUMERS.map(c => [c, true])) as never;
 
@@ -668,35 +682,42 @@ describe("cloud switches", () => {
 			}
 		});
 
-		test("preserves a per-call explicit endpoint", () => {
-			const d = auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off);
-			const surface = SURFACE_FOR_CONSUMER[consumer];
-			if (!surface) return;
-			expect(resolveServiceEndpoint(surface, { deployment: d, perCallUrl: "https://call.example" })).toEqual({
-				url: "https://call.example",
-				source: "call",
+		// The explicit tiers are only meaningful for consumers that resolve through
+		// `resolveServiceEndpoint`. The three distribution mirrors do not, so they are excluded
+		// by construction rather than by an early `return` that would count as a passing test
+		// while asserting nothing.
+		const surface = SURFACE_FOR_CONSUMER[consumer];
+		if (surface) {
+			test("preserves a per-call explicit endpoint", () => {
+				const d = auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off);
+				expect(resolveServiceEndpoint(surface, { deployment: d, perCallUrl: "https://call.example" })).toEqual({
+					url: "https://call.example",
+					source: "call",
+				});
 			});
-		});
 
-		test("preserves a persisted explicit endpoint", () => {
-			const d = auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off);
-			const surface = SURFACE_FOR_CONSUMER[consumer];
-			if (!surface) return;
-			expect(resolveServiceEndpoint(surface, { deployment: d, persistedUrl: "https://setting.example" })).toEqual({
-				url: "https://setting.example",
-				source: "setting",
+			test("preserves a persisted explicit endpoint", () => {
+				const d = auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off);
+				expect(resolveServiceEndpoint(surface, { deployment: d, persistedUrl: "https://setting.example" })).toEqual(
+					{ url: "https://setting.example", source: "setting" },
+				);
 			});
-		});
 
-		test("preserves the legacy tier", () => {
-			const d = auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off);
-			const surface = SURFACE_FOR_CONSUMER[consumer];
-			if (!surface) return;
-			expect(resolveServiceEndpoint(surface, { deployment: d, legacyUrl: "https://legacy.example" })).toEqual({
-				url: "https://legacy.example",
-				source: "legacy_env",
+			test("preserves the legacy tier", () => {
+				const d = auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off);
+				expect(resolveServiceEndpoint(surface, { deployment: d, legacyUrl: "https://legacy.example" })).toEqual({
+					url: "https://legacy.example",
+					source: "legacy_env",
+				});
 			});
-		});
+		} else {
+			// And the exclusion itself is asserted, so a mirror that later grows a
+			// `resolveServiceEndpoint` surface fails here instead of silently losing coverage.
+			test("has no resolveServiceEndpoint surface, so the explicit tiers do not apply", () => {
+				expect({ consumer, surface: SURFACE_FOR_CONSUMER[consumer] }).toEqual({ consumer, surface: undefined });
+				expect(auraDeploymentFor(consumer, deploy({ AURA_DOMAIN: DOMAIN }), off).distribution).toBeUndefined();
+			});
+		}
 	});
 
 	test("cloud.qa.enabled=false with a domain and no explicit URL leaves nothing to send to", () => {
@@ -740,20 +761,6 @@ describe("cloud switches", () => {
 		}
 	});
 });
-
-/** Consumers that resolve through {@link resolveServiceEndpoint}; the mirrors do not. */
-const SURFACE_FOR_CONSUMER: Readonly<
-	Partial<Record<CloudConsumer, "auth" | "sync" | "broker" | "gateway" | "telemetry" | "qa" | "collab">>
-> = {
-	account: "auth",
-	settingsSync: "sync",
-	broker: "broker",
-	gateway: "gateway",
-	telemetry: "telemetry",
-	qa: "qa",
-	collab: "collab",
-	share: "collab",
-};
 
 describe("switch table agrees with the settings schema", () => {
 	// `CLOUD_SWITCH_DEFAULTS` is a hand-kept mirror so `src/cloud` stays free of the 6k-line

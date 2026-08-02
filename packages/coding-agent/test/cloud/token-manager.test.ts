@@ -839,6 +839,97 @@ describe("TokenManager access tokens", () => {
 		});
 	}
 
+	/**
+	 * The in-process single-flight keeps `#inflight` set until the shared refresh settles, which
+	 * is *later* than the moment the last caller's abort fires the internal controller. A caller
+	 * arriving in that window used to be counted onto the doomed control and rejected with
+	 * `aborted` — a code it had no business seeing, having never asked for cancellation.
+	 *
+	 * It now starts its own attempt, so what it gets back is the layer's real answer about the
+	 * grant. Here that answer is `relogin_required`: the abandoned attempt had already submitted
+	 * the refresh token when it was abandoned, so the token may be spent and the in-flight marker
+	 * says so. Conservative and true, rather than borrowed and false.
+	 */
+	test("a caller arriving after the last one aborted gets the real answer, not a borrowed abort", async () => {
+		await seedLogin(store, "refresh-1");
+		const h = managerHarness();
+		let release!: () => void;
+		const parked = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		let calls = 0;
+		h.server.route(TOKEN_URL, async request => {
+			calls += 1;
+			h.submitted.push(request.form?.get("refresh_token") ?? "");
+			// The first call stays in flight past the abort, holding the window open.
+			if (calls === 1) await parked;
+			return jsonResponse({
+				access_token: await mintToken(key, userClaims({ ...ids(), nowMs: h.clock.now() })),
+				refresh_token: `refresh-${calls + 1}`,
+				token_type: "Bearer",
+				expires_in: 600,
+			});
+		});
+
+		const controller = new AbortController();
+		const abandoned = h.manager.getAccessToken({ signal: controller.signal });
+		// Let the refresh reach the parked route before anyone abandons it.
+		await Promise.resolve();
+		controller.abort();
+		await expectCloudError(abandoned, "aborted");
+
+		// The abandoned refresh has not settled yet — it is still parked — so this caller lands
+		// squarely in the window. It must not inherit the abort.
+		const joined = h.manager.getAccessToken();
+		await expectCloudError(joined, "relogin_required");
+		release();
+		await abandoned.catch(() => {});
+		// Exactly one token request: the second caller never replayed the submitted grant.
+		expect(h.submitted).toEqual(["refresh-1"]);
+	});
+
+	/**
+	 * `errors.ts` promises every failure the client surfaces collapses into the taxonomy. The
+	 * bookkeeping calls that run *around* a rotation — the in-flight marker clear in the catch,
+	 * the lease release in the finally — talk to a store another part of the process can close
+	 * underneath them, and `bun:sqlite` raises a bare `Error` for that. The one in the `finally`
+	 * is the worse of the two: it replaces whatever the rotation was actually failing with.
+	 */
+	describe("a store closed underneath the rotation stays inside the taxonomy", () => {
+		/** Wraps `target` so the named methods throw the way `bun:sqlite` does after `close()`. */
+		function throwingOn(target: AuraTokenStore, methods: readonly string[]): AuraTokenStore {
+			return new Proxy(target, {
+				get(object, property, receiver) {
+					if (typeof property === "string" && methods.includes(property)) {
+						return () => {
+							throw new Error("Database has closed");
+						};
+					}
+					const value = Reflect.get(object, property, receiver) as unknown;
+					return typeof value === "function" ? value.bind(object) : value;
+				},
+			}) as AuraTokenStore;
+		}
+
+		test("a failing lease release does not replace the error the rotation actually hit", async () => {
+			await seedLogin(store, "refresh-1");
+			const h = managerHarness({ store: throwingOn(store, ["abandonRefreshAttempt", "releaseRefreshLease"]) });
+			h.server.route(TOKEN_URL, () => jsonResponse({ error: "server_error" }, 503));
+			// Not `Error: Database has closed`, and not a raw error of any kind: `unavailable`.
+			await expectCloudError(h.manager.getAccessToken(), "unavailable");
+		});
+
+		test("a failing lease release does not turn a committed rotation into a failure", async () => {
+			await seedLogin(store, "refresh-1");
+			const h = managerHarness({ store: throwingOn(store, ["releaseRefreshLease"]) });
+			// The rotation committed; losing the lease afterwards is a handled outcome, exactly as
+			// it already is for the renewal timer.
+			const token = await h.manager.getAccessToken();
+			expect(token.value).toBeTruthy();
+			expect(store.readAuth(AUTH_ORIGIN)?.refreshToken).toBe("refresh-2");
+		});
+	});
+
 	// The other half of the same rule: a 2xx that failed verification *may* have minted a grant,
 	// so the marker is deliberately kept and the account requires a fresh login.
 	test("a grant that fails verification is not retried, it requires a new login", async () => {
