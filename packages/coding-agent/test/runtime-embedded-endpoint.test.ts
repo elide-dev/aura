@@ -333,18 +333,18 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				expected: "embedded",
 			},
 			{
-				name: "auto Python prefers process",
+				name: "auto Python uses embedded",
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
 				params: { code: "print(1)", language: "python" },
-				expected: "process",
+				expected: "embedded",
 			},
 			{
-				name: "auto inferred Python file prefers process",
+				name: "auto inferred Python file uses embedded",
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
 				params: { path: "main.py" },
-				expected: "process",
+				expected: "embedded",
 			},
 			{
 				name: "auto JVM with valid library",
