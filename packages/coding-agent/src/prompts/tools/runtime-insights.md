@@ -5,7 +5,6 @@ The Insight source runs as a plain script with injected `insight` and `print` gl
 
 ```typescript
 type InsightFrame = Record<string, unknown>;
-
 interface InsightSource {
 	name: string;
 	characters: string | null;
@@ -13,7 +12,6 @@ interface InsightSource {
 	mimeType: string | null;
 	uri: string;
 }
-
 interface InsightContext {
 	name: string;
 	source: InsightSource;
@@ -27,7 +25,6 @@ interface InsightContext {
 	returnValue(frame: InsightFrame): unknown;
 	returnNow(value: unknown): never;
 }
-
 interface InsightConfig {
 	expressions?: boolean;
 	statements?: boolean;
@@ -36,34 +33,18 @@ interface InsightConfig {
 	writes?: boolean;
 	rootNameFilter?: string;
 	sourceFilter?: (source: InsightSource) => boolean;
-	at?: {
-		sourcePath?: string;
-		sourceURI?: string;
-		line?: number;
-		column?: number;
-	};
+	at?: { sourcePath?: string; sourceURI?: string; line?: number; column?: number };
 }
-
-type InsightHandler =
-	| ((source: InsightSource) => void)
-	| ((context: InsightContext, frame: InsightFrame) => void)
-	| (() => void);
-
 interface InsightAPI {
-	readonly id: string;
-	readonly version: string;
 	on(event: "source", handler: (source: InsightSource) => void): void;
 	on(
 		event: "enter" | "return",
 		handler: (context: InsightContext, frame: InsightFrame) => void,
 		config: InsightConfig,
 	): void;
-	on(event: "close", handler: () => void): void;
-	off(event: "source" | "enter" | "return" | "close", handler: InsightHandler): void;
 }
-
 declare const insight: InsightAPI;
 declare function print(...values: unknown[]): void;
 ```
 
-These are reference types; `insight` source remains plain JavaScript. Source loads and function enter/return observations accompany program output. One-shot runs emit no `close` event, so NEVER rely on `close` for output.
+Source loads and function enter/return observations accompany program output. There is no end-of-run event, so print as you observe.
