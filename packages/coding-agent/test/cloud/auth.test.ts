@@ -485,7 +485,7 @@ describe("approval", () => {
 			{ device: undefined },
 			{ device: "laptop" },
 			{ principal_type: "api_key" },
-			{ scopes: NINE_SCOPES.slice(1) },
+			{ scope: NINE_SCOPES.slice(1).join(" ") },
 			{ iss: FOREIGN_ORIGIN },
 			{ aud: "other-cloud" },
 			{ sub: "not-a-ulid" },

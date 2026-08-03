@@ -552,11 +552,12 @@ const CONSUMER_FIELD: Readonly<Record<CloudConsumer, keyof AuraDeployment>> = {
 	distribution: "distribution",
 	runtimeMirror: "distribution",
 	catalogMirror: "distribution",
+	stats: "statsIngestBaseUrl",
 };
 
 /** Consumers that resolve through {@link resolveServiceEndpoint}; the mirrors do not. */
 const SURFACE_FOR_CONSUMER: Readonly<
-	Partial<Record<CloudConsumer, "auth" | "sync" | "broker" | "gateway" | "telemetry" | "qa" | "collab">>
+	Partial<Record<CloudConsumer, "auth" | "sync" | "broker" | "gateway" | "telemetry" | "qa" | "collab" | "stats">>
 > = {
 	account: "auth",
 	settingsSync: "sync",
@@ -566,6 +567,7 @@ const SURFACE_FOR_CONSUMER: Readonly<
 	qa: "qa",
 	collab: "collab",
 	share: "collab",
+	stats: "stats",
 };
 
 const ALL_CONSUMERS = Object.keys(CONSUMER_FIELD) as CloudConsumer[];
@@ -585,6 +587,7 @@ describe("cloud switches", () => {
 			distribution: "cloud.distribution.enabled",
 			runtimeMirror: "cloud.runtimeMirror.enabled",
 			catalogMirror: "cloud.catalogMirror.enabled",
+			stats: "cloud.stats.enabled",
 		});
 		expect(CLOUD_SWITCH_DEFAULTS).toEqual({
 			account: true,
@@ -598,6 +601,7 @@ describe("cloud switches", () => {
 			distribution: true,
 			runtimeMirror: true,
 			catalogMirror: true,
+			stats: false,
 		});
 	});
 
