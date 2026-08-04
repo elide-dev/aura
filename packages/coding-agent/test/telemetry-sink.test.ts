@@ -287,3 +287,51 @@ describe("otlp sink", () => {
 		unregister();
 	});
 });
+
+describe("usage token billing records", () => {
+	it("emits one aura.usage.tokens record per chat.usage event with positive counts", () => {
+		const logs: Array<{ eventName: string; attributes: Record<string, unknown> }> = [];
+		const unregister = registerOtlpSink({
+			emitLog: (_level, _body, attributes, eventName) => logs.push({ eventName, attributes }),
+		});
+		emitTelemetryEvent({
+			type: "chat.usage",
+			event: {
+				provider: "anthropic",
+				model: "claude-fable-5",
+				usage: {
+					inputTokens: 1200,
+					outputTokens: 340,
+					cachedInputTokens: 9000,
+					cacheWriteTokens: 0,
+					reasoningOutputTokens: 25,
+					totalTokens: 10565,
+				},
+			} as never,
+		});
+		unregister();
+		const billing = logs.filter(entry => entry.eventName === "aura.usage.tokens");
+		expect(billing).toHaveLength(1);
+		expect(billing[0]?.attributes).toEqual({
+			"aura.usage.tokens.input": 1200,
+			"aura.usage.tokens.output": 340,
+			"aura.usage.tokens.cache_read": 9000,
+			"aura.usage.tokens.reasoning": 25,
+			"gen_ai.provider.name": "anthropic",
+			"gen_ai.request.model": "claude-fable-5",
+		});
+	});
+
+	it("emits nothing when every count is zero or absent", () => {
+		const logs: Array<{ eventName: string }> = [];
+		const unregister = registerOtlpSink({
+			emitLog: (_level, _body, _attributes, eventName) => logs.push({ eventName }),
+		});
+		emitTelemetryEvent({
+			type: "chat.usage",
+			event: { provider: "anthropic", model: "m", usage: { inputTokens: 0, outputTokens: 0 } } as never,
+		});
+		unregister();
+		expect(logs.filter(entry => entry.eventName === "aura.usage.tokens")).toHaveLength(0);
+	});
+});
