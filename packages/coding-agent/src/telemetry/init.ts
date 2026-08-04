@@ -58,6 +58,17 @@ import { registerOtlpSink } from "./sink-otlp";
  */
 const FLUSH_INTERVAL_MS = 30_000;
 
+/**
+ * Max log records per export batch. The BatchLogRecordProcessor default
+ * (512) can serialize to a protobuf payload larger than the cloud relay's
+ * 112 KiB per-request cap (workers/telemetry's MAX_BODY_BYTES in the elide
+ * cloud repo); a batch that trips that cap 413s in full, dropping every
+ * record in it — including any aura.usage.tokens billing records riding
+ * along with observability logs. A conservative cap keeps batches well
+ * under that ceiling.
+ */
+const MAX_LOG_EXPORT_BATCH_SIZE = 64;
+
 /** Options for {@link initTelemetryExport}. */
 export interface InitTelemetryOptions {
 	/** Settings instance for telemetry.* config (env always wins). */
@@ -509,7 +520,7 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 			: new OTLPLogExporter(resolveExporterConfig("log", settings));
 		logProvider = new LoggerProvider({
 			resource,
-			processors: [new BatchLogRecordProcessor({ exporter })],
+			processors: [new BatchLogRecordProcessor({ exporter, maxExportBatchSize: MAX_LOG_EXPORT_BATCH_SIZE })],
 		});
 		logs.setGlobalLoggerProvider(logProvider);
 		otelLogger = logProvider.getLogger("aura");
