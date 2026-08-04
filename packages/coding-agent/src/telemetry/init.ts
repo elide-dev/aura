@@ -49,7 +49,7 @@ import {
 import { type ErrorReportedTelemetry, emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
 import { buildResourceAttributes, getOrCreateInstallId } from "./identity";
 import { AuraMetricRecorder } from "./metrics";
-import { registerOtlpSink } from "./sink-otlp";
+import { AURA_USAGE_TOKENS_EVENT, registerOtlpSink } from "./sink-otlp";
 
 /**
  * Periodic flush interval. A long-lived `omp` process (the ACP server is
@@ -678,9 +678,15 @@ function emitOtelLog(
 	timestamp = new Date(),
 ): void {
 	if (!otelLogger) return;
-	const minLevel = parseOtelLogLevel(process.env.OTEL_LOG_LEVEL);
-	if (minLevel === "none") return;
-	if (LOG_LEVEL_WEIGHT[level] > LOG_LEVEL_WEIGHT[minLevel]) return;
+	// OTEL_LOG_LEVEL is an observability verbosity knob (suppress debug/info
+	// noise); the aura.usage.tokens billing record is metering, not
+	// observability, so it is exempt from the gate — an operator tuning log
+	// verbosity down must never silently stop usage metering.
+	if (eventName !== AURA_USAGE_TOKENS_EVENT) {
+		const minLevel = parseOtelLogLevel(process.env.OTEL_LOG_LEVEL);
+		if (minLevel === "none") return;
+		if (LOG_LEVEL_WEIGHT[level] > LOG_LEVEL_WEIGHT[minLevel]) return;
+	}
 	otelLogger.emit({
 		eventName,
 		timestamp,
