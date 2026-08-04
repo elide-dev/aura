@@ -144,6 +144,24 @@ describe("initTelemetryExport signals export path", () => {
 		expect(code).toBe(0);
 	}, 20_000);
 
+	it("exempts the aura.usage.tokens billing record from OTEL_LOG_LEVEL", async () => {
+		// Regression: emitOtelLog's level gate (init.ts) used to apply uniformly,
+		// so OTEL_LOG_LEVEL=error silently stopped usage metering. The probe sets
+		// OTEL_LOG_LEVEL=error, confirms an ordinary info-level bridged log is
+		// still suppressed (the gate still works), and confirms a billable
+		// chat.usage event's aura.usage.tokens record — emitted at "info" — still
+		// reaches the collector (the billing record is exempt).
+		const probe = fileURLToPath(new URL("./otel-log-level-billing-probe.ts", import.meta.url));
+		const proc = Bun.spawn(["bun", probe], { stdout: "pipe", stderr: "pipe" });
+		const [code, stdout, stderr] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
+		expect(`${stdout}\n${stderr}`).toContain("PROBE: BILLING EXEMPT FROM LOG LEVEL GATE");
+		expect(code).toBe(0);
+	}, 20_000);
+
 	it("merges OTEL_RESOURCE_ATTRIBUTES into the exported resource", async () => {
 		// Regression for #7134: the resource only carried service.name, so
 		// OTEL_RESOURCE_ATTRIBUTES entries never reached the collector. The probe
