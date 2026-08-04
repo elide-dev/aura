@@ -3,6 +3,7 @@
  * structured log records. Publishers stay OTel-free; this module is only
  * registered when an OTLP provider is live (init.ts).
  */
+import type { ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { logger } from "@oh-my-pi/pi-utils";
 import { type Attributes, context, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { LogAttributes } from "@opentelemetry/api-logs";
@@ -10,6 +11,38 @@ import { type CompactionCompletedTelemetry, subscribeTelemetry, type TelemetryEv
 import type { AuraMetricRecorder } from "./metrics";
 
 export type EmitOtelLog = (level: logger.LogLevel, body: string, attributes: LogAttributes, eventName: string) => void;
+
+/**
+ * Billing-record contract consumed by the cloud telemetry worker (elide
+ * cloud repo, workers/telemetry/meter.ts): one log record per chat call,
+ * one attribute per positive token count. Renaming the event or attribute
+ * keys silently stops usage metering — treat both as frozen.
+ */
+export const AURA_USAGE_TOKENS_EVENT = "aura.usage.tokens";
+
+const USAGE_TOKEN_ATTRS = [
+	["input", (usage: ChatUsageEvent["usage"]) => usage.inputTokens],
+	["output", (usage: ChatUsageEvent["usage"]) => usage.outputTokens],
+	["cache_read", (usage: ChatUsageEvent["usage"]) => usage.cachedInputTokens],
+	["cache_write", (usage: ChatUsageEvent["usage"]) => usage.cacheWriteTokens],
+	["reasoning", (usage: ChatUsageEvent["usage"]) => usage.reasoningOutputTokens],
+] as const satisfies ReadonlyArray<readonly [string, (usage: ChatUsageEvent["usage"]) => number | undefined]>;
+
+/** Attributes for one billing record, or undefined when there is nothing billable. */
+export function usageTokenAttributes(event: ChatUsageEvent): LogAttributes | undefined {
+	const attributes: LogAttributes = {};
+	let billable = false;
+	for (const [tokenType, read] of USAGE_TOKEN_ATTRS) {
+		const count = read(event.usage);
+		if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) continue;
+		attributes[`${AURA_USAGE_TOKENS_EVENT}.${tokenType}`] = count;
+		billable = true;
+	}
+	if (!billable) return undefined;
+	attributes["gen_ai.provider.name"] = event.provider;
+	attributes["gen_ai.request.model"] = event.model;
+	return attributes;
+}
 
 export interface OtlpSinkDeps {
 	recorder?: AuraMetricRecorder;
@@ -65,9 +98,12 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 		case "turn.completed":
 			deps.recorder?.recordRun(event.summary, event.coverage);
 			break;
-		case "chat.usage":
+		case "chat.usage": {
 			deps.recorder?.recordChatUsage(event.event);
+			const usageAttributes = usageTokenAttributes(event.event);
+			if (usageAttributes) deps.emitLog("info", "chat usage", usageAttributes, AURA_USAGE_TOKENS_EVENT);
 			break;
+		}
 		case "runtime.call.completed":
 			deps.recorder?.recordRuntimeCall(event);
 			deps.emitLog(
