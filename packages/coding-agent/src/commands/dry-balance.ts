@@ -1,10 +1,10 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { dryBalanceHelp as commandHelp } from "../cli/command-help";
 import { runDryBalanceCommand } from "../cli/dry-balance-cli";
 
 export default class DryBalance extends Command {
-	static description = "Dry-run OAuth account balancing across random session ids";
-
+	static description = commandHelp.description;
 	static args = {
 		model: Args.string({
 			description: "Model selector (provider/model or fuzzy id). Defaults to the configured default model.",

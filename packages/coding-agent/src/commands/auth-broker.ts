@@ -1,6 +1,7 @@
 /**
  * `omp auth-broker` — manage the omp credential vault.
  */
+
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags, renderCommandHelp } from "@oh-my-pi/pi-utils/cli";
 import {
@@ -9,11 +10,11 @@ import {
 	type AuthBrokerCommandArgs,
 	runAuthBrokerCommand,
 } from "../cli/auth-broker-cli";
+import { authBrokerHelp as commandHelp } from "../cli/command-help";
 import { initTheme } from "../modes/theme/theme";
 
 export default class AuthBroker extends Command {
-	static description = `Manage the ${APP_NAME} auth-broker (credential vault)`;
-
+	static description = commandHelp.description;
 	static args = {
 		action: Args.string({
 			description: "Sub-command",

@@ -1,10 +1,11 @@
 //! Minimizer pipeline: detect, dispatch, and fail-safe filter execution.
 
-#[cfg(not(test))]
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
 	panic::{AssertUnwindSafe, catch_unwind},
-	sync::LazyLock,
+	sync::{
+		LazyLock,
+		atomic::{AtomicU64, Ordering},
+	},
 };
 
 use crate::minimizer::{
@@ -474,52 +475,33 @@ fn resolve_pipeline<'a>(
 }
 
 // Atomic counter for commands that reached `apply` without a matching filter.
-//
-// Under `cfg(test)` the counter is thread-local instead: the test harness runs
-// tests in parallel and many of them route commands through `apply`, so a
-// process-global counter makes any exact-count assertion racy. Each test runs
-// on its own thread, so thread-local storage keeps observations deterministic.
-#[cfg(not(test))]
 static UNKNOWN_COMMAND_COUNT: AtomicU64 = AtomicU64::new(0);
 
+// Per-thread mirror of the counter: integration tests drive `apply` from
+// parallel tokio workers, so equality assertions on the process-wide atomic
+// race. Tests assert on the calling thread's own recordings instead.
 #[cfg(test)]
 thread_local! {
-	static UNKNOWN_COMMAND_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+	static THREAD_UNKNOWN_COMMAND_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(not(test))]
 fn record_unknown_command(_command: &str) {
 	UNKNOWN_COMMAND_COUNT.fetch_add(1, Ordering::Relaxed);
-}
-
-#[cfg(test)]
-fn record_unknown_command(_command: &str) {
-	UNKNOWN_COMMAND_COUNT.with(|count| count.set(count.get() + 1));
+	#[cfg(test)]
+	THREAD_UNKNOWN_COMMAND_COUNT.with(|count| count.set(count.get() + 1));
 }
 
 /// Total number of commands that fell through `apply` without any matching
 /// filter. Useful for a "coverage gap" indicator in telemetry dashboards.
-#[cfg(not(test))]
 pub fn unknown_command_count() -> u64 {
 	UNKNOWN_COMMAND_COUNT.load(Ordering::Relaxed)
 }
 
+/// Unknown-command recordings made by the current thread. Race-free
+/// alternative to [`unknown_command_count`] for test assertions.
 #[cfg(test)]
-pub fn unknown_command_count() -> u64 {
-	UNKNOWN_COMMAND_COUNT.with(std::cell::Cell::get)
-}
-
-/// Reset the unknown-command counter (intended for tests).
-#[cfg(not(test))]
-#[doc(hidden)]
-pub fn reset_unknown_command_count() {
-	UNKNOWN_COMMAND_COUNT.store(0, Ordering::Relaxed);
-}
-
-#[cfg(test)]
-#[doc(hidden)]
-pub fn reset_unknown_command_count() {
-	UNKNOWN_COMMAND_COUNT.with(|count| count.set(0));
+fn thread_unknown_command_count() -> u64 {
+	THREAD_UNKNOWN_COMMAND_COUNT.with(std::cell::Cell::get)
 }
 
 const BUILTIN_FILTERS_TOML: &str = include_str!(concat!(env!("OUT_DIR"), "/builtin_filters.toml"));
@@ -790,11 +772,12 @@ strip_lines_matching = [".*"]
 		// Phase 7 (Mode α resolution): supported chains route through
 		// filters::dispatch via the chain decomposer instead of falling
 		// back to passthrough. The unknown-command counter must remain
-		// stable — the chain entry point is structurally known.
-		reset_unknown_command_count();
+		// stable — the chain entry point is structurally known. Asserted on
+		// this thread's recordings: parallel integration tests legitimately
+		// bump the process-wide counter.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let input = "diff --git a/file.rs b/file.rs\n@@\n-old\n+new\n";
-		let before = unknown_command_count();
+		let before = thread_unknown_command_count();
 
 		assert_eq!(mode_for("git diff ; printf done", &cfg), MinimizerMode::SegmentedChain);
 		let out = apply("git diff ; printf done", input, 0, &cfg);
@@ -805,7 +788,7 @@ strip_lines_matching = [".*"]
 		// recorded (per-segment minimization is the segmented runner's job).
 		assert!(!out.changed, "mixed chain must stay passthrough in whole-buffer minimization");
 		assert_eq!(out.filter, "compound");
-		assert_eq!(unknown_command_count(), before);
+		assert_eq!(thread_unknown_command_count(), before);
 	}
 
 	#[test]
@@ -1257,33 +1240,38 @@ mod pipeline_integration_tests {
 
 	#[test]
 	fn unknown_command_counter_ignores_other_threads() {
-		reset_unknown_command_count();
 		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
 			enabled: Some(true),
 			..Default::default()
 		});
+		let before = thread_unknown_command_count();
 		std::thread::spawn(move || {
 			let _ = apply("zzzobscurecmd foo", "hi\n", 0, &cfg);
 		})
 		.join()
 		.expect("worker thread");
 		assert_eq!(
-			unknown_command_count(),
-			0,
-			"another thread's unknown command must not leak into this test's counter"
+			thread_unknown_command_count(),
+			before,
+			"another thread's unknown command must not leak into this thread's recordings"
 		);
 	}
 
 	#[test]
 	fn unknown_command_counter_increments() {
-		reset_unknown_command_count();
 		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
 			enabled: Some(true),
 			..Default::default()
 		});
-		let before = unknown_command_count();
+		let global_before = unknown_command_count();
+		let thread_before = thread_unknown_command_count();
 		let _ = apply("zzzobscurecmd foo", "hi\n", 0, &cfg);
-		let after = unknown_command_count();
-		assert!(after > before, "counter should advance for unknown commands");
+		// Exact accounting on this thread; monotonic advance on the public
+		// process-wide counter (other threads may add, never subtract).
+		assert_eq!(thread_unknown_command_count(), thread_before + 1);
+		assert!(
+			unknown_command_count() > global_before,
+			"counter should advance for unknown commands"
+		);
 	}
 }

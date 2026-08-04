@@ -1,6 +1,6 @@
+import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import { type } from "arktype";
 import { isEmbeddedPythonEnabled } from "../config/settings";
 import runtimeRunDescriptionTemplate from "../prompts/tools/runtime-run.md" with { type: "text" };
 import { disposeCachedRuntimeService } from "../runtime";

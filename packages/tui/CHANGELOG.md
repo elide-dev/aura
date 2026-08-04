@@ -6,6 +6,18 @@
 
 - Fixed dull, inconsistent colors under Windows Terminal and WSL by detecting `WT_SESSION` as a truecolor terminal in `detectTerminalId`. Windows Terminal never sets `COLORTERM` (and WSLENV forwards only `WT_SESSION`), so `TERMINAL.trueColor` was `false` while the rest of the UI assumed truecolor, quantizing markdown color swatches, LaTeX colors, and the welcome brand gradient to 256-color.
 - Fixed italic text (the welcome tip, thinking traces, blockquotes, and markdown emphasis) rendering as a solid reverse-video block under tmux/screen inside Windows Terminal. Screen-family terminfo (`screen-256color`, tmux's historical `default-terminal`) lacks `sitm`, so the multiplexer substitutes the standout attribute for SGR 3. `TERMINAL.italic` (resolved via `shouldEnableItalicByDefault`) is now off for screen-family / GNU screen sessions so italic degrades to plain text; `PI_FORCE_ITALIC=1` / `PI_NO_ITALIC=1` override.
+## [17.2.5] - 2026-08-03
+
+### Fixed
+
+- Fixed Kitty and Ghostty keyboard shortcuts on non-Latin keyboard layouts by requesting base-layout key reporting from the terminal.
+
+## [17.2.4] - 2026-08-01
+
+### Fixed
+
+- Fixed animated Loader paints saturating a CPU core on slow WSL/ConPTY terminals by applying cost-aware cadence backpressure while preserving 30fps on cheap frames ([#7290](https://github.com/can1357/oh-my-pi/issues/7290)).
+- Fixed interactive terminals suppressing all output and input when the host project sets `NODE_ENV=test` or `BUN_ENV=test` ([#7261](https://github.com/can1357/oh-my-pi/issues/7261)).
 
 ## [17.2.2] - 2026-07-31
 

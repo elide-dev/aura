@@ -1,14 +1,15 @@
 /**
  * List and clean up agent-managed git worktrees under `~/.omp/wt`.
  */
-import { APP_NAME, CONFIG_DIR_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
+
+import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { worktreeHelp as commandHelp } from "../cli/command-help";
 import { clearWorktrees, listWorktrees } from "../cli/worktree-cli";
 import { Settings } from "../config/settings";
 
 export default class Worktree extends Command {
-	static description = `List or clear agent-managed git worktrees (~/${CONFIG_DIR_NAME}/wt)`;
-
+	static description = commandHelp.description;
 	static aliases = ["wt"];
 
 	static args = {

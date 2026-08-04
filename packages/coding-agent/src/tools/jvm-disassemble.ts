@@ -1,5 +1,5 @@
+import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { type } from "arktype";
 import jvmDisassembleDescription from "../prompts/tools/jvm-disassemble.md" with { type: "text" };
 import { execResultFailed } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";

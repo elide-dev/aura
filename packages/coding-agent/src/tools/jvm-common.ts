@@ -1,4 +1,4 @@
-import { type } from "arktype";
+import { type } from "@oh-my-pi/omptype";
 import { formatExecResult } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { RuntimeService } from "../runtime/service";

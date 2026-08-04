@@ -1,6 +1,6 @@
+import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type } from "arktype";
 import { isEmbeddedPythonEnabled } from "../config/settings";
 import runtimeInsightsDescriptionTemplate from "../prompts/tools/runtime-insights.md" with { type: "text" };
 import { execResultFailed, formatExecResult } from "../runtime/format";

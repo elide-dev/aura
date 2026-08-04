@@ -157,6 +157,7 @@ export interface KagiSearchOptions {
 	recency?: "day" | "week" | "month" | "year";
 	sessionId?: string;
 	signal?: AbortSignal;
+	timeoutMs?: number;
 	fetch?: FetchImpl;
 }
 
@@ -254,7 +255,7 @@ export async function searchWithKagi(
 					Accept: "application/json",
 				},
 				body,
-				signal: withHardTimeout(options.signal),
+				signal: withHardTimeout(options.signal, options.timeoutMs),
 			});
 
 			if (!res.ok) {

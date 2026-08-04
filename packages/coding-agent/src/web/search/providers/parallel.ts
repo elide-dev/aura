@@ -60,6 +60,7 @@ async function searchWithAuthStorage(
 	queries: string[],
 	params: {
 		signal?: AbortSignal;
+		timeoutMs?: number;
 		fetch?: FetchImpl;
 	},
 	authStorage: AuthStorage,
@@ -98,7 +99,7 @@ async function searchWithAuthStorage(
 					},
 					...(sourcePolicy && { source_policy: sourcePolicy }),
 				}),
-				signal: withHardTimeout(params.signal),
+				signal: withHardTimeout(params.signal, params.timeoutMs),
 			});
 
 			if (!response.ok) {
@@ -117,6 +118,7 @@ export async function searchParallel(
 		query: string;
 		num_results?: number;
 		signal?: AbortSignal;
+		timeoutMs?: number;
 		fetch?: FetchImpl;
 		parsedQuery?: StructuredQuery;
 	},
@@ -135,6 +137,7 @@ export async function searchParallel(
 			[query],
 			{
 				signal: params.signal,
+				timeoutMs: params.timeoutMs,
 				fetch: params.fetch,
 			},
 			authStorage,
@@ -173,6 +176,7 @@ export class ParallelProvider extends SearchProvider {
 				query: params.query,
 				num_results: params.numSearchResults ?? params.limit,
 				signal: params.signal,
+				timeoutMs: params.timeoutMs,
 				fetch: params.fetch,
 				parsedQuery: params.parsedQuery,
 			},

@@ -267,6 +267,28 @@ install_binary() {
     echo "Downloading ${BINARY}..."
     curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 30 "$BINARY_URL" -o "${INSTALL_DIR}/aura"
     chmod +x "${INSTALL_DIR}/aura"
+
+    # Verify the freshly installed binary can actually start before reporting
+    # success. Bun's musl-target binaries link libstdc++/libgcc dynamically,
+    # which stock Alpine/musl systems do not ship, so the download succeeds while
+    # the binary exits 127 with relocation errors. Never claim success for a
+    # binary that cannot run.
+    if ! SMOKE_OUTPUT="$("${INSTALL_DIR}/aura" --version 2>&1)"; then
+        echo ""
+        echo "✗ aura was downloaded to ${INSTALL_DIR}/aura but cannot start:"
+        echo "$SMOKE_OUTPUT" | sed 's/^/    /'
+        if [ "$PLATFORM" = "linux-musl" ]; then
+            echo ""
+            echo "The musl build links libstdc++/libgcc dynamically. Install them, then re-run 'aura':"
+            if command -v apk >/dev/null 2>&1; then
+                echo "    apk add libstdc++ libgcc"
+            else
+                echo "    (install the libstdc++ and libgcc runtime packages for your distro)"
+            fi
+        fi
+        exit 1
+    fi
+
     echo ""
     echo "✓ Installed aura to ${INSTALL_DIR}/aura"
 
