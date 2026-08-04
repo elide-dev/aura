@@ -4,6 +4,7 @@ import {
 	createTelemetryExportConfig,
 	initTelemetryExport,
 	isTelemetryExportEnabled,
+	resolveAuraAuthorizedUrl,
 	subscribeTelemetry,
 } from "@oh-my-pi/pi-coding-agent/telemetry-export";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -255,5 +256,43 @@ describe("initTelemetryExport registration failures", () => {
 			unsink();
 		}
 		expect(warnings).toHaveLength(2);
+	});
+});
+
+describe("resolveAuraAuthorizedUrl", () => {
+	const settings = {
+		get: (key: string) =>
+			(({ "telemetry.enabled": true, "cloud.telemetry.enabled": true }) as Record<string, unknown>)[key],
+	} as never;
+
+	it("returns the signal URL when the Aura tier wins the destination", () => {
+		const url = resolveAuraAuthorizedUrl("log", settings, { AURA_DOMAIN: "elide.cloud" });
+		expect(url).toBe("https://telemetry.elide.cloud/v1/logs");
+	});
+
+	it("returns undefined when env owns the endpoint (credential never follows env)", () => {
+		const url = resolveAuraAuthorizedUrl("log", settings, {
+			AURA_DOMAIN: "elide.cloud",
+			OTEL_EXPORTER_OTLP_ENDPOINT: "https://operator.example",
+		});
+		expect(url).toBeUndefined();
+	});
+
+	it("returns undefined when an explicit telemetry.endpoint outranks the Aura tier", () => {
+		const withEndpoint = {
+			get: (key: string) =>
+				(
+					({
+						"telemetry.enabled": true,
+						"cloud.telemetry.enabled": true,
+						"telemetry.endpoint": "https://collector.example",
+					}) as Record<string, unknown>
+				)[key],
+		} as never;
+		expect(resolveAuraAuthorizedUrl("log", withEndpoint, { AURA_DOMAIN: "elide.cloud" })).toBeUndefined();
+	});
+
+	it("returns undefined for the built-in tier (no AURA_DOMAIN)", () => {
+		expect(resolveAuraAuthorizedUrl("log", settings, {})).toBeUndefined();
 	});
 });
