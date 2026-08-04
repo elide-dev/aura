@@ -39,7 +39,10 @@ export function usageTokenAttributes(event: ChatUsageEvent): LogAttributes | und
 		billable = true;
 	}
 	if (!billable) return undefined;
-	attributes["gen_ai.provider.name"] = event.provider;
+	// `provider` is optional on ChatUsageEvent; drop it rather than shipping an
+	// undefined value, matching otelAttributes/metricAttributes' convention for
+	// the same event fields.
+	if (event.provider !== undefined) attributes["gen_ai.provider.name"] = event.provider;
 	attributes["gen_ai.request.model"] = event.model;
 	return attributes;
 }
