@@ -334,4 +334,28 @@ describe("usage token billing records", () => {
 		unregister();
 		expect(logs.filter(entry => entry.eventName === "aura.usage.tokens")).toHaveLength(0);
 	});
+
+	it("drops gen_ai.provider.name rather than shipping it undefined when provider is absent", () => {
+		const logs: Array<{ eventName: string; attributes: Record<string, unknown> }> = [];
+		const unregister = registerOtlpSink({
+			emitLog: (_level, _body, attributes, eventName) => logs.push({ eventName, attributes }),
+		});
+		emitTelemetryEvent({
+			type: "chat.usage",
+			event: {
+				provider: undefined,
+				model: "claude-fable-5",
+				usage: { inputTokens: 100, outputTokens: 50 },
+			} as never,
+		});
+		unregister();
+		const billing = logs.filter(entry => entry.eventName === "aura.usage.tokens");
+		expect(billing).toHaveLength(1);
+		expect("gen_ai.provider.name" in (billing[0]?.attributes ?? {})).toBe(false);
+		expect(billing[0]?.attributes).toEqual({
+			"aura.usage.tokens.input": 100,
+			"aura.usage.tokens.output": 50,
+			"gen_ai.request.model": "claude-fable-5",
+		});
+	});
 });
