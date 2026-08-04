@@ -1,5 +1,5 @@
 /**
- * Shared chart primitives for the dashboard timeline charts: the OMP color
+ * Shared chart primitives for the dashboard timeline charts: the Aura color
  * palette, light/dark chart chrome, legend/tooltip + scale plumbing, dataset
  * styling, and the top-N-by-model / aggregate bucketing used by the cost and
  * behavior series.
@@ -7,14 +7,16 @@
 
 import { format } from "date-fns";
 
-// OMP brand palette (packages/collab-web/src/styles/tokens.css): pink/purple/cyan.
-// Categorical series lead with the brand gradient hues (pink -> purple -> cyan).
+// Leads with elide-dev/design-system's brand hues (pink/magenta/purple —
+// css/tokens.css); the design system has no data-dashboard categorical
+// palette of its own, so the remaining slots are generic, well-separated
+// hues chosen to stay legible on both themes for series counts beyond three.
 export const MODEL_COLORS = [
-	"#ed4abf", // brand pink (accent)
-	"#9b4dff", // brand violet
-	"#5ad8e6", // brand cyan
+	"#ff5fff", // brand pink
+	"#d4007f", // brand magenta
+	"#662d91", // brand purple
 	"#62d394", // green
-	"#c77dff", // light purple
+	"#5ad8e6", // cyan
 	"#ff8fd1", // light pink
 	"#f5c14b", // amber
 	"#ff6b7d", // rose
@@ -22,22 +24,22 @@ export const MODEL_COLORS = [
 
 export const CHART_THEMES = {
 	dark: {
-		legendLabel: "#a89fb3",
-		tooltipBackground: "#241a2e",
-		tooltipTitle: "#eae5ef",
-		tooltipBody: "#a89fb3",
+		legendLabel: "#9a9a9a",
+		tooltipBackground: "#0e0e11",
+		tooltipTitle: "#fafcfa",
+		tooltipBody: "#9a9a9a",
 		tooltipBorder: "rgba(255, 255, 255, 0.12)",
 		grid: "rgba(255, 255, 255, 0.06)",
-		tick: "#867a93",
+		tick: "#9a9a9a",
 	},
 	light: {
-		legendLabel: "#5a5462",
+		legendLabel: "#5c5c5c",
 		tooltipBackground: "#ffffff",
-		tooltipTitle: "#241a2e",
-		tooltipBody: "#5a5462",
-		tooltipBorder: "rgba(20, 12, 28, 0.15)",
-		grid: "rgba(20, 12, 28, 0.08)",
-		tick: "#6a6275",
+		tooltipTitle: "#0a0a0a",
+		tooltipBody: "#5c5c5c",
+		tooltipBorder: "rgba(0, 0, 0, 0.15)",
+		grid: "rgba(0, 0, 0, 0.08)",
+		tick: "#5c5c5c",
 	},
 } as const;
 

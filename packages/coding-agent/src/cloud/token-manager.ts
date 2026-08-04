@@ -357,6 +357,24 @@ function requireStringArray(value: unknown): readonly string[] {
 	return value as readonly string[];
 }
 
+// RFC 6749 scope-token: 1*NQCHAR, i.e. one or more visible, non-space ASCII characters
+// (0x21-0x7E). Mirrors elide-cloud's packages/worker-auth/src/scope.ts#parseScopeClaim exactly —
+// the server issues `scope` as one RFC-6749 space-delimited string, not a JSON array.
+const SCOPE_TOKEN_RE = /^[\x21-\x7E]+$/;
+
+function parseScopeClaim(value: unknown): readonly string[] {
+	if (value === undefined || value === null || value === "") return [];
+	if (typeof value !== "string") reject();
+	const tokens = value.split(" ");
+	const seen = new Set<string>();
+	for (const token of tokens) {
+		if (token.length === 0 || !SCOPE_TOKEN_RE.test(token)) reject();
+		if (seen.has(token)) reject();
+		seen.add(token);
+	}
+	return tokens;
+}
+
 function sameSet(actual: readonly string[], expected: readonly string[]): boolean {
 	if (actual.length !== expected.length) return false;
 	const seen = new Set(actual);
@@ -441,14 +459,18 @@ export async function verifyAuraToken(
 		if (expected !== undefined && claim !== expected) reject();
 		return claim;
 	};
-	const orgId = tenancy(claims.org_id, contract.orgId);
-	const accountId = tenancy(claims.account_id, contract.accountId);
-	const realmId = tenancy(claims.realm_id, contract.realmId);
+	// Claim names match elide-cloud's issuer exactly (workers/auth/tokens.ts,
+	// packages/worker-auth/src/principal.ts): `org`/`act`/`realm`, not `org_id`/`account_id`/
+	// `realm_id` — this client predates having a real server to verify claim names against.
+	const orgId = tenancy(claims.org, contract.orgId);
+	const accountId = tenancy(claims.act, contract.accountId);
+	const realmId = tenancy(claims.realm, contract.realmId);
 
 	const roles = requireStringArray(claims.roles);
 	if (contract.roles !== undefined && !sameList(roles, contract.roles)) reject();
 
-	const scopes = requireStringArray(claims.scopes);
+	// `scope` (singular) is one RFC-6749 space-delimited string server-side, not a `scopes` array.
+	const scopes = parseScopeClaim(claims.scope);
 	if (!sameSet(scopes, contract.scopes)) reject();
 
 	let deviceId: string | undefined;

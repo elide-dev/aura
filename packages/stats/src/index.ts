@@ -8,6 +8,7 @@ import { startServer } from "./server";
 
 export {
 	getDashboardStats,
+	getRecentRequests,
 	getToolDashboardStats,
 	getTotalMessageCount,
 	type SyncOptions,

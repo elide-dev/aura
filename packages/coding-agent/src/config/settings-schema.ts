@@ -5686,6 +5686,14 @@ export const SETTINGS_SCHEMA = {
 	/** Aura catalog mirror. */
 	"cloud.catalogMirror.enabled": { type: "boolean", default: true },
 
+	/**
+	 * Aura-hosted observability panel: pushes locally-computed `stats` usage records to the
+	 * Aura account's ingest endpoint, and points `aura stats` at the hosted panel instead of a
+	 * local server. Off by default — this ships session history outward that the user has not
+	 * asked to ship, the same reasoning as telemetry.
+	 */
+	"cloud.stats.enabled": { type: "boolean", default: false },
+
 	// Telemetry: OpenTelemetry export (off by default; OTEL_* env always wins)
 	"telemetry.enabled": {
 		type: "boolean",

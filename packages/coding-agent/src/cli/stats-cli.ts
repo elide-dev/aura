@@ -4,9 +4,21 @@
  * Handles `omp stats` subcommand for viewing AI usage statistics.
  */
 
+import type { MessageStats } from "@oh-my-pi/omp-stats";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import { APP_NAME, formatDuration, formatNumber, formatPercent } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import {
+	auraDeploymentFor,
+	readCloudSwitches,
+	resolveAuraDeployment,
+	resolveServiceEndpoint,
+	resolveStatsPanelUrl,
+} from "../cloud/deployment";
+import { isAuraCloudError } from "../cloud/errors";
+import { TokenManager } from "../cloud/token-manager";
+import { AuraTokenStore } from "../cloud/token-store";
+import { Settings } from "../config/settings";
 import { openPath } from "../utils/open";
 
 /**
@@ -107,6 +119,113 @@ function normalizePremiumRequests(n: number): number {
 }
 
 // =============================================================================
+// Hosted panel (aura-only; omp's `stats` stays fully local — see docs/aura/FORK.md)
+// =============================================================================
+
+/** Batch cap on the ingest worker's side (workers/stats/contract.ts, elide-cloud). */
+const STATS_PUSH_BATCH_LIMIT = 500;
+
+function toStatsRecord(m: MessageStats): Record<string, unknown> {
+	return {
+		sessionFile: m.sessionFile,
+		entryId: m.entryId,
+		folder: m.folder,
+		model: m.model,
+		provider: m.provider,
+		api: m.api,
+		timestamp: m.timestamp,
+		duration: m.duration,
+		ttft: m.ttft,
+		stopReason: m.stopReason,
+		errorMessage: m.errorMessage,
+		usage: {
+			input: m.usage.input,
+			output: m.usage.output,
+			cacheRead: m.usage.cacheRead,
+			cacheWrite: m.usage.cacheWrite,
+			totalTokens: m.usage.totalTokens,
+			premiumRequests: m.usage.premiumRequests,
+		},
+		cost: m.usage.cost,
+		agentType: m.agentType,
+	};
+}
+
+/**
+ * Push the most recent local records to the Aura ingest endpoint and, on success, open the
+ * hosted panel instead of starting a local server. Returns `false` for every reason the caller
+ * should fall back to the existing fully-local flow: `cloud.stats.enabled` is off (the default —
+ * this ships session history outward, which is opt-in), Aura is not configured at all, the user
+ * has not run `aura account login`, or the push itself failed. None of those are treated as a
+ * hard error — the local dashboard has always worked without any of this and must keep working.
+ */
+async function tryOpenHostedPanel(): Promise<boolean> {
+	const settings = await Settings.init();
+	const deployment = resolveAuraDeployment({ env: process.env });
+	const switches = readCloudSwitches(settings);
+	if (!(switches.stats ?? false)) return false;
+
+	const narrowed = auraDeploymentFor("stats", deployment, switches);
+	const authOrigin = resolveServiceEndpoint("auth", {
+		deployment: auraDeploymentFor("account", deployment, switches),
+	})?.url;
+	const ingestUrl = resolveServiceEndpoint("stats", { deployment: narrowed })?.url;
+	const panelUrl = resolveStatsPanelUrl(deployment.domain);
+	if (!authOrigin || !ingestUrl || !panelUrl) return false;
+
+	let token: string;
+	try {
+		const store = await AuraTokenStore.open();
+		const manager = new TokenManager({ authOrigin, store });
+		token = (await manager.getAccessToken()).value;
+	} catch (error) {
+		if (isAuraCloudError(error) && (error.code === "login_required" || error.code === "relogin_required")) {
+			console.log(chalk.dim("Hosted panel is enabled but you are not signed in — run `aura account login`."));
+			console.log(chalk.dim("Falling back to the local dashboard.\n"));
+		} else {
+			console.log(chalk.yellow(`Could not reach Aura (${error instanceof Error ? error.message : String(error)}).`));
+			console.log(chalk.dim("Falling back to the local dashboard.\n"));
+		}
+		return false;
+	}
+
+	const { getRecentRequests } = await import("@oh-my-pi/omp-stats");
+	const recent = await getRecentRequests(STATS_PUSH_BATCH_LIMIT);
+	if (recent.length > 0) {
+		try {
+			const response = await fetch(`${ingestUrl}/v1/messages`, {
+				method: "POST",
+				headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+				body: JSON.stringify({ records: recent.map(toStatsRecord) }),
+			});
+			if (!response.ok) {
+				console.log(chalk.yellow(`Push to the hosted panel failed (HTTP ${response.status}).`));
+				console.log(chalk.dim("Falling back to the local dashboard.\n"));
+				return false;
+			}
+			const result = (await response.json()) as { inserted?: number };
+			console.log(chalk.green(`Pushed ${result.inserted ?? 0} record(s) to the hosted panel.`));
+		} catch (error) {
+			console.log(
+				chalk.yellow(
+					`Push to the hosted panel failed (${error instanceof Error ? error.message : String(error)}).`,
+				),
+			);
+			console.log(chalk.dim("Falling back to the local dashboard.\n"));
+			return false;
+		}
+	}
+
+	console.log(chalk.green(`Hosted dashboard: ${panelUrl}`));
+	// Interim auth handoff: the CLI already holds a valid token; the panel does not yet have a
+	// session of its own to hand it to, so it rides in the fragment (never sent to the server,
+	// never logged) rather than a query param. The client-side consumption of this fragment is
+	// not wired up yet — see elide-cloud's workers/stats-panel/public/README.md.
+	openPath(`${panelUrl}#token=${encodeURIComponent(token)}`);
+	return true;
+}
+
+// =============================================================================
 // Command Handler
 // =============================================================================
 
@@ -132,6 +251,11 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 
 	if (cmd.summary) {
 		await printStatsSummary();
+		return;
+	}
+
+	if (await tryOpenHostedPanel()) {
+		closeDb();
 		return;
 	}
 

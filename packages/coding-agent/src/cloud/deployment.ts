@@ -73,11 +73,12 @@ export interface AuraDeployment {
 	readonly telemetryBaseUrl?: ResolvedEndpoint;
 	readonly qaEndpoint?: ResolvedEndpoint;
 	readonly collabOrigin?: ResolvedEndpoint;
+	readonly statsIngestBaseUrl?: ResolvedEndpoint;
 	readonly distribution?: AuraDistributionEndpoints;
 }
 
 /** Surfaces that resolve a single endpoint through {@link resolveServiceEndpoint}. */
-export type AuraServiceSurface = "auth" | "sync" | "broker" | "gateway" | "telemetry" | "qa" | "collab";
+export type AuraServiceSurface = "auth" | "sync" | "broker" | "gateway" | "telemetry" | "qa" | "collab" | "stats";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Errors
@@ -123,12 +124,13 @@ const MAX_HOSTNAME_LENGTH = 253;
 const MAX_LABEL_LENGTH = 63;
 
 /**
- * Longest label this module ever prefixes to `AURA_DOMAIN` (`telemetry.`, `downloads.`).
+ * Longest label this module ever prefixes to `AURA_DOMAIN` (`stats-ingest.`, ahead of
+ * `telemetry.` and `downloads.`).
  *
  * The 253-octet DNS bound applies to the *derived* host, not to the configured domain, so the
  * usable domain budget is shorter than 253 by exactly this much.
  */
-const LONGEST_DERIVED_PREFIX = "telemetry.".length;
+const LONGEST_DERIVED_PREFIX = "stats-ingest.".length;
 
 /** Everything a DNS name may contain once it is already lowercase ASCII. */
 const DOMAIN_CHARSET = /^[a-z0-9.-]+$/;
@@ -295,6 +297,11 @@ function derive(domain: string) {
 		telemetry: `https://telemetry.${domain}`,
 		qa: `https://qa.${domain}/v1/grievances`,
 		collab: `https://collab.${domain}`,
+		stats: `https://stats-ingest.${domain}`,
+		// Where the CLI opens a browser, not an API base — see resolveStatsPanelUrl. Not a
+		// {@link AuraServiceSurface}: nothing ever attaches a bearer or a per-call/persisted/
+		// legacy override to a browser-navigation target the way it would to an API host.
+		statsPanel: `https://stats.${domain}`,
 		distApi: `https://api.${domain}/v1/distribution`,
 		distDownload: `https://downloads.${domain}`,
 		distJwks: `https://api.${domain}/.well-known/distribution-jwks.json`,
@@ -341,6 +348,7 @@ export function resolveAuraDeployment(input: { env: EnvView }): AuraDeployment {
 		telemetryBaseUrl?: ResolvedEndpoint;
 		qaEndpoint?: ResolvedEndpoint;
 		collabOrigin?: ResolvedEndpoint;
+		statsIngestBaseUrl?: ResolvedEndpoint;
 		distribution?: AuraDistributionEndpoints;
 	} = {};
 
@@ -352,6 +360,7 @@ export function resolveAuraDeployment(input: { env: EnvView }): AuraDeployment {
 	assign(deployment, "telemetryBaseUrl", tier("AURA_TELEMETRY_URL", BASE_RULES, derived?.telemetry));
 	assign(deployment, "qaEndpoint", tier("AURA_QA_URL", BASE_RULES, derived?.qa));
 	assign(deployment, "collabOrigin", tier("AURA_COLLAB_ORIGIN", COLLAB_RULES, derived?.collab));
+	assign(deployment, "statsIngestBaseUrl", tier("AURA_STATS_URL", BASE_RULES, derived?.stats));
 
 	const apiBaseUrl = tier("AURA_DIST_API_URL", BASE_RULES, derived?.distApi);
 	const downloadBaseUrl = tier("AURA_DIST_DOWNLOAD_URL", BASE_RULES, derived?.distDownload);
@@ -389,6 +398,7 @@ const SURFACE_FIELD: Readonly<Record<AuraServiceSurface, keyof AuraDeployment>> 
 	telemetry: "telemetryBaseUrl",
 	qa: "qaEndpoint",
 	collab: "collabOrigin",
+	stats: "statsIngestBaseUrl",
 };
 
 /** Non-empty explicit value, tagged with the tier it came from. Never re-validated. */
@@ -431,6 +441,20 @@ export function resolveServiceEndpoint(
 	return call ?? setting ?? aura ?? legacy;
 }
 
+/**
+ * Where the CLI opens a browser to view the observability panel, or `undefined` when there is
+ * nothing to point at.
+ *
+ * Deliberately not a {@link resolveServiceEndpoint} surface: a browser-navigation target carries
+ * no bearer token, no per-call/persisted/legacy override, and no exact-URL variable — only
+ * `AURA_DOMAIN` (via {@link resolveAuraDeployment}'s `domain` field) says where it is. Callers
+ * still gate this behind `cloud.stats.enabled` themselves, the same as every other consumer of a
+ * narrowed {@link auraDeploymentFor} view.
+ */
+export function resolveStatsPanelUrl(domain: string | undefined): string | undefined {
+	return domain === undefined ? undefined : derive(domain).statsPanel;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Cloud switches
 // ═══════════════════════════════════════════════════════════════════════════
@@ -454,7 +478,8 @@ export type CloudConsumer =
 	| "share"
 	| "distribution"
 	| "runtimeMirror"
-	| "catalogMirror";
+	| "catalogMirror"
+	| "stats";
 
 /** The settings path that owns each consumer's switch. */
 export const CLOUD_CONSUMER_SETTINGS = {
@@ -469,6 +494,7 @@ export const CLOUD_CONSUMER_SETTINGS = {
 	distribution: "cloud.distribution.enabled",
 	runtimeMirror: "cloud.runtimeMirror.enabled",
 	catalogMirror: "cloud.catalogMirror.enabled",
+	stats: "cloud.stats.enabled",
 } as const satisfies Readonly<Record<CloudConsumer, `cloud.${string}.enabled`>>;
 
 /** A `cloud.*.enabled` settings path. */
@@ -477,9 +503,10 @@ export type CloudSwitchPath = (typeof CLOUD_CONSUMER_SETTINGS)[CloudConsumer];
 /**
  * Defaults, mirroring the schema.
  *
- * Gateway, settings sync and telemetry are off: each ships data outward that the user has not
- * asked to ship. Telemetry in particular stays opt-in after login and after a domain is
- * configured — being signed in is not consent to be measured.
+ * Gateway, settings sync, telemetry and stats are off: each ships data outward that the user has
+ * not asked to ship. Telemetry and stats in particular stay opt-in after login and after a
+ * domain is configured — being signed in is not consent to be measured, or to have session
+ * history pushed to a hosted panel.
  */
 export const CLOUD_SWITCH_DEFAULTS = {
 	account: true,
@@ -493,6 +520,7 @@ export const CLOUD_SWITCH_DEFAULTS = {
 	distribution: true,
 	runtimeMirror: true,
 	catalogMirror: true,
+	stats: false,
 } as const satisfies Readonly<Record<CloudConsumer, boolean>>;
 
 /** Per-consumer switch state; an omitted consumer falls back to {@link CLOUD_SWITCH_DEFAULTS}. */
@@ -531,6 +559,7 @@ const CONSUMER_FIELD: Readonly<Record<CloudConsumer, keyof AuraDeployment>> = {
 	distribution: "distribution",
 	runtimeMirror: "distribution",
 	catalogMirror: "distribution",
+	stats: "statsIngestBaseUrl",
 };
 
 /**

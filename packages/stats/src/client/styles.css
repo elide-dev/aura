@@ -1,29 +1,38 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
 @import "tailwindcss/index.css";
 
 /* ==========================================================================
-   OMP Theme Variables & Color Scheme
+   Aura Theme Variables & Color Scheme
+
+   Sourced from elide-dev/design-system (css/tokens.css, color.html), the
+   ground truth for Elide-related visual design. That system is dark-mode-
+   native with no defined light theme (darkmode.html) and no data-dashboard
+   semantic (success/warning/danger) tokens (its own product surfaces reuse
+   the brand palette itself for validation states — see forms.html). Both
+   gaps are filled below with values chosen to sit comfortably alongside the
+   brand palette rather than invented from nothing; each is commented at the
+   point of use.
    ========================================================================== */
 :root {
   color-scheme: dark;
-  /* OMP brand palette — packages/collab-web/src/styles/tokens.css:
-     deep-purple surfaces (hue 307), pink accent #ed4abf, cyan focus ring #5ad8e6. */
-  --page: oklch(0.16 0.02 307);
-  --surface: oklch(0.19 0.022 307);
-  --surface-2: oklch(0.235 0.026 307);
-  --border: oklch(1 0 0 / 9%);
-  --border-strong: oklch(1 0 0 / 13%);
-  --text: oklch(0.92 0.01 307);
-  --muted: oklch(0.71 0.016 307);
-  --dim: oklch(0.53 0.018 307);
-  --accent: oklch(0.674 0.23 341);          /* brand pink #ed4abf */
-  --accent-fg: oklch(0.2 0.07 341);         /* ink on accent fills */
-  --accent-muted: oklch(0.674 0.23 341 / 18%);
-  --link: oklch(0.817 0.112 205);           /* brand cyan #5ad8e6 */
-  --success: oklch(0.76 0.14 150);
-  --danger: oklch(0.66 0.19 25);
-  --warning: oklch(0.79 0.14 85);
+  /* Design-system dark surfaces (css/tokens.css: --color-surface / --color-surface-alt). */
+  --page: #0a0a0a;
+  --surface: #0e0e11;
+  --surface-2: #16161a;                     /* derived elevation step; DS defines only two surface levels */
+  --border: #1e1e22;                        /* --color-border */
+  --border-strong: #3a3a3a;                 /* DS's own prefers-contrast:more border value, reused as the stronger tier */
+  --text: #fafcfa;                          /* --color-text / --color-white */
+  --muted: #9a9a9a;                         /* --color-text-muted (DS aligns text-muted and text-dim to this same value) */
+  --dim: #71717a;                           /* DS's pre-v1.1 --color-text-dim, kept here as the extra third tier this panel needs */
+  --accent: #d4007f;                        /* --color-magenta — primary brand color */
+  --accent-fg: #fafcfa;                     /* color.html: "the lower luminance lets white text sit on top of CTAs at WCAG AA" */
+  --accent-muted: rgba(212, 0, 127, 0.12);  /* --color-magenta-muted */
+  --link: #ff5fff;                          /* --color-pink — DS's own "inline link text" / interaction-state color */
+  --success: #4ade80;
+  --danger: #f87171;
+  --warning: #fbbf24;
 
-  /* Bridge the view components' token vocabulary to the OMP base tokens so
+  /* Bridge the view components' token vocabulary to the base tokens so
      muted/secondary text and semantic accents resolve instead of silently
      falling back to inherited text color. Re-resolve per theme via var(). */
   --text-primary: var(--text);
@@ -36,52 +45,69 @@
   --bg-hover: var(--surface-2);
   --bg-elevated: var(--surface-2);
 
-  --radius-sm: 3px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  /* --radius-* below match design-system's scale exactly (css/tokens.css). */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* design-system/css/base.css: h1-h4 use --font-mono, body uses --font-sans
+     (a system stack — Instrument Sans is reserved for the DS's own editorial
+     doc pages, per tokens.css, not product surfaces like this one). */
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
 
 /* System-default fallback before JS sets data-theme; an explicit data-theme
-   (set by the toggle / anti-flash script) opts out so the override wins. */
+   (set by the toggle / anti-flash script) opts out so the override wins.
+
+   design-system has no light theme to source from (darkmode.html: "out of
+   scope for v1.0"); its own guidance for this exact situation is to keep
+   brand colors fixed and only override neutrals. Followed here, with one
+   deliberate exception: --link (brand pink) is a light, high-luminance color
+   with the DS's own contrast note only ever validated "on #0A0A0A" — on a
+   white page it fails legibility as text/icon color, so it falls back to
+   --accent (still brand magenta, dark enough to read on white) for light mode
+   only. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    --page: oklch(0.985 0.004 307);
-    --surface: oklch(1 0 0);
-    --surface-2: oklch(0.965 0.006 307);
-    --border: oklch(0 0 0 / 10%);
-    --border-strong: oklch(0 0 0 / 15%);
-    --text: oklch(0.26 0.03 307);
-    --muted: oklch(0.46 0.03 307);
-    --dim: oklch(0.58 0.025 307);
-    --accent: oklch(0.62 0.23 341);
-    --accent-fg: oklch(0.99 0.01 341);
-    --accent-muted: oklch(0.62 0.23 341 / 14%);
-    --link: oklch(0.58 0.13 230);
-    --success: oklch(0.55 0.13 150);
-    --danger: oklch(0.55 0.19 25);
-    --warning: oklch(0.6 0.13 85);
+    --page: #fafcfa;
+    --surface: #ffffff;
+    --surface-2: #f3f3f4;
+    --border: rgba(0, 0, 0, 0.1);
+    --border-strong: rgba(0, 0, 0, 0.18);
+    --text: #0a0a0a;
+    --muted: #5c5c5c;
+    --dim: #7a7a7a;
+    --accent: #d4007f;
+    --accent-fg: #fafcfa;
+    --accent-muted: rgba(212, 0, 127, 0.1);
+    --link: #d4007f;
+    --success: #16a34a;
+    --danger: #dc2626;
+    --warning: #d97706;
   }
 }
 
 /* Explicit theme override (toggle or persisted preference). */
 [data-theme="light"] {
   color-scheme: light;
-  --page: oklch(0.985 0.004 307);
-  --surface: oklch(1 0 0);
-  --surface-2: oklch(0.965 0.006 307);
-  --border: oklch(0 0 0 / 10%);
-  --border-strong: oklch(0 0 0 / 15%);
-  --text: oklch(0.26 0.03 307);
-  --muted: oklch(0.46 0.03 307);
-  --dim: oklch(0.58 0.025 307);
-  --accent: oklch(0.62 0.23 341);
-  --accent-fg: oklch(0.99 0.01 341);
-  --accent-muted: oklch(0.62 0.23 341 / 14%);
-  --link: oklch(0.58 0.13 230);
-  --success: oklch(0.55 0.13 150);
-  --danger: oklch(0.55 0.19 25);
-  --warning: oklch(0.6 0.13 85);
+  --page: #fafcfa;
+  --surface: #ffffff;
+  --surface-2: #f3f3f4;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --text: #0a0a0a;
+  --muted: #5c5c5c;
+  --dim: #7a7a7a;
+  --accent: #d4007f;
+  --accent-fg: #fafcfa;
+  --accent-muted: rgba(212, 0, 127, 0.1);
+  --link: #d4007f;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
 }
 
 /* ==========================================================================
@@ -98,7 +124,7 @@
   }
 
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--font-sans);
     background: var(--page);
     color: var(--text);
     margin: 0;
@@ -158,6 +184,7 @@
 }
 
 .stats-logo-text {
+  font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -165,6 +192,7 @@
 }
 
 .stats-logo-subtext {
+  font-family: var(--font-mono);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -620,6 +648,7 @@
 }
 
 .stats-metric-label {
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -629,6 +658,7 @@
 }
 
 .stats-metric-value {
+  font-family: var(--font-mono);
   font-size: 20px;
   font-weight: 700;
   color: var(--text);
@@ -658,6 +688,7 @@
 }
 
 .stats-table-th {
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -882,7 +913,7 @@
 .stats-drawer-id {
   font-size: 11px;
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .stats-drawer-close-btn {
@@ -930,6 +961,7 @@
 }
 
 .stats-drawer-model {
+  font-family: var(--font-mono);
   font-size: 16px;
   font-weight: 700;
   color: var(--text);
@@ -959,7 +991,7 @@
 .stats-drawer-error-text {
   font-size: 12px;
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -984,6 +1016,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -997,6 +1030,7 @@
 }
 
 .stats-drawer-metric-value {
+  font-family: var(--font-mono);
   font-size: 16px;
   font-weight: 700;
   color: var(--text);
@@ -1057,7 +1091,7 @@
 
 .stats-json-block-content {
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text);
   line-height: 1.5;
@@ -1234,7 +1268,7 @@
 }
 
 /* ==========================================================================
-   Brand mark on the OMP wordmark (both rail + mobile drawer headers)
+   Brand mark on the Aura wordmark (both rail + mobile drawer headers)
    ========================================================================== */
 .stats-logo-container {
   display: grid;
@@ -1249,7 +1283,8 @@
   width: 16px;
   height: 16px;
   border-radius: 4px;
-  background: linear-gradient(135deg, #ed4abf 0%, #9b4dff 50%, #5ad8e6 100%); /* OMP brand gradient mark */
+  /* design-system --gradient-text (css/tokens.css), used here as the wordmark's brand mark. */
+  background: linear-gradient(135deg, #ff5fff 0%, #d4007f 50%, #662d91 100%);
 }
 
 .stats-logo-text,

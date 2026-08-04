@@ -126,6 +126,11 @@ export const NINE_SCOPES = [
 	"usage:write",
 ] as const;
 
+/**
+ * Claim names and shapes here match elide-cloud's real issuer exactly (workers/auth/tokens.ts,
+ * packages/worker-auth/src/principal.ts): `org`/`act`/`realm`, and `scope` as one RFC-6749
+ * space-delimited string — not `org_id`/`account_id`/`realm_id`/a `scopes` array.
+ */
 export function userClaims(input: UserClaimInput, overrides: ClaimOverrides = {}): Record<string, unknown> {
 	const iat = Math.floor(input.nowMs / 1000);
 	return {
@@ -136,11 +141,11 @@ export function userClaims(input: UserClaimInput, overrides: ClaimOverrides = {}
 		exp: iat + (input.lifetimeSec ?? 600),
 		jti: input.jti ?? ulid(`JTI${++jtiCounter}`),
 		principal_type: "user",
-		org_id: input.orgId,
-		account_id: input.accountId,
-		realm_id: input.realmId,
+		org: input.orgId,
+		act: input.accountId,
+		realm: input.realmId,
 		roles: input.roles ?? ["member"],
-		scopes: input.scopes ?? [...NINE_SCOPES],
+		scope: (input.scopes ?? [...NINE_SCOPES]).join(" "),
 		device: input.deviceId,
 		...overrides,
 	};
@@ -167,11 +172,11 @@ export function apiKeyClaims(input: ApiKeyClaimInput, overrides: ClaimOverrides 
 		exp: iat + (input.lifetimeSec ?? 600),
 		jti: ulid(`JTIK${++jtiCounter}`),
 		principal_type: "api_key",
-		org_id: input.orgId,
-		account_id: input.accountId,
-		realm_id: input.realmId,
+		org: input.orgId,
+		act: input.accountId,
+		realm: input.realmId,
 		roles: [],
-		scopes: [...input.scopes],
+		scope: input.scopes.join(" "),
 		...overrides,
 	};
 }

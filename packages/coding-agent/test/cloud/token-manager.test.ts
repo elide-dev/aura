@@ -326,21 +326,21 @@ describe("shared token verifier — cli_user principal contract", () => {
 	const cases: [string, Record<string, unknown>][] = [
 		["principal_type api_key substituted for a user", { principal_type: "api_key" }],
 		["principal_type missing", { principal_type: undefined }],
-		["a different org", { org_id: ulid("ORG9") }],
-		["a different account", { account_id: ulid("ACCT9") }],
-		["a different realm", { realm_id: ulid("REALM9") }],
-		["a non-ULID org", { org_id: "org-1" }],
+		["a different org", { org: ulid("ORG9") }],
+		["a different account", { act: ulid("ACCT9") }],
+		["a different realm", { realm: ulid("REALM9") }],
+		["a non-ULID org", { org: "org-1" }],
 		["extra roles", { roles: ["member", "admin"] }],
 		["missing roles", { roles: undefined }],
 		["roles that are not an array", { roles: "member" }],
 		["a missing device", { device: undefined }],
 		["a non-ULID device", { device: "device-1" }],
 		["a different device", { device: ulid("DEVCE9") }],
-		["eight scopes", { scopes: NINE_SCOPES.slice(1) }],
-		["ten scopes", { scopes: [...NINE_SCOPES, "admin:all"] }],
-		["nine scopes with one substituted", { scopes: [...NINE_SCOPES.slice(1), "admin:all"] }],
-		["nine entries with a duplicate", { scopes: [...NINE_SCOPES.slice(1), NINE_SCOPES[1]] }],
-		["scopes as a space-delimited string", { scopes: NINE_SCOPES.join(" ") }],
+		["eight scopes", { scope: NINE_SCOPES.slice(1).join(" ") }],
+		["ten scopes", { scope: [...NINE_SCOPES, "admin:all"].join(" ") }],
+		["nine scopes with one substituted", { scope: [...NINE_SCOPES.slice(1), "admin:all"].join(" ") }],
+		["nine entries with a duplicate", { scope: [...NINE_SCOPES.slice(1), NINE_SCOPES[1]].join(" ") }],
+		["scope as a JSON array (not an RFC-6749 space-delimited string)", { scope: [...NINE_SCOPES] }],
 	];
 
 	for (const [label, overrides] of cases) {
@@ -355,7 +355,7 @@ describe("shared token verifier — cli_user principal contract", () => {
 
 	test("accepts the nine scopes in any order", async () => {
 		const shuffled = [...NINE_SCOPES].reverse();
-		const token = await mintToken(key, userClaims({ ...ids(), nowMs: T0 }, { scopes: shuffled }));
+		const token = await mintToken(key, userClaims({ ...ids(), nowMs: T0 }, { scope: shuffled.join(" ") }));
 		const verified = await verifyAuraToken(token, userContract(), { keys: staticKeys(key), nowMs: T0 });
 		expect([...verified.scopes].sort()).toEqual([...NINE_SCOPES].sort());
 	});
@@ -419,14 +419,14 @@ describe("shared token verifier — imported_api_key principal contract", () => 
 	const cases: [string, Record<string, unknown>][] = [
 		["a subject that is not the receipt's api key id", { sub: ulid("KEY9") }],
 		["a user principal substituted for an api key", { principal_type: "user" }],
-		["a different realm", { realm_id: ulid("REALM9") }],
-		["a different org", { org_id: ulid("ORG9") }],
-		["a different account", { account_id: ulid("ACCT9") }],
+		["a different realm", { realm: ulid("REALM9") }],
+		["a different org", { org: ulid("ORG9") }],
+		["a different account", { act: ulid("ACCT9") }],
 		["non-empty roles", { roles: ["member"] }],
 		["a device binding", { device: DEVICE }],
-		["a scope the receipt's surface does not carry", { scopes: [...RECEIPT.scopes, "sync:write"] }],
-		["fewer scopes than the receipt's surface", { scopes: [RECEIPT.scopes[0]] }],
-		["the nine user scopes", { scopes: [...NINE_SCOPES] }],
+		["a scope the receipt's surface does not carry", { scope: [...RECEIPT.scopes, "sync:write"].join(" ") }],
+		["fewer scopes than the receipt's surface", { scope: [RECEIPT.scopes[0]].join(" ") }],
+		["the nine user scopes", { scope: [...NINE_SCOPES].join(" ") }],
 		["a foreign issuer", { iss: "https://auth.evil.example" }],
 		["a foreign audience", { aud: "other-cloud" }],
 	];

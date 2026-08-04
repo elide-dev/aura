@@ -4,14 +4,14 @@ import { buildAgentTokenShare } from "../data/view-models";
 import type { AgentType, AgentTypeStats } from "../types";
 
 /**
- * Per-agent-type display chrome. Colors follow the OMP brand palette
- * (pink -> violet -> cyan) used by the dashboard charts so the bar reads on
- * both themes without per-theme overrides.
+ * Per-agent-type display chrome. Colors follow elide-dev/design-system's
+ * three brand hues (magenta -> purple -> pink) so the bar reads on both
+ * themes without per-theme overrides.
  */
 const AGENT_META: Record<AgentType, { label: string; color: string }> = {
-	main: { label: "Main agent", color: "#ed4abf" },
-	subagent: { label: "Subagents", color: "#9b4dff" },
-	advisor: { label: "Advisor", color: "#5ad8e6" },
+	main: { label: "Main agent", color: "#d4007f" },
+	subagent: { label: "Subagents", color: "#662d91" },
+	advisor: { label: "Advisor", color: "#ff5fff" },
 };
 
 export interface AgentTokenShareProps {
