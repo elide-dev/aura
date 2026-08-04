@@ -40,6 +40,12 @@ import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { auraDeploymentFor, readCloudSwitches, resolveAuraDeployment } from "../cloud/deployment";
 import type { Settings } from "../config/settings";
+import {
+	type AuraTelemetryTransport,
+	AuthorizedLogExporter,
+	AuthorizedMetricExporter,
+	AuthorizedTraceExporter,
+} from "./authorized-exporters";
 import { type ErrorReportedTelemetry, emitTelemetryEvent, getActiveTelemetrySessionId } from "./events";
 import { buildResourceAttributes, getOrCreateInstallId } from "./identity";
 import { AuraMetricRecorder } from "./metrics";
@@ -56,6 +62,16 @@ const FLUSH_INTERVAL_MS = 30_000;
 export interface InitTelemetryOptions {
 	/** Settings instance for telemetry.* config (env always wins). */
 	settings?: Settings;
+	/**
+	 * Cloud transport for the Aura telemetry tier. When present AND the Aura
+	 * tier wins the destination, exports go through authorized exporters —
+	 * fresh bearer per export via TokenManager.authorizedFetch. Absent (no
+	 * signed-in cloud session wired up yet), the Aura tier exports
+	 * unauthenticated and the collector's edge will 401 them; the built-in
+	 * and operator tiers are unaffected either way. The CLI wires this once
+	 * the cloud login command lands (cloud/auth.ts AuraAuthClient.manager).
+	 */
+	cloud?: { transport: AuraTelemetryTransport };
 }
 
 export type TelemetrySignal = "trace" | "log" | "metric";
@@ -349,6 +365,28 @@ export function resolveExporterConfig(
 	return config;
 }
 
+/**
+ * The full signal URL to export through an authorized exporter, or
+ * undefined when the Aura tier is not the winning destination. Mirrors
+ * resolveExporterConfig's precedence exactly: env endpoints always win
+ * (and never carry the Aura credential), an explicit telemetry.endpoint
+ * outranks the Aura tier, and the built-in tier never authenticates.
+ */
+export function resolveAuraAuthorizedUrl(
+	signal: TelemetrySignal,
+	settings: Pick<Settings, "get"> | undefined,
+	processEnv: Record<string, string | undefined> = process.env,
+): string | undefined {
+	if (!settings?.get("telemetry.enabled")) return undefined;
+	const { path, envInfix } = SIGNAL_OTLP[signal];
+	const envEndpoint = processEnv[`OTEL_EXPORTER_OTLP_${envInfix}_ENDPOINT`] ?? processEnv.OTEL_EXPORTER_OTLP_ENDPOINT;
+	if (envEndpoint) return undefined;
+	if (settings.get("telemetry.endpoint")) return undefined;
+	const aura = auraTelemetryEndpoint(settings, processEnv);
+	if (!aura) return undefined;
+	return `${aura.replace(/\/+$/, "")}${path}`;
+}
+
 /** A destination and the headers that belong to it — resolved together, always. */
 interface TelemetryDestination {
 	readonly url: string;
@@ -438,7 +476,10 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 	const settings = options.settings;
 
 	if (signalConfig.trace) {
-		const exporter = new OTLPTraceExporter(resolveExporterConfig("trace", settings));
+		const authorizedUrl = options.cloud && resolveAuraAuthorizedUrl("trace", settings);
+		const exporter = authorizedUrl
+			? new AuthorizedTraceExporter({ url: authorizedUrl, transport: options.cloud!.transport })
+			: new OTLPTraceExporter(resolveExporterConfig("trace", settings));
 		traceProvider = new NodeTracerProvider({
 			resource,
 			spanProcessors: [new BatchSpanProcessor(exporter)],
@@ -447,7 +488,10 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 	}
 
 	if (signalConfig.metric) {
-		const exporter = new OTLPMetricExporter(resolveExporterConfig("metric", settings));
+		const authorizedUrl = options.cloud && resolveAuraAuthorizedUrl("metric", settings);
+		const exporter = authorizedUrl
+			? new AuthorizedMetricExporter({ url: authorizedUrl, transport: options.cloud!.transport })
+			: new OTLPMetricExporter(resolveExporterConfig("metric", settings));
 		meterProvider = new MeterProvider({
 			resource,
 			readers: [new PeriodicExportingMetricReader({ exporter })],
@@ -459,7 +503,10 @@ async function registerProviders(signalConfig: SignalConfig, options: InitTeleme
 	}
 
 	if (signalConfig.log) {
-		const exporter = new OTLPLogExporter(resolveExporterConfig("log", settings));
+		const authorizedUrl = options.cloud && resolveAuraAuthorizedUrl("log", settings);
+		const exporter = authorizedUrl
+			? new AuthorizedLogExporter({ url: authorizedUrl, transport: options.cloud!.transport })
+			: new OTLPLogExporter(resolveExporterConfig("log", settings));
 		logProvider = new LoggerProvider({
 			resource,
 			processors: [new BatchLogRecordProcessor({ exporter })],
