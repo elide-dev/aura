@@ -40,13 +40,13 @@
       "@oh-my-pi/pi-wire": "17.2.7",
       "@oh-my-pi/snapcompact": "17.2.7",
       "@opentelemetry/api": "^1.9.1",
-      "@opentelemetry/api-logs": "^0.220.0",
+      "@opentelemetry/api-logs": "^0.221.0",
       "@opentelemetry/context-async-hooks": "^2.9.0",
-      "@opentelemetry/exporter-logs-otlp-proto": "^0.220.0",
-      "@opentelemetry/exporter-metrics-otlp-proto": "^0.220.0",
-      "@opentelemetry/exporter-trace-otlp-proto": "^0.220.0",
+      "@opentelemetry/exporter-logs-otlp-proto": "^0.221.0",
+      "@opentelemetry/exporter-metrics-otlp-proto": "^0.221.0",
+      "@opentelemetry/exporter-trace-otlp-proto": "^0.221.0",
       "@opentelemetry/resources": "^2.9.0",
-      "@opentelemetry/sdk-logs": "^0.220.0",
+      "@opentelemetry/sdk-logs": "^0.221.0",
       "@opentelemetry/sdk-metrics": "^2.9.0",
       "@opentelemetry/sdk-trace-base": "^2.9.0",
       "@opentelemetry/sdk-trace-node": "^2.9.0",
@@ -70,7 +70,7 @@
       "fast-xml-parser": "^5.9.3",
       "ghostty-web": "^0.4.0",
       "handlebars": "^4.7.9",
-      "header-generator": "^2.1.82",
+      "header-generator": "^2.1.87",
       "linkedom": "^0.18.13",
       "lint-staged": "^17.0.8",
       "lru-cache": "11.5.2",
@@ -82,9 +82,9 @@
       "postcss": "^8.5.16",
       "prettier": "^3.9.5",
       "puppeteer-core": "25.3.0",
-      "react": "19.2.7",
+      "react": "19.2.8",
       "react-chartjs-2": "^5.3.1",
-      "react-dom": "19.2.7",
+      "react-dom": "19.2.8",
       "regexp-tree": "^0.1.27",
       "solid-js": "^1.9.14",
       "tailwindcss": "^4.3.2",
@@ -211,8 +211,8 @@
     "*.{js,ts,jsx,tsx,json,jsonc,css}": "biome check --write --no-errors-on-unmatched"
   },
   "dependencies": {
-    "sherpa-onnx": "1.13.2",
-    "sherpa-onnx-darwin-arm64": "1.13.3",
-    "sherpa-onnx-node": "1.13.2"
+    "sherpa-onnx": "1.13.4",
+    "sherpa-onnx-darwin-arm64": "1.13.4",
+    "sherpa-onnx-node": "1.13.4"
   }
 }

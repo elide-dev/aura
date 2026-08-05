@@ -194,7 +194,7 @@ changes the template sources.
   `scripts/build-relocatable-runtime-bundle.test.ts` — fork-owned Linux x64/glibc
   packager and behavioral contract tests for a relocatable standalone Aura binary,
   complete Elide distribution, embedded-library sidecars, runtime overlay, launcher,
-  archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root
+  archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root; the release compiler is the Bun pinned by root `packageManager`, taken from the running interpreter when it already matches and otherwise installed under `$XDG_CACHE_HOME/aura/pinned-bun/<version>` with `bun` trusted so its postinstall materializes a real binary
 - `packages/metaharness/src/inherent-capability-benchmark.ts`,
   `src/inherent-capability-benchmark.test.ts`, and
   `packages/coding-agent/scripts/runtime-telemetry-preflight.ts` — focused current

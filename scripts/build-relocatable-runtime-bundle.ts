@@ -52,6 +52,32 @@ export function pinnedBunPackage(packageManager: unknown): string {
 	return packageManager;
 }
 
+export function pinnedBunVersion(packageManager: unknown): string {
+	return pinnedBunPackage(packageManager).slice("bun@".length);
+}
+
+/**
+ * `bunx bun@<version>` cannot provision a compiler: Bun is absent from Bun's default
+ * trusted-dependency list, so the postinstall that swaps `bin/bun.exe` for the real
+ * binary never runs and the leftover placeholder exits 1 without output. Installing
+ * against a manifest that trusts `bun` explicitly is what makes the postinstall run.
+ */
+export function pinnedBunManifest(version: string): string {
+	const manifest = {
+		name: "aura-pinned-bun",
+		version: "0.0.0",
+		private: true,
+		dependencies: { bun: version },
+		trustedDependencies: ["bun"],
+	};
+	return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+function pinnedBunCacheRoot(): string {
+	const cacheHome = process.env.XDG_CACHE_HOME?.trim() || path.join(os.homedir(), ".cache");
+	return path.join(cacheHome, "aura", "pinned-bun");
+}
+
 function usage(): string {
 	return `Usage: bun scripts/build-relocatable-runtime-bundle.ts --runtime-dist <dir> [options]
 
@@ -157,6 +183,37 @@ async function runCommand(
 	return stdout;
 }
 
+async function probeBunVersion(executable: string): Promise<string | null> {
+	const stat = await fs.stat(executable).catch(() => null);
+	if (!stat?.isFile() || (stat.mode & 0o111) === 0) return null;
+	const reported = await runCommand([executable, "--version"], { description: "Pinned Bun version probe" }).catch(
+		() => null,
+	);
+	return reported?.trim() ?? null;
+}
+
+/** Resolves an executable Bun matching the repository pin, installing it under `cacheRoot` if needed. */
+export async function resolvePinnedBun(packageManager: string, cacheRoot: string): Promise<string> {
+	const version = pinnedBunVersion(packageManager);
+	if (Bun.version === version) return process.execPath;
+
+	const installDir = path.join(cacheRoot, version);
+	const executable = path.join(installDir, "node_modules", ".bin", "bun");
+	if ((await probeBunVersion(executable)) === version) return executable;
+
+	await fs.mkdir(installDir, { recursive: true });
+	await Bun.write(path.join(installDir, "package.json"), pinnedBunManifest(version));
+	await runCommand([process.execPath, "install"], {
+		cwd: installDir,
+		description: `Pinned Bun ${version} installation`,
+	});
+	const provisioned = await probeBunVersion(executable);
+	if (provisioned !== version) {
+		throw new Error(`Provisioning ${packageManager} produced ${provisioned ?? "no usable executable"}.`);
+	}
+	return executable;
+}
+
 async function resolveAuraBinary(options: BundleOptions, repoRoot: string): Promise<string> {
 	if (options.auraBinary) {
 		await requireFile(options.auraBinary, options.auraBinary, true);
@@ -167,8 +224,11 @@ async function resolveAuraBinary(options: BundleOptions, repoRoot: string): Prom
 		typeof manifest === "object" && manifest !== null && "packageManager" in manifest
 			? pinnedBunPackage(manifest.packageManager)
 			: pinnedBunPackage(undefined);
-	await runCommand(["bunx", packageManager, "scripts/ci-release-build-binaries.ts", "--targets", "linux-x64"], {
+	const bun = await resolvePinnedBun(packageManager, pinnedBunCacheRoot());
+	await runCommand([bun, "scripts/ci-release-build-binaries.ts", "--targets", "linux-x64"], {
 		cwd: repoRoot,
+		// Codegen steps inside the release build shell out to `bun`; keep them on the pin too.
+		env: { ...process.env, PATH: `${path.dirname(bun)}${path.delimiter}${process.env.PATH ?? ""}` },
 		inherit: true,
 		description: `Aura release binary build with ${packageManager}`,
 	});

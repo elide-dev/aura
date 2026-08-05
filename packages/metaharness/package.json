@@ -40,8 +40,8 @@
 		"diff": "catalog:",
 		"@oh-my-pi/pi-natives": "catalog:",
 		"motion": "^12.15.0",
-		"react": "^19.1.0",
-		"react-dom": "^19.1.0",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8",
 		"tailwind-merge": "^3.3.0"
 	},
 	"devDependencies": {

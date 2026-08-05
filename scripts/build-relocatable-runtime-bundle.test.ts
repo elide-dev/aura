@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pinnedBunPackage } from "./build-relocatable-runtime-bundle";
+import {
+	pinnedBunManifest,
+	pinnedBunPackage,
+	pinnedBunVersion,
+	resolvePinnedBun,
+} from "./build-relocatable-runtime-bundle";
 
 const repoRoot = path.join(import.meta.dir, "..");
 const scriptPath = path.join(repoRoot, "scripts", "build-relocatable-runtime-bundle.ts");
@@ -61,7 +66,36 @@ async function runBuilder(
 }
 test("uses the repository-pinned Bun release compiler", () => {
 	expect(pinnedBunPackage("bun@1.3.14")).toBe("bun@1.3.14");
+	expect(pinnedBunVersion("bun@1.3.14")).toBe("1.3.14");
 	expect(() => pinnedBunPackage("npm@11.0.0")).toThrow("Expected packageManager to pin Bun");
+});
+
+test("provisions the pinned Bun with a trusted postinstall", () => {
+	const manifest = JSON.parse(pinnedBunManifest("1.3.14"));
+	expect(manifest.dependencies).toEqual({ bun: "1.3.14" });
+	// Without this, Bun skips the postinstall that replaces bin/bun.exe with the real
+	// compiler, leaving a placeholder that exits 1 without printing anything.
+	expect(manifest.trustedDependencies).toEqual(["bun"]);
+});
+
+test("reuses the running Bun when it already satisfies the pin", async () => {
+	const cacheRoot = await temporaryDirectory();
+	expect(await resolvePinnedBun(`bun@${Bun.version}`, cacheRoot)).toBe(process.execPath);
+	expect(await fs.readdir(cacheRoot)).toEqual([]);
+});
+
+test("resolves the repository pin to an executable Bun compiler", async () => {
+	const manifest: { packageManager?: unknown } = await Bun.file(path.join(repoRoot, "package.json")).json();
+	const packageManager = pinnedBunPackage(manifest.packageManager);
+	const executable = await resolvePinnedBun(packageManager, await temporaryDirectory());
+	const probe = Bun.spawn([executable, "--version"], { stdout: "pipe", stderr: "pipe" });
+	const [exitCode, stdout, stderr] = await Promise.all([
+		probe.exited,
+		new Response(probe.stdout).text(),
+		new Response(probe.stderr).text(),
+	]);
+	expect(exitCode, stderr).toBe(0);
+	expect(stdout.trim()).toBe(pinnedBunVersion(packageManager));
 });
 
 describe("relocatable Aura runtime bundle", () => {
