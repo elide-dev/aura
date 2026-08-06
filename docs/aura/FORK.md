@@ -191,10 +191,11 @@ changes the template sources.
 - `packages/coding-agent/src/cli/version-identity.ts` — `--version` identity line
   (`<app>/<version>` + runtime protocol version)
 - `scripts/build-relocatable-runtime-bundle.ts`,
-  `scripts/build-relocatable-runtime-bundle.test.ts` — fork-owned Linux x64/glibc
-  packager and behavioral contract tests for a relocatable standalone Aura binary,
+  `scripts/build-relocatable-runtime-bundle.test.ts` — fork-owned host packager
+  (Linux x64/glibc and macOS arm64) and behavioral contract tests for a relocatable
+  standalone Aura binary,
   complete Elide distribution, embedded-library sidecars, runtime overlay, launcher,
-  archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root; the release compiler is the Bun pinned by root `packageManager`, taken from the running interpreter when it already matches and otherwise installed under `$XDG_CACHE_HOME/aura/pinned-bun/<version>` with `bun` trusted so its postinstall materializes a real binary
+  archive, checksum, and post-extraction verification; the launcher resolves relative, absolute, and chained installation symlinks before deriving its bundle root; the release compiler is the Bun pinned by root `packageManager`, taken from the running interpreter when it already matches and otherwise installed under `$XDG_CACHE_HOME/aura/pinned-bun/<version>` with `bun` trusted so its postinstall materializes a real binary; the host decides the bundle name, library suffix, and linkage probe — `ldd` on Linux, `otool -l` on macOS, where `@rpath` expansion must resolve inside the bundle and archives fall back from GNU tar to bsdtar's narrower reproducibility flags
 - `packages/metaharness/src/inherent-capability-benchmark.ts`,
   `src/inherent-capability-benchmark.test.ts`, and
   `packages/coding-agent/scripts/runtime-telemetry-preflight.ts` — focused current
