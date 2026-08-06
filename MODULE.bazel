@@ -150,7 +150,7 @@ crate.from_cargo(
 )
 
 # audiopus_sys builds its vendored opus via the `cmake` crate. cmake + ninja
-# come from @cmake_tools (pinned release binaries, first PATH entry below), so
+# come from @cmake_tools (pinned release binaries, first PATH entries below), so
 # the build no longer cares what the runner image ships — which is also what
 # lets it run on BuildBuddy RBE workers. The host directories stay behind them
 # as a fallback. The policy override is what its old CMakeLists needs under
@@ -182,9 +182,11 @@ crate.annotation(
         # the UBSan runtime. Opus shipped without sanitizers under
         # cargo-zigbuild too.
         "CFLAGS": "-fno-sanitize=undefined",
-        # Canonical repo path of @cmake_tools first — keep in sync with the
-        # cmake tools section below.
-        "PATH": "$${pwd}/external/+cmake_tools_repository+cmake_tools/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/run/current-system/sw/bin",
+        # Canonical repo paths of @cmake_tools first — keep in sync with the
+        # cmake tools section below. cmake and ninja sit in separate directories
+        # because bin/ is the notarized CMake.app bundle on macOS and macOS
+        # deletes that bundle if anything is written into it; see tools.bzl.
+        "PATH": "$${pwd}/external/+cmake_tools_repository+cmake_tools/bin:$${pwd}/external/+cmake_tools_repository+cmake_tools/ninja-bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/run/current-system/sw/bin",
     },
     # Stages the pinned cmake/ninja binaries into the build-script action's
     # sandbox (the PATH entry alone would not make them inputs). Canonical

@@ -3,15 +3,24 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	bsdtarCreateFlags,
+	embeddedLibraryNames,
+	hostBundleTarget,
+	machOLinkagePlan,
+	parseMachOLoadCommands,
 	pinnedBunManifest,
 	pinnedBunPackage,
 	pinnedBunVersion,
+	requiredRuntimeArtifacts,
 	resolvePinnedBun,
 } from "./build-relocatable-runtime-bundle";
 
 const repoRoot = path.join(import.meta.dir, "..");
 const scriptPath = path.join(repoRoot, "scripts", "build-relocatable-runtime-bundle.ts");
-const bundleName = "aura-elide-linux-x64";
+// The bundler always targets its host, so the contract tests must follow the host's naming too.
+const hostTarget = hostBundleTarget();
+const bundleName = hostTarget.bundleName;
+const libraries = embeddedLibraryNames(hostTarget);
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -19,7 +28,9 @@ afterEach(async () => {
 });
 
 async function temporaryDirectory(): Promise<string> {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aura-runtime-bundle-"));
+	// The launcher resolves its own root with `cd -P`, so tests have to compare against real paths:
+	// macOS hands out /var/folders/... temp dirs that are symlinks into /private/var/folders/....
+	const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aura-runtime-bundle-")));
 	tempDirs.push(directory);
 	return directory;
 }
@@ -35,8 +46,8 @@ async function createInputs(root: string): Promise<{ runtimeDist: string; auraBi
 	await fs.mkdir(path.join(runtimeDist, "lib"), { recursive: true });
 	await fs.mkdir(path.join(runtimeDist, "share"), { recursive: true });
 	await writeExecutable(path.join(runtimeDist, "bin", "elide"), "#!/bin/sh\nexit 0\n");
-	await Bun.write(path.join(runtimeDist, "lib", "libelide_embed.so"), "facade");
-	await Bun.write(path.join(runtimeDist, "lib", "libelide_embed_engine.so"), "engine");
+	await Bun.write(path.join(runtimeDist, "lib", libraries.facade), "facade");
+	await Bun.write(path.join(runtimeDist, "lib", libraries.engine), "engine");
 	await Bun.write(path.join(runtimeDist, "share", "runtime-marker.txt"), "complete distribution");
 
 	const auraBinary = path.join(root, "fake-aura");
@@ -117,8 +128,8 @@ describe("relocatable Aura runtime bundle", () => {
 
 		const bundle = path.join(outputDir, bundleName);
 		expect(await Bun.file(path.join(bundle, "share", "runtime-marker.txt")).text()).toBe("complete distribution");
-		expect(await Bun.file(path.join(bundle, "lib", "libelide_embed.so")).text()).toBe("facade");
-		expect(await Bun.file(path.join(bundle, "lib", "libelide_embed_engine.so")).text()).toBe("engine");
+		expect(await Bun.file(path.join(bundle, "lib", libraries.facade)).text()).toBe("facade");
+		expect(await Bun.file(path.join(bundle, "lib", libraries.engine)).text()).toBe("engine");
 		expect(await Bun.file(path.join(bundle, "etc", "aura-bundle.yml")).text()).toBe(
 			"runtime:\n  enabled: true\n  adapter: auto\n  autoDownload: false\n",
 		);
@@ -137,7 +148,7 @@ describe("relocatable Aura runtime bundle", () => {
 		]);
 		expect(launchCode, stderr).toBe(0);
 		expect(stdout).toContain(`runtime=${path.join(bundle, "bin", "elide")}`);
-		expect(stdout).toContain(`embedded=${path.join(bundle, "lib", "libelide_embed.so")}`);
+		expect(stdout).toContain(`embedded=${path.join(bundle, "lib", libraries.facade)}`);
 		expect(stdout).toContain(`config=${path.join(bundle, "etc", "aura-bundle.yml")}:/user/override.yml`);
 		expect(stdout).toContain("args=hello world");
 	});
@@ -178,17 +189,13 @@ describe("relocatable Aura runtime bundle", () => {
 		]);
 		expect(launchCode, stderr).toBe(0);
 		expect(stdout).toContain(`runtime=${path.join(bundle, "bin", "elide")}`);
-		expect(stdout).toContain(`embedded=${path.join(bundle, "lib", "libelide_embed.so")}`);
+		expect(stdout).toContain(`embedded=${path.join(bundle, "lib", libraries.facade)}`);
 		expect(stdout).toContain(`config=${path.join(bundle, "etc", "aura-bundle.yml")}:/user/override.yml`);
 		expect(stdout).toContain("args=hello world");
 	});
 
 	test("rejects distributions missing a required runtime artifact", async () => {
-		for (const relativePath of [
-			path.join("bin", "elide"),
-			path.join("lib", "libelide_embed.so"),
-			path.join("lib", "libelide_embed_engine.so"),
-		]) {
+		for (const relativePath of requiredRuntimeArtifacts(hostTarget)) {
 			const root = await temporaryDirectory();
 			const { runtimeDist, auraBinary } = await createInputs(root);
 			await fs.rm(path.join(runtimeDist, relativePath));
@@ -221,9 +228,26 @@ describe("relocatable Aura runtime bundle", () => {
 exit 0
 `,
 		);
+		// The fake libraries are not real objects, so the linkage probe has to be stubbed. Each stub
+		// still reports linkage that the real checker must accept for the smoke run to pass.
 		const fakeBin = path.join(root, "fake-bin");
 		await fs.mkdir(fakeBin);
 		await writeExecutable(path.join(fakeBin, "ldd"), "#!/bin/sh\necho 'all dependencies resolved'\n");
+		await writeExecutable(
+			path.join(fakeBin, "otool"),
+			`#!/bin/sh
+cat <<'LOADCOMMANDS'
+          cmd LC_ID_DYLIB
+         name @rpath/${libraries.facade} (offset 24)
+          cmd LC_LOAD_DYLIB
+         name @rpath/${libraries.engine} (offset 24)
+          cmd LC_LOAD_DYLIB
+         name /usr/lib/libSystem.B.dylib (offset 24)
+          cmd LC_RPATH
+         path @loader_path (offset 12)
+LOADCOMMANDS
+`,
+		);
 
 		const result = await runBuilder(
 			[
@@ -281,7 +305,7 @@ exit 0
 		const archive = path.join(outputDir, `${bundleName}.tar.gz`);
 		expect(await Bun.file(archive).exists()).toBe(true);
 		expect((await Bun.file(`${archive}.sha256`).text()).trim()).toMatch(
-			/^[a-f0-9]{64} {2}aura-elide-linux-x64\.tar\.gz$/,
+			new RegExp(`^[a-f0-9]{64} {2}${bundleName.replaceAll(".", "\\.")}\\.tar\\.gz$`),
 		);
 
 		const listing = Bun.spawn(["tar", "-tzf", archive], { stdout: "pipe", stderr: "pipe" });
@@ -292,6 +316,102 @@ exit 0
 		]);
 		expect(listingCode, stderr).toBe(0);
 		expect(stdout).toContain(`${bundleName}/bin/aura\n`);
-		expect(stdout).toContain(`${bundleName}/lib/libelide_embed_engine.so\n`);
+		expect(stdout).toContain(`${bundleName}/lib/${libraries.engine}\n`);
+	});
+});
+
+describe("host bundle targets", () => {
+	test("names the bundle, Aura binary, and embedded libraries per host", () => {
+		const linux = hostBundleTarget("linux", "x64");
+		expect(linux.bundleName).toBe("aura-elide-linux-x64");
+		expect(linux.auraBinaryName).toBe("aura-linux-x64");
+		expect(embeddedLibraryNames(linux)).toEqual({
+			facade: "libelide_embed.so",
+			engine: "libelide_embed_engine.so",
+		});
+
+		const darwin = hostBundleTarget("darwin", "arm64");
+		expect(darwin.bundleName).toBe("aura-elide-darwin-arm64");
+		expect(darwin.auraBinaryName).toBe("aura-darwin-arm64");
+		expect(embeddedLibraryNames(darwin)).toEqual({
+			facade: "libelide_embed.dylib",
+			engine: "libelide_embed_engine.dylib",
+		});
+	});
+
+	test("rejects hosts with no verified embedded runtime", () => {
+		expect(() => hostBundleTarget("darwin", "x64")).toThrow(
+			"Relocatable embedded bundles support linux/x64, darwin/arm64; received darwin/x64.",
+		);
+		expect(() => hostBundleTarget("win32", "x64")).toThrow("received win32/x64");
+	});
+
+	test("omits bsdtar's macOS metadata flag off darwin", () => {
+		expect(bsdtarCreateFlags("darwin")).toContain("--no-mac-metadata");
+		expect(bsdtarCreateFlags("linux")).not.toContain("--no-mac-metadata");
+	});
+});
+
+describe("Mach-O linkage", () => {
+	const loadCommands = `Load command 8
+          cmd LC_ID_DYLIB
+      cmdsize 56
+         name @rpath/libelide_embed.dylib (offset 24)
+   time stamp 1 Wed Dec 31 16:00:01 1969
+Load command 9
+          cmd LC_LOAD_DYLIB
+      cmdsize 64
+         name @rpath/libelide_embed_engine.dylib (offset 24)
+   time stamp 2 Wed Dec 31 16:00:02 1969
+Load command 10
+          cmd LC_LOAD_DYLIB
+      cmdsize 56
+         name /usr/lib/libSystem.B.dylib (offset 24)
+Load command 11
+          cmd LC_RPATH
+      cmdsize 32
+         path @loader_path (offset 12)
+`;
+
+	test("reads dependencies and rpaths without mistaking the install name for a dependency", () => {
+		expect(parseMachOLoadCommands(loadCommands)).toEqual({
+			rpaths: ["@loader_path"],
+			dependencies: ["@rpath/libelide_embed_engine.dylib", "/usr/lib/libSystem.B.dylib"],
+		});
+	});
+
+	test("expands @rpath against the staged bundle and ignores the dyld shared cache", () => {
+		const plan = machOLinkagePlan(
+			{ libraryDirectory: "/bundle/lib", executableDirectory: "/bundle/bin" },
+			parseMachOLoadCommands(loadCommands),
+		);
+		expect(plan.issues).toEqual([]);
+		// /usr/lib/libSystem.B.dylib has no file behind it, so it must not become a required path.
+		expect(plan.dependencies).toEqual([
+			{
+				name: "@rpath/libelide_embed_engine.dylib",
+				candidates: ["/bundle/lib/libelide_embed_engine.dylib"],
+			},
+		]);
+	});
+
+	test("flags linkage that would break once the bundle moves", () => {
+		const plan = machOLinkagePlan(
+			{ libraryDirectory: "/bundle/lib", executableDirectory: "/bundle/bin" },
+			{
+				rpaths: ["/build/host/lib", "@executable_path/../lib"],
+				dependencies: ["/opt/homebrew/lib/libz.dylib", "@loader_path/libelide_embed_engine.dylib"],
+			},
+		);
+		expect(plan.issues).toEqual([
+			"LC_RPATH /build/host/lib is not relative to @loader_path or @executable_path.",
+			"Dependency /opt/homebrew/lib/libz.dylib points outside the bundle and the system library cache.",
+		]);
+		expect(plan.dependencies).toEqual([
+			{
+				name: "@loader_path/libelide_embed_engine.dylib",
+				candidates: ["/bundle/lib/libelide_embed_engine.dylib"],
+			},
+		]);
 	});
 });

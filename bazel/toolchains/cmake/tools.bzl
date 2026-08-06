@@ -6,8 +6,13 @@ script's PATH. Historically that PATH pointed at host directories, which made
 the build depend on whatever the runner image shipped — and broke remote
 execution outright (BuildBuddy workers carry no cmake). This repo pins the
 official CMake and Ninja release binaries for the exec host and exposes them
-under a single `bin/` directory that the audiopus_sys annotation prepends to
-the build-script PATH (see MODULE.bazel).
+under `bin/` (cmake) and `ninja-bin/` (ninja), both of which the audiopus_sys
+annotation prepends to the build-script PATH (see MODULE.bazel).
+
+The two directories are not cosmetic. On macOS `bin/` is a symlink into the
+Apple-notarized CMake.app, and writing ninja into that bundle makes macOS treat
+it as tampered — the write fails and the bundle is deleted, leaving cmake to die
+with SIGKILL ("damaged"). ninja therefore gets a directory of its own.
 
 Like @llvm_msvc_tools, the archive choice keys off the *host* running the
 repository rule: with remote execution the exec platform is linux-x64, so
@@ -42,7 +47,7 @@ package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "tools",
-    srcs = glob(["bin/**", "share/**", "CMake.app/**"], allow_empty = True),
+    srcs = glob(["bin/**", "ninja-bin/**", "share/**", "CMake.app/**"], allow_empty = True),
 )
 """
 
@@ -77,23 +82,37 @@ def _cmake_tools_impl(rctx):
     # The macOS archive is an app bundle; surface its bin/ (cmake, and the
     # share/ data it locates relative to the binary) at the repo top level so
     # the PATH entry is the same on every host.
+    #
+    # CMake.app is Apple-notarized and its resources are sealed, so nothing may
+    # ever be written *into* it: adding an executable to a signed bundle reads
+    # as malware persistence, and macOS answers by refusing the write (EPERM)
+    # and deleting the bundle outright. The symlinked bin/ then dangles, and the
+    # `cmake` the audiopus_sys build script resolves from PATH either fails
+    # signature validation — killed with SIGKILL, reported as "damaged" — or is
+    # simply gone. That is why ninja lands in its own ninja-bin/ below rather
+    # than joining cmake in bin/, and why doc/man are only pruned when they are
+    # real top-level directories (linux); on macOS they live inside the bundle.
     if key.startswith("macos-"):
         rctx.symlink("CMake.app/Contents/bin", "bin")
         rctx.symlink("CMake.app/Contents/share", "share")
 
     # Drop the bundled GUI/docs where present; only bin/ + share/cmake-* (the
     # Modules/ tree cmake refuses to run without) matter to build scripts.
-    for name in ("doc", "man"):
-        entry = rctx.path(name)
-        if entry.exists:
-            rctx.delete(entry)
+    if not key.startswith("macos-"):
+        for name in ("doc", "man"):
+            entry = rctx.path(name)
+            if entry.exists:
+                rctx.delete(entry)
 
+    # ninja-bin/ on every host, not bin/: on macOS bin/ is the notarized bundle
+    # (see above), and a uniform layout keeps the PATH annotation in MODULE.bazel
+    # host-independent.
     ninja_asset, ninja_sha256 = _NINJA_DISTS[key]
     rctx.report_progress("Downloading Ninja {} ({})".format(_NINJA_VERSION, ninja_asset))
     rctx.download_and_extract(
         url = "https://github.com/ninja-build/ninja/releases/download/v{}/{}".format(_NINJA_VERSION, ninja_asset),
         sha256 = ninja_sha256,
-        output = "bin",
+        output = "ninja-bin",
     )
 
     rctx.file("BUILD.bazel", _BUILD.format(
