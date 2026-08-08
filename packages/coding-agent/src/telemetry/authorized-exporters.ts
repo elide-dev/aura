@@ -44,7 +44,7 @@ export interface AuraTelemetryTransport {
 }
 
 export interface AuthorizedExporterOptions {
-	/** Full signal URL, e.g. https://telemetry.elide.cloud/v1/logs. */
+	/** Full signal URL, e.g. https://aura.elide.events/v1/logs. */
 	url: string;
 	transport: AuraTelemetryTransport;
 	/**
