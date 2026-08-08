@@ -95,6 +95,7 @@ import {
 	emitTelemetryEvent,
 	initTelemetryExport,
 	isTelemetryExportEnabled,
+	resolveCloudTelemetryTransport,
 	type SessionMode,
 	setActiveTelemetrySessionId,
 	trackSessionLifecycle,
@@ -1531,7 +1532,20 @@ export async function runRootCommand(
 	// agent loop's telemetry hooks so traces, run-level metrics, and structured
 	// logs have source events to export. Content capture remains governed by
 	// OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
-	await logger.time("initTelemetryExport", () => initTelemetryExport({ settings: settingsInstance }));
+	//
+	// `cloud` carries the bearer for the Aura telemetry tier. It resolves to
+	// undefined unless that tier actually wins the destination AND a signed-in
+	// cloud session exists, so the built-in and operator tiers are untouched and
+	// no token database is opened on the common path.
+	const cloudTelemetryTransport = await logger.time("resolveCloudTelemetryTransport", () =>
+		resolveCloudTelemetryTransport(settingsInstance),
+	);
+	await logger.time("initTelemetryExport", () =>
+		initTelemetryExport({
+			settings: settingsInstance,
+			...(cloudTelemetryTransport ? { cloud: { transport: cloudTelemetryTransport } } : {}),
+		}),
+	);
 	if (isTelemetryExportEnabled()) {
 		sessionOptions.telemetry = createTelemetryExportConfig(sessionOptions.telemetry);
 		// Subscription utilization: every fresh usage-limit snapshot (polled report
