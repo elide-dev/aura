@@ -66,13 +66,13 @@ function emitOne(exporter: AuthorizedLogExporter) {
 describe("AuthorizedLogExporter", () => {
 	it("POSTs protobuf to the configured url with the eligible origin", async () => {
 		const { calls, transport } = fakeTransport();
-		const exporter = new AuthorizedLogExporter({ url: "https://telemetry.elide.cloud/v1/logs", transport });
+		const exporter = new AuthorizedLogExporter({ url: "https://aura.elide.events/v1/logs", transport });
 		await emitOne(exporter);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.url).toBe("https://telemetry.elide.cloud/v1/logs");
+		expect(calls[0]?.url).toBe("https://aura.elide.events/v1/logs");
 		expect(calls[0]?.init.method).toBe("POST");
 		expect(new Headers(calls[0]?.init.headers).get("content-type")).toBe("application/x-protobuf");
-		expect(calls[0]?.init.eligibleOrigin).toBe("https://telemetry.elide.cloud");
+		expect(calls[0]?.init.eligibleOrigin).toBe("https://aura.elide.events");
 		const body = calls[0]?.init.body as Uint8Array | undefined;
 		expect(body?.byteLength).toBeGreaterThan(0);
 	});
@@ -80,7 +80,7 @@ describe("AuthorizedLogExporter", () => {
 	it("maps a collector rejection to a FAILED result", async () => {
 		const { transport } = fakeTransport(500);
 		const results: Array<{ code: number }> = [];
-		await sendAuthorized({ url: "https://telemetry.elide.cloud/v1/logs", transport }, new Uint8Array([1]), result =>
+		await sendAuthorized({ url: "https://aura.elide.events/v1/logs", transport }, new Uint8Array([1]), result =>
 			results.push(result),
 		);
 		expect(results[0]?.code).toBe(ExportResultCode.FAILED);
@@ -88,7 +88,7 @@ describe("AuthorizedLogExporter", () => {
 
 	it("an empty batch short-circuits SUCCESS without touching the transport", async () => {
 		const { calls, transport } = fakeTransport();
-		const exporter = new AuthorizedLogExporter({ url: "https://telemetry.elide.cloud/v1/logs", transport });
+		const exporter = new AuthorizedLogExporter({ url: "https://aura.elide.events/v1/logs", transport });
 		const results: Array<{ code: number }> = [];
 		exporter.export([], result => results.push(result));
 		await new Promise(resolve => setTimeout(resolve, 0));
@@ -103,7 +103,7 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 		const { delays, sleep } = fakeSleep();
 		const results: Array<{ code: number }> = [];
 		await sendAuthorized(
-			{ url: "https://telemetry.elide.cloud/v1/logs", transport, sleep },
+			{ url: "https://aura.elide.events/v1/logs", transport, sleep },
 			new Uint8Array([1]),
 			result => results.push(result),
 		);
@@ -118,7 +118,7 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 		const { sleep } = fakeSleep();
 		const results: Array<{ code: number }> = [];
 		await sendAuthorized(
-			{ url: "https://telemetry.elide.cloud/v1/logs", transport, sleep },
+			{ url: "https://aura.elide.events/v1/logs", transport, sleep },
 			new Uint8Array([1]),
 			result => results.push(result),
 		);
@@ -136,7 +136,7 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 		const { sleep } = fakeSleep();
 		const results: Array<{ code: number; error?: Error }> = [];
 		await sendAuthorized(
-			{ url: "https://telemetry.elide.cloud/v1/logs", transport, sleep },
+			{ url: "https://aura.elide.events/v1/logs", transport, sleep },
 			new Uint8Array([1]),
 			result => results.push(result),
 		);
@@ -152,7 +152,7 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 		const { sleep } = fakeSleep();
 		const results: Array<{ code: number }> = [];
 		await sendAuthorized(
-			{ url: "https://telemetry.elide.cloud/v1/logs", transport, sleep },
+			{ url: "https://aura.elide.events/v1/logs", transport, sleep },
 			new Uint8Array([1]),
 			result => results.push(result),
 		);
@@ -165,7 +165,7 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 		const { delays, sleep } = fakeSleep();
 		const results: Array<{ code: number }> = [];
 		await sendAuthorized(
-			{ url: "https://telemetry.elide.cloud/v1/logs", transport, sleep },
+			{ url: "https://aura.elide.events/v1/logs", transport, sleep },
 			new Uint8Array([1]),
 			result => results.push(result),
 		);
@@ -182,7 +182,7 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 			},
 		};
 		const results: Array<{ code: number }> = [];
-		await sendAuthorized({ url: "https://telemetry.elide.cloud/v1/logs", transport }, new Uint8Array([1]), result =>
+		await sendAuthorized({ url: "https://aura.elide.events/v1/logs", transport }, new Uint8Array([1]), result =>
 			results.push(result),
 		);
 		expect(sawSignal).toBeInstanceOf(AbortSignal);
@@ -193,16 +193,16 @@ describe("sendAuthorized retry/backoff/timeout", () => {
 describe("AuthorizedTraceExporter", () => {
 	it("POSTs protobuf spans through the shared send, happy path", async () => {
 		const { calls, transport } = fakeTransport();
-		const exporter = new AuthorizedTraceExporter({ url: "https://telemetry.elide.cloud/v1/traces", transport });
+		const exporter = new AuthorizedTraceExporter({ url: "https://aura.elide.events/v1/traces", transport });
 		const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
 		provider.getTracer("test").startSpan("probe").end();
 		await provider.forceFlush();
 
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.url).toBe("https://telemetry.elide.cloud/v1/traces");
+		expect(calls[0]?.url).toBe("https://aura.elide.events/v1/traces");
 		expect(calls[0]?.init.method).toBe("POST");
 		expect(new Headers(calls[0]?.init.headers).get("content-type")).toBe("application/x-protobuf");
-		expect(calls[0]?.init.eligibleOrigin).toBe("https://telemetry.elide.cloud");
+		expect(calls[0]?.init.eligibleOrigin).toBe("https://aura.elide.events");
 		const body = calls[0]?.init.body as Uint8Array | undefined;
 		expect(body?.byteLength).toBeGreaterThan(0);
 	});
@@ -211,7 +211,7 @@ describe("AuthorizedTraceExporter", () => {
 describe("AuthorizedMetricExporter", () => {
 	it("POSTs protobuf metrics through the shared send, happy path", async () => {
 		const { calls, transport } = fakeTransport();
-		const exporter = new AuthorizedMetricExporter({ url: "https://telemetry.elide.cloud/v1/metrics", transport });
+		const exporter = new AuthorizedMetricExporter({ url: "https://aura.elide.events/v1/metrics", transport });
 		const provider = new MeterProvider({
 			readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
 		});
@@ -219,10 +219,10 @@ describe("AuthorizedMetricExporter", () => {
 		await provider.forceFlush();
 
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.url).toBe("https://telemetry.elide.cloud/v1/metrics");
+		expect(calls[0]?.url).toBe("https://aura.elide.events/v1/metrics");
 		expect(calls[0]?.init.method).toBe("POST");
 		expect(new Headers(calls[0]?.init.headers).get("content-type")).toBe("application/x-protobuf");
-		expect(calls[0]?.init.eligibleOrigin).toBe("https://telemetry.elide.cloud");
+		expect(calls[0]?.init.eligibleOrigin).toBe("https://aura.elide.events");
 		const body = calls[0]?.init.body as Uint8Array | undefined;
 		expect(body?.byteLength).toBeGreaterThan(0);
 
