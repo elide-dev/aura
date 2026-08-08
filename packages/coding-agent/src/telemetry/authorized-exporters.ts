@@ -50,7 +50,7 @@ export interface AuthorizedExporterOptions {
 	/**
 	 * Backoff delay override, for tests: given the computed delay in
 	 * milliseconds, resolve whenever the test is ready to let the retry
-	 * proceed. Defaults to a real `setTimeout`-based sleep.
+	 * proceed. Defaults to a real `Bun.sleep`.
 	 */
 	sleep?: (ms: number) => Promise<void>;
 }
@@ -82,7 +82,7 @@ function parseRetryAfterMs(value: string | null): number | undefined {
 }
 
 function defaultSleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
+	return Bun.sleep(ms);
 }
 
 /** Exported for tests (like errorEventFromLog in init.ts). */
