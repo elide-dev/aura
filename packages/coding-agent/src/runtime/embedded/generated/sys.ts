@@ -6,7 +6,7 @@ export const _capnpFileId = 0xce63a482a90ce451n;
 *
 */
 export class PathString extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "PathString",
     id: "e6d1ead39fe5e27c",
     size: new $.ObjectSize(0, 1),
@@ -21,14 +21,14 @@ export class PathString extends $.Struct {
   set path(value: string) {
     $.utils.setText(0, value, this);
   }
-  toString(): string { return "PathString_" + super.toString(); }
+  override toString(): string { return "PathString_" + super.toString(); }
 }
 /**
 * Represents a path to a regular file.
 *
 */
 export class FilePath extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "FilePath",
     id: "9022c6c88d8b8535",
     size: new $.ObjectSize(0, 1),
@@ -55,14 +55,14 @@ export class FilePath extends $.Struct {
   set pathString(value: PathString) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "FilePath_" + super.toString(); }
+  override toString(): string { return "FilePath_" + super.toString(); }
 }
 /**
 * Represents a path to a directory.
 *
 */
 export class DirectoryPath extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "DirectoryPath",
     id: "b8aabb900753f57b",
     size: new $.ObjectSize(0, 1),
@@ -89,7 +89,7 @@ export class DirectoryPath extends $.Struct {
   set pathString(value: PathString) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "DirectoryPath_" + super.toString(); }
+  override toString(): string { return "DirectoryPath_" + super.toString(); }
 }
 export const Path_Target_Which = {
   /**
@@ -107,7 +107,7 @@ export type Path_Target_Which = (typeof Path_Target_Which)[keyof typeof Path_Tar
 export class Path_Target extends $.Struct {
   static readonly FILE = Path_Target_Which.FILE;
   static readonly DIRECTORY = Path_Target_Which.DIRECTORY;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "target",
     id: "b7ed5425f360bb52",
     size: new $.ObjectSize(8, 1),
@@ -170,7 +170,7 @@ export class Path_Target extends $.Struct {
     $.utils.setUint16(0, 1, this);
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "Path_Target_" + super.toString(); }
+  override toString(): string { return "Path_Target_" + super.toString(); }
   which(): Path_Target_Which {
     return $.utils.getUint16(0, this) as Path_Target_Which;
   }
@@ -180,7 +180,7 @@ export class Path_Target extends $.Struct {
 *
 */
 export class Path extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Path",
     id: "edb3f8659d721e18",
     size: new $.ObjectSize(8, 1),
@@ -191,14 +191,14 @@ export class Path extends $.Struct {
   _initTarget(): Path_Target {
     return $.utils.getAs(Path_Target, this);
   }
-  toString(): string { return "Path_" + super.toString(); }
+  override toString(): string { return "Path_" + super.toString(); }
 }
 /**
 * Low-level handle to a file.
 *
 */
 export class FileHandle extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "FileHandle",
     id: "e55ee5e38917fbe0",
     size: new $.ObjectSize(8, 1),
@@ -235,14 +235,14 @@ export class FileHandle extends $.Struct {
   set stat(value: FileStat) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "FileHandle_" + super.toString(); }
+  override toString(): string { return "FileHandle_" + super.toString(); }
 }
 /**
 * Metadata about a file.
 *
 */
 export class FileStat extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "FileStat",
     id: "c3ce8a4f9c7a7be8",
     size: new $.ObjectSize(32, 0),
@@ -297,14 +297,14 @@ export class FileStat extends $.Struct {
   set modifiedAt(value: bigint) {
     $.utils.setUint64(24, value, this);
   }
-  toString(): string { return "FileStat_" + super.toString(); }
+  override toString(): string { return "FileStat_" + super.toString(); }
 }
 /**
 * Handle to a directory.
 *
 */
 export class Directory extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Directory",
     id: "d8b19ed044897605",
     size: new $.ObjectSize(0, 2),
@@ -353,14 +353,14 @@ export class Directory extends $.Struct {
   set handle(value: FileHandle) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "Directory_" + super.toString(); }
+  override toString(): string { return "Directory_" + super.toString(); }
 }
 /**
 * Handle to a file.
 *
 */
 export class File extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "File",
     id: "fec12d5786d71798",
     size: new $.ObjectSize(0, 2),
@@ -409,7 +409,7 @@ export class File extends $.Struct {
   set handle(value: FileHandle) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "File_" + super.toString(); }
+  override toString(): string { return "File_" + super.toString(); }
 }
 export const Port_Value_Which = {
   /**
@@ -427,7 +427,7 @@ export type Port_Value_Which = (typeof Port_Value_Which)[keyof typeof Port_Value
 export class Port_Value extends $.Struct {
   static readonly ASSIGNED = Port_Value_Which.ASSIGNED;
   static readonly RANDOM = Port_Value_Which.RANDOM;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "value",
     id: "d6ef869d6867161d",
     size: new $.ObjectSize(8, 0),
@@ -453,7 +453,7 @@ export class Port_Value extends $.Struct {
   set random(_: true) {
     $.utils.setUint16(2, 1, this);
   }
-  toString(): string { return "Port_Value_" + super.toString(); }
+  override toString(): string { return "Port_Value_" + super.toString(); }
   which(): Port_Value_Which {
     return $.utils.getUint16(2, this) as Port_Value_Which;
   }
@@ -463,7 +463,7 @@ export class Port_Value extends $.Struct {
 *
 */
 export class Port extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Port",
     id: "b7d36bf8e5779d05",
     size: new $.ObjectSize(8, 0),
@@ -484,14 +484,14 @@ export class Port extends $.Struct {
   set effective(value: number) {
     $.utils.setUint16(4, value, this);
   }
-  toString(): string { return "Port_" + super.toString(); }
+  override toString(): string { return "Port_" + super.toString(); }
 }
 /**
 * Low-level handle to a socket.
 *
 */
 export class SocketHandle extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "SocketHandle",
     id: "cc40ffe0ba5fa7cf",
     size: new $.ObjectSize(8, 0),
@@ -506,14 +506,14 @@ export class SocketHandle extends $.Struct {
   set handle(value: bigint) {
     $.utils.setUint64(0, value, this);
   }
-  toString(): string { return "SocketHandle_" + super.toString(); }
+  override toString(): string { return "SocketHandle_" + super.toString(); }
 }
 /**
 * Represents an IPv4 address.
 *
 */
 export class IPv4Address extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "IPv4Address",
     id: "f92a800335a73a93",
     size: new $.ObjectSize(8, 0),
@@ -558,14 +558,14 @@ export class IPv4Address extends $.Struct {
   set octet4(value: number) {
     $.utils.setUint8(3, value, this);
   }
-  toString(): string { return "IPv4Address_" + super.toString(); }
+  override toString(): string { return "IPv4Address_" + super.toString(); }
 }
 /**
 * Represents an IPv6 address.
 *
 */
 export class IPv6Address extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "IPv6Address",
     id: "c5e6643f6e3dbfb7",
     size: new $.ObjectSize(16, 0),
@@ -650,7 +650,7 @@ export class IPv6Address extends $.Struct {
   set segment8(value: number) {
     $.utils.setUint16(14, value, this);
   }
-  toString(): string { return "IPv6Address_" + super.toString(); }
+  override toString(): string { return "IPv6Address_" + super.toString(); }
 }
 export const IPAddress_Address_Which = {
   /**
@@ -668,7 +668,7 @@ export type IPAddress_Address_Which = (typeof IPAddress_Address_Which)[keyof typ
 export class IPAddress_Address extends $.Struct {
   static readonly IPV4 = IPAddress_Address_Which.IPV4;
   static readonly IPV6 = IPAddress_Address_Which.IPV6;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "address",
     id: "f570af7cdda45694",
     size: new $.ObjectSize(8, 1),
@@ -731,7 +731,7 @@ export class IPAddress_Address extends $.Struct {
     $.utils.setUint16(0, 1, this);
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "IPAddress_Address_" + super.toString(); }
+  override toString(): string { return "IPAddress_Address_" + super.toString(); }
   which(): IPAddress_Address_Which {
     return $.utils.getUint16(0, this) as IPAddress_Address_Which;
   }
@@ -741,7 +741,7 @@ export class IPAddress_Address extends $.Struct {
 *
 */
 export class IPAddress extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "IPAddress",
     id: "acbe1641fbaca998",
     size: new $.ObjectSize(8, 1),
@@ -752,14 +752,14 @@ export class IPAddress extends $.Struct {
   _initAddress(): IPAddress_Address {
     return $.utils.getAs(IPAddress_Address, this);
   }
-  toString(): string { return "IPAddress_" + super.toString(); }
+  override toString(): string { return "IPAddress_" + super.toString(); }
 }
 /**
 * Represents a socket address.
 *
 */
 export class SocketAddress extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "SocketAddress",
     id: "b9f1f680c760d925",
     size: new $.ObjectSize(0, 2),
@@ -808,14 +808,14 @@ export class SocketAddress extends $.Struct {
   set port(value: Port) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "SocketAddress_" + super.toString(); }
+  override toString(): string { return "SocketAddress_" + super.toString(); }
 }
 /**
 * Handle to a socket.
 *
 */
 export class Socket extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Socket",
     id: "b81b7943d6a2a853",
     size: new $.ObjectSize(0, 3),
@@ -886,5 +886,5 @@ export class Socket extends $.Struct {
   set file(value: File) {
     $.utils.copyFrom(value, $.utils.getPointer(2, this));
   }
-  toString(): string { return "Socket_" + super.toString(); }
+  override toString(): string { return "Socket_" + super.toString(); }
 }

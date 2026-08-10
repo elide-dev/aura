@@ -70,7 +70,7 @@ export type EmbeddedTool = (typeof EmbeddedTool)[keyof typeof EmbeddedTool];
 *
 */
 export class ToolInvocation extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "ToolInvocation",
     id: "ab52a64bc9ef8360",
     size: new $.ObjectSize(8, 1),
@@ -131,5 +131,5 @@ export class ToolInvocation extends $.Struct {
   set classpathCache(value: boolean) {
     $.utils.setBit(17, value, this);
   }
-  toString(): string { return "ToolInvocation_" + super.toString(); }
+  override toString(): string { return "ToolInvocation_" + super.toString(); }
 }

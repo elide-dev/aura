@@ -111,7 +111,7 @@ export type VMOptionType = (typeof VMOptionType)[keyof typeof VMOptionType];
 *
 */
 export class EngineDirectories extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EngineDirectories",
     id: "e2cb5c7b7cf6ee6d",
     size: new $.ObjectSize(0, 5),
@@ -226,14 +226,14 @@ export class EngineDirectories extends $.Struct {
   set dataDir(value: Directory) {
     $.utils.copyFrom(value, $.utils.getPointer(4, this));
   }
-  toString(): string { return "EngineDirectories_" + super.toString(); }
+  override toString(): string { return "EngineDirectories_" + super.toString(); }
 }
 /**
 * Configuration options for the engine.
 *
 */
 export class EngineConfig extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EngineConfig",
     id: "99763d41d5837840",
     size: new $.ObjectSize(8, 5),
@@ -380,14 +380,14 @@ export class EngineConfig extends $.Struct {
   set directories(value: EngineDirectories) {
     $.utils.copyFrom(value, $.utils.getPointer(4, this));
   }
-  toString(): string { return "EngineConfig_" + super.toString(); }
+  override toString(): string { return "EngineConfig_" + super.toString(); }
 }
 /**
 * List of languages.
 *
 */
 export class Languages extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Languages",
     id: "df02652827ac1e7e",
     size: new $.ObjectSize(0, 1),
@@ -414,5 +414,5 @@ export class Languages extends $.Struct {
   set languages(value: $.List<Language>) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "Languages_" + super.toString(); }
+  override toString(): string { return "Languages_" + super.toString(); }
 }

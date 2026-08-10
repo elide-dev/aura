@@ -240,6 +240,21 @@ function stripSourceRoots(content: string, roots: readonly string[]): string {
 	return stripped;
 }
 
+/**
+ * capnp-es emits `_capnp` and `toString` without an `override` modifier, which the
+ * repo's `noImplicitOverride` tsconfig rejects. Both are the only members generated
+ * structs redeclare from `$.Struct`, and both are emitted in exactly one shape, so
+ * annotate them here rather than exempting the whole tree from typechecking.
+ *
+ * This runs inside the shared normalization pipeline, so `--check` compares the
+ * annotated form against the checked-in files and stays byte-for-byte exact.
+ */
+function addOverrideModifiers(content: string): string {
+	return content
+		.replaceAll(/^(\s*)static readonly _capnp = \{$/gm, "$1static override readonly _capnp = {")
+		.replaceAll(/^(\s*)toString\(\): string \{/gm, "$1override toString(): string {");
+}
+
 async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: string): Promise<Map<string, string>> {
 	const compilerRoot = path.join(temporaryRoot, "compiler");
 	const rawOutputRoot = path.join(temporaryRoot, "raw-generated");
@@ -284,7 +299,7 @@ async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: s
 	const output = new Map<string, string>();
 	for (const generatedFile of generatedFiles) {
 		const source = await fs.readFile(path.join(rawOutputRoot, generatedFile), "utf8");
-		const normalized = stripSourceRoots(source, sourceRoots);
+		const normalized = addOverrideModifiers(stripSourceRoots(source, sourceRoots));
 		for (const sourceRoot of sourceRoots) {
 			if (normalized.includes(sourceRoot) || normalized.includes(sourceRoot.replaceAll("\\", "/"))) {
 				throw new Error(`Generated binding still contains an absolute WHIPLASH path: ${generatedFile}`);

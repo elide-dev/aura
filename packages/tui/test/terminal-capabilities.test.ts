@@ -167,7 +167,8 @@ console.log(JSON.stringify({ id: TERMINAL_ID, imageProtocol: TERMINAL.imageProto
 		expect(exitCode).toBe(0);
 		const resolved = JSON.parse(stdout) as { id: string; imageProtocol: string | null; expected: string };
 		expect(resolved.id).toBe("warp");
-		expect(resolved.imageProtocol).toBe(resolved.expected);
+		// Warp for Windows lacks Kitty graphics support.
+		expect(resolved.imageProtocol).toBe(process.platform === "win32" ? null : resolved.expected);
 	});
 
 	it("is Kitty-capable with true color but no OSC 8 hyperlinks", () => {

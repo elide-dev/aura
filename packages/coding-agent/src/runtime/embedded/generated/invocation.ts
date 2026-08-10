@@ -15,7 +15,7 @@ export const _capnpFileId = 0xe123c205d2399ae0n;
 *
 */
 export class FileRunInvocation extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "FileRunInvocation",
     id: "89bfcc4a977db953",
     size: new $.ObjectSize(0, 1),
@@ -42,14 +42,14 @@ export class FileRunInvocation extends $.Struct {
   set filepath(value: FilePath) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "FileRunInvocation_" + super.toString(); }
+  override toString(): string { return "FileRunInvocation_" + super.toString(); }
 }
 /**
 * Attaches arbitrary metadata to an invocation.
 *
 */
 export class EngineInvocation_InvocationMetadata extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "InvocationMetadata",
     id: "eb27ef496bd4d104",
     size: new $.ObjectSize(8, 1),
@@ -86,14 +86,14 @@ export class EngineInvocation_InvocationMetadata extends $.Struct {
   set engineConfig(value: EngineConfig) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EngineInvocation_InvocationMetadata_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_InvocationMetadata_" + super.toString(); }
 }
 /**
 * Global command-line flags applicable across all commands.
 *
 */
 export class EngineInvocation_CliInvocation_GlobalFlags extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "GlobalFlags",
     id: "d8a4b163aa69920f",
     size: new $.ObjectSize(8, 3),
@@ -332,7 +332,7 @@ export class EngineInvocation_CliInvocation_GlobalFlags extends $.Struct {
   set allowThreads(value: boolean) {
     $.utils.setBit(12, value, this, EngineInvocation_CliInvocation_GlobalFlags._capnp.defaultAllowThreads);
   }
-  toString(): string { return "EngineInvocation_CliInvocation_GlobalFlags_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_GlobalFlags_" + super.toString(); }
 }
 export const EngineInvocation_CliInvocation_NetworkTransport = {
   /**
@@ -446,7 +446,7 @@ export type EngineInvocation_CliInvocation_SourceLanguage = (typeof EngineInvoca
 *
 */
 export class EngineInvocation_CliInvocation_ListenHost extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "ListenHost",
     id: "8286880bfae38723",
     size: new $.ObjectSize(0, 2),
@@ -483,7 +483,7 @@ export class EngineInvocation_CliInvocation_ListenHost extends $.Struct {
   set port(value: Port) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "EngineInvocation_CliInvocation_ListenHost_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_ListenHost_" + super.toString(); }
 }
 export const EngineInvocation_CliInvocation_ServerConfig_Listener_Which = {
   /**
@@ -501,7 +501,7 @@ export type EngineInvocation_CliInvocation_ServerConfig_Listener_Which = (typeof
 export class EngineInvocation_CliInvocation_ServerConfig_Listener extends $.Struct {
   static readonly HOST_PORT = EngineInvocation_CliInvocation_ServerConfig_Listener_Which.HOST_PORT;
   static readonly SOCKET = EngineInvocation_CliInvocation_ServerConfig_Listener_Which.SOCKET;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "listener",
     id: "955cdfe563663636",
     size: new $.ObjectSize(8, 1),
@@ -564,7 +564,7 @@ export class EngineInvocation_CliInvocation_ServerConfig_Listener extends $.Stru
     $.utils.setUint16(0, 1, this);
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EngineInvocation_CliInvocation_ServerConfig_Listener_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_ServerConfig_Listener_" + super.toString(); }
   which(): EngineInvocation_CliInvocation_ServerConfig_Listener_Which {
     return $.utils.getUint16(0, this) as EngineInvocation_CliInvocation_ServerConfig_Listener_Which;
   }
@@ -574,7 +574,7 @@ export class EngineInvocation_CliInvocation_ServerConfig_Listener extends $.Stru
 *
 */
 export class EngineInvocation_CliInvocation_ServerConfig extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "ServerConfig",
     id: "dcddd92810d6eaad",
     size: new $.ObjectSize(8, 1),
@@ -585,14 +585,14 @@ export class EngineInvocation_CliInvocation_ServerConfig extends $.Struct {
   _initListener(): EngineInvocation_CliInvocation_ServerConfig_Listener {
     return $.utils.getAs(EngineInvocation_CliInvocation_ServerConfig_Listener, this);
   }
-  toString(): string { return "EngineInvocation_CliInvocation_ServerConfig_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_ServerConfig_" + super.toString(); }
 }
 /**
 * Settings for hot-reload functionality.
 *
 */
 export class EngineInvocation_CliInvocation_HotReloadSettings extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HotReloadSettings",
     id: "897970ddb85b7de5",
     size: new $.ObjectSize(8, 0),
@@ -607,14 +607,14 @@ export class EngineInvocation_CliInvocation_HotReloadSettings extends $.Struct {
   set enabled(value: boolean) {
     $.utils.setBit(0, value, this);
   }
-  toString(): string { return "EngineInvocation_CliInvocation_HotReloadSettings_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_HotReloadSettings_" + super.toString(); }
 }
 /**
 * Arguments specific to 'run' command invocations.
 *
 */
 export class EngineInvocation_CliInvocation_RunFlags extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "RunFlags",
     id: "ebeebcdd07342f11",
     size: new $.ObjectSize(0, 5),
@@ -729,7 +729,7 @@ export class EngineInvocation_CliInvocation_RunFlags extends $.Struct {
   set hotReload(value: EngineInvocation_CliInvocation_HotReloadSettings) {
     $.utils.copyFrom(value, $.utils.getPointer(4, this));
   }
-  toString(): string { return "EngineInvocation_CliInvocation_RunFlags_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_RunFlags_" + super.toString(); }
 }
 export const EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which = {
   /**
@@ -751,7 +751,7 @@ export type EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which = (typ
 export class EngineInvocation_CliInvocation_RunInvocation_SourceCode extends $.Struct {
   static readonly FILE = EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which.FILE;
   static readonly CODE = EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which.CODE;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "sourceCode",
     id: "ed8dda004bae43fd",
     size: new $.ObjectSize(8, 4),
@@ -800,7 +800,7 @@ export class EngineInvocation_CliInvocation_RunInvocation_SourceCode extends $.S
     $.utils.setUint16(0, 1, this);
     $.utils.setText(0, value, this);
   }
-  toString(): string { return "EngineInvocation_CliInvocation_RunInvocation_SourceCode_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_RunInvocation_SourceCode_" + super.toString(); }
   which(): EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which {
     return $.utils.getUint16(0, this) as EngineInvocation_CliInvocation_RunInvocation_SourceCode_Which;
   }
@@ -810,7 +810,7 @@ export class EngineInvocation_CliInvocation_RunInvocation_SourceCode extends $.S
 *
 */
 export class EngineInvocation_CliInvocation_RunInvocation extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "RunInvocation",
     id: "8749b597dd0e9038",
     size: new $.ObjectSize(8, 4),
@@ -913,7 +913,7 @@ export class EngineInvocation_CliInvocation_RunInvocation extends $.Struct {
   set sourceLanguage(value: EngineInvocation_CliInvocation_SourceLanguage) {
     $.utils.setUint16(4, value, this, EngineInvocation_CliInvocation_RunInvocation._capnp.defaultSourceLanguage);
   }
-  toString(): string { return "EngineInvocation_CliInvocation_RunInvocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_RunInvocation_" + super.toString(); }
 }
 export const EngineInvocation_CliInvocation_McpMode = {
   /**
@@ -933,7 +933,7 @@ export type EngineInvocation_CliInvocation_McpMode = (typeof EngineInvocation_Cl
 *
 */
 export class EngineInvocation_CliInvocation_McpInvocation extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "McpInvocation",
     id: "c2be6f9f8301888e",
     size: new $.ObjectSize(8, 1),
@@ -970,10 +970,10 @@ export class EngineInvocation_CliInvocation_McpInvocation extends $.Struct {
   set server(value: EngineInvocation_CliInvocation_ServerConfig) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EngineInvocation_CliInvocation_McpInvocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_McpInvocation_" + super.toString(); }
 }
 export class EngineInvocation_CliInvocation_WebInvocation extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "WebInvocation",
     id: "e281faada68aabcf",
     size: new $.ObjectSize(0, 1),
@@ -996,7 +996,7 @@ export class EngineInvocation_CliInvocation_WebInvocation extends $.Struct {
   set out(value: FilePath) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EngineInvocation_CliInvocation_WebInvocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_WebInvocation_" + super.toString(); }
 }
 export const EngineInvocation_CliInvocation_Command_Which = {
   /**
@@ -1026,7 +1026,7 @@ export class EngineInvocation_CliInvocation_Command extends $.Struct {
   static readonly TOOL = EngineInvocation_CliInvocation_Command_Which.TOOL;
   static readonly MCP = EngineInvocation_CliInvocation_Command_Which.MCP;
   static readonly WEB = EngineInvocation_CliInvocation_Command_Which.WEB;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "command",
     id: "82d2193848cec1a8",
     size: new $.ObjectSize(8, 3),
@@ -1143,7 +1143,7 @@ export class EngineInvocation_CliInvocation_Command extends $.Struct {
     $.utils.setUint16(2, 3, this);
     $.utils.copyFrom(value, $.utils.getPointer(2, this));
   }
-  toString(): string { return "EngineInvocation_CliInvocation_Command_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_Command_" + super.toString(); }
   which(): EngineInvocation_CliInvocation_Command_Which {
     return $.utils.getUint16(2, this) as EngineInvocation_CliInvocation_Command_Which;
   }
@@ -1166,7 +1166,7 @@ export class EngineInvocation_CliInvocation extends $.Struct {
   static readonly McpMode = EngineInvocation_CliInvocation_McpMode;
   static readonly McpInvocation = EngineInvocation_CliInvocation_McpInvocation;
   static readonly WebInvocation = EngineInvocation_CliInvocation_WebInvocation;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "CliInvocation",
     id: "f366cf1cd4a28bdf",
     size: new $.ObjectSize(8, 3),
@@ -1235,14 +1235,14 @@ export class EngineInvocation_CliInvocation extends $.Struct {
   _initCommand(): EngineInvocation_CliInvocation_Command {
     return $.utils.getAs(EngineInvocation_CliInvocation_Command, this);
   }
-  toString(): string { return "EngineInvocation_CliInvocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_CliInvocation_" + super.toString(); }
 }
 /**
 * Models an HTTP request as an invocation.
 *
 */
 export class EngineInvocation_HttpInvocation extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpInvocation",
     id: "df6ad8c4dec30e93",
     size: new $.ObjectSize(8, 1),
@@ -1279,7 +1279,7 @@ export class EngineInvocation_HttpInvocation extends $.Struct {
   set request(value: HttpRequest) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EngineInvocation_HttpInvocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_HttpInvocation_" + super.toString(); }
 }
 export const EngineInvocation_Invocation_Which = {
   /**
@@ -1307,7 +1307,7 @@ export class EngineInvocation_Invocation extends $.Struct {
   static readonly NO_CONTEXT = EngineInvocation_Invocation_Which.NO_CONTEXT;
   static readonly CLI = EngineInvocation_Invocation_Which.CLI;
   static readonly HTTP = EngineInvocation_Invocation_Which.HTTP;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "invocation",
     id: "cfef27dec22cceac",
     size: new $.ObjectSize(8, 5),
@@ -1376,7 +1376,7 @@ export class EngineInvocation_Invocation extends $.Struct {
     $.utils.setUint16(0, 2, this);
     $.utils.copyFrom(value, $.utils.getPointer(4, this));
   }
-  toString(): string { return "EngineInvocation_Invocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_Invocation_" + super.toString(); }
   which(): EngineInvocation_Invocation_Which {
     return $.utils.getUint16(0, this) as EngineInvocation_Invocation_Which;
   }
@@ -1389,7 +1389,7 @@ export class EngineInvocation extends $.Struct {
   static readonly InvocationMetadata = EngineInvocation_InvocationMetadata;
   static readonly CliInvocation = EngineInvocation_CliInvocation;
   static readonly HttpInvocation = EngineInvocation_HttpInvocation;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EngineInvocation",
     id: "a8482b078af5318b",
     size: new $.ObjectSize(8, 5),
@@ -1480,5 +1480,5 @@ export class EngineInvocation extends $.Struct {
   _initInvocation(): EngineInvocation_Invocation {
     return $.utils.getAs(EngineInvocation_Invocation, this);
   }
-  toString(): string { return "EngineInvocation_" + super.toString(); }
+  override toString(): string { return "EngineInvocation_" + super.toString(); }
 }

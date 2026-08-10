@@ -5,7 +5,7 @@ import { EngineConfig, EngineDirectories, EngineFlag, GuestTrustProfile, Languag
 import { EngineInvocation, EngineInvocation_CliInvocation, EngineInvocation_CliInvocation_ErrorFormat, EngineInvocation_CliInvocation_GlobalFlags, EngineInvocation_CliInvocation_HotReloadSettings, EngineInvocation_CliInvocation_ListenHost, EngineInvocation_CliInvocation_McpInvocation, EngineInvocation_CliInvocation_McpMode, EngineInvocation_CliInvocation_NetworkTransport, EngineInvocation_CliInvocation_RunFlags, EngineInvocation_CliInvocation_RunInvocation, EngineInvocation_CliInvocation_RunMode, EngineInvocation_CliInvocation_ServerConfig, EngineInvocation_CliInvocation_SourceLanguage, EngineInvocation_CliInvocation_WebInvocation, EngineInvocation_HttpInvocation, EngineInvocation_InvocationMetadata, FileRunInvocation } from "./invocation.js";
 export const _capnpFileId = 0xd2a7f4e8c3b6d912n;
 export class EmbeddedOpenRequest extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EmbeddedOpenRequest",
     id: "f5fceaafb70fb5df",
     size: new $.ObjectSize(8, 1),
@@ -34,10 +34,10 @@ export class EmbeddedOpenRequest extends $.Struct {
   set languages(value: $.List<Language>) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EmbeddedOpenRequest_" + super.toString(); }
+  override toString(): string { return "EmbeddedOpenRequest_" + super.toString(); }
 }
 export class EmbeddedCallRequest extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EmbeddedCallRequest",
     id: "b54f9d01a2c82534",
     size: new $.ObjectSize(16, 2),
@@ -90,10 +90,10 @@ export class EmbeddedCallRequest extends $.Struct {
   set stdin(value: $.Data) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "EmbeddedCallRequest_" + super.toString(); }
+  override toString(): string { return "EmbeddedCallRequest_" + super.toString(); }
 }
 export class EmbeddedExecutionResult extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EmbeddedExecutionResult",
     id: "b86db8cd9100b83c",
     size: new $.ObjectSize(8, 2),
@@ -146,7 +146,7 @@ export class EmbeddedExecutionResult extends $.Struct {
   set killed(value: boolean) {
     $.utils.setBit(32, value, this);
   }
-  toString(): string { return "EmbeddedExecutionResult_" + super.toString(); }
+  override toString(): string { return "EmbeddedExecutionResult_" + super.toString(); }
 }
 export const EmbeddedFailureCode = {
   INVALID_REQUEST: 0,
@@ -159,7 +159,7 @@ export const EmbeddedFailureCode = {
 } as const;
 export type EmbeddedFailureCode = (typeof EmbeddedFailureCode)[keyof typeof EmbeddedFailureCode];
 export class EmbeddedFailure extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EmbeddedFailure",
     id: "e081c5fd5adcd49d",
     size: new $.ObjectSize(8, 1),
@@ -176,7 +176,7 @@ export class EmbeddedFailure extends $.Struct {
   set message(value: string) {
     $.utils.setText(0, value, this);
   }
-  toString(): string { return "EmbeddedFailure_" + super.toString(); }
+  override toString(): string { return "EmbeddedFailure_" + super.toString(); }
 }
 export const EmbeddedResponse_Which = {
   OPENED: 0,
@@ -192,7 +192,7 @@ export class EmbeddedResponse extends $.Struct {
   static readonly CANCELLED = EmbeddedResponse_Which.CANCELLED;
   static readonly CLOSED = EmbeddedResponse_Which.CLOSED;
   static readonly FAILURE = EmbeddedResponse_Which.FAILURE;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EmbeddedResponse",
     id: "81476fe3beb9982d",
     size: new $.ObjectSize(16, 1),
@@ -277,7 +277,7 @@ export class EmbeddedResponse extends $.Struct {
     $.utils.setUint16(2, 4, this);
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EmbeddedResponse_" + super.toString(); }
+  override toString(): string { return "EmbeddedResponse_" + super.toString(); }
   which(): EmbeddedResponse_Which {
     return $.utils.getUint16(2, this) as EmbeddedResponse_Which;
   }

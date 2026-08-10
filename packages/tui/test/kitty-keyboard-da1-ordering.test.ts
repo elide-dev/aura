@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
@@ -23,9 +23,14 @@ const originalSshConnection = Bun.env.SSH_CONNECTION;
 const originalSshTty = Bun.env.SSH_TTY;
 const originalSshClient = Bun.env.SSH_CLIENT;
 const originalTmux = Bun.env.TMUX;
+const originalWslDistro = Bun.env.WSL_DISTRO_NAME;
+const originalWslInterop = Bun.env.WSL_INTEROP;
 const originalTerminalId = TERMINAL.id;
 
-function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT" | "TMUX", value: string | undefined): void {
+function restoreEnv(
+	name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT" | "TMUX" | "WSL_DISTRO_NAME" | "WSL_INTEROP",
+	value: string | undefined,
+): void {
 	if (value === undefined) {
 		delete Bun.env[name];
 		return;
@@ -36,6 +41,15 @@ function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT" | "TMUX", 
 describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () => {
 	let harness: ProcessTerminalRenderHarness | undefined;
 
+	// Upstream's ConPTY carve-out (`isConPTYHosted()`) downgrades the kitty push to
+	// flag 1 on Windows AND WSL, so on a WSL dev host these flag-5 contracts would
+	// assert against the ConPTY path instead of the one under test. Neutralize the
+	// WSL markers so the suite pins the intended non-ConPTY behavior on every host.
+	beforeEach(() => {
+		delete Bun.env.WSL_DISTRO_NAME;
+		delete Bun.env.WSL_INTEROP;
+	});
+
 	afterEach(() => {
 		harness?.dispose();
 		harness = undefined;
@@ -43,6 +57,8 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		restoreEnv("SSH_TTY", originalSshTty);
 		restoreEnv("SSH_CLIENT", originalSshClient);
 		restoreEnv("TMUX", originalTmux);
+		restoreEnv("WSL_DISTRO_NAME", originalWslDistro);
+		restoreEnv("WSL_INTEROP", originalWslInterop);
 		Object.defineProperty(TERMINAL, "id", { value: originalTerminalId, configurable: true });
 	});
 

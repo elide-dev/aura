@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [17.2.10] - 2026-08-06
+
+### Changed
+
+- Reimplemented the Zod compatibility facade (`@oh-my-pi/omptype/zod`) to run purely on internal mechanics, removing the dependency on `zod`.
+
+## [17.2.9] - 2026-08-05
+
+### Fixed
+
+- Fixed the TypeBox adapter emitting an invalid left-bound-only DSL for min-only numeric schemas (e.g. `Type.Integer({ minimum: 1 })`), which threw `left bound requires a corresponding right bound` and broke extension tool loading ([#7648](https://github.com/can1357/oh-my-pi/issues/7648)).
+
+## [17.2.8] - 2026-08-04
+
+### Added
+
+- Added `io: 'input'` and `io: 'output'` options to `toJsonSchema()`, supporting input validation shapes and piped `.to()` target types
+- Added Standard Schema V1 interop: every schema exposes `~standard` with synchronous validation, enabling direct use with `@t3-oss/env`, tRPC, and other Standard Schema consumers.
+- Added `fromJsonSchema()`, rebuilding callable schemas from JSON Schema documents (draft-07 / draft-2020-12 structural keywords, string formats, `$defs` recursion, enums, and `anyOf`/`oneOf`/`allOf` composition) — the inverse of `Type.toJsonSchema()`.
+- Added `$defs`/`$ref` emission for recursive alias schemas in `toJsonSchema()` (draft-07 converts to `definitions`), preventing unbounded recursion on cyclic scopes.
+- Added `AnyType`, a minimal structural constraint for generic functions accepting any schema without descending the recursive fluent surface.
+- Root `.default()` values now materialize for `undefined` input in direct calls and at the Standard Schema boundary (factories run per call).
+- `.narrow()`/`.filter()` boolean overloads accept `OmpErrors` returns, so `cond || ctx.reject(...)` recipes typecheck.
+
+### Changed
+
+- Restored low-overhead schema construction by lazily activating advanced normalization and compatibility machinery.
+- `.default()` is typed input-side (`i | (() => i)`) and marks the schema's input as optional (`i | undefined`).
+- Parse keywords (`string.integer.parse`, `parse.number`, ...) now infer their morph output inside union strings, and input-side inference is union-aware.
+- Object-literal inference for `.merge()`/`.or()`/`.and()` unwraps embedded schema values (output and input sides).
+
+### Fixed
+
+- Alias intersections defer through memoized lazy nodes, so cyclic scope schemas no longer overflow the stack in `.and()` or morph-union determinism checks.
+
 ## [17.2.7] - 2026-08-03
 
 ### Added

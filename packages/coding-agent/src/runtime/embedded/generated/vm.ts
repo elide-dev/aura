@@ -52,7 +52,7 @@ export type SystemPropertySourceType = (typeof SystemPropertySourceType)[keyof t
 *
 */
 export class SystemPropertyMetadata extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "SystemPropertyMetadata",
     id: "f3557941e6a0879e",
     size: new $.ObjectSize(8, 1),
@@ -87,7 +87,7 @@ export class SystemPropertyMetadata extends $.Struct {
   set originFile(value: string) {
     $.utils.setText(0, value, this);
   }
-  toString(): string { return "SystemPropertyMetadata_" + super.toString(); }
+  override toString(): string { return "SystemPropertyMetadata_" + super.toString(); }
 }
 export const SystemProperty_Value_Which = {
   /**
@@ -109,7 +109,7 @@ export type SystemProperty_Value_Which = (typeof SystemProperty_Value_Which)[key
 export class SystemProperty_Value extends $.Struct {
   static readonly NO_VALUE = SystemProperty_Value_Which.NO_VALUE;
   static readonly STRING_VALUE = SystemProperty_Value_Which.STRING_VALUE;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "value",
     id: "8c4183b3b1dcab67",
     size: new $.ObjectSize(8, 4),
@@ -135,7 +135,7 @@ export class SystemProperty_Value extends $.Struct {
     $.utils.setUint16(0, 1, this);
     $.utils.setText(3, value, this);
   }
-  toString(): string { return "SystemProperty_Value_" + super.toString(); }
+  override toString(): string { return "SystemProperty_Value_" + super.toString(); }
   which(): SystemProperty_Value_Which {
     return $.utils.getUint16(0, this) as SystemProperty_Value_Which;
   }
@@ -145,7 +145,7 @@ export class SystemProperty_Value extends $.Struct {
 *
 */
 export class SystemProperty extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "SystemProperty",
     id: "8785ce9b92459951",
     size: new $.ObjectSize(8, 4),
@@ -203,14 +203,14 @@ export class SystemProperty extends $.Struct {
   _initValue(): SystemProperty_Value {
     return $.utils.getAs(SystemProperty_Value, this);
   }
-  toString(): string { return "SystemProperty_" + super.toString(); }
+  override toString(): string { return "SystemProperty_" + super.toString(); }
 }
 /**
 * Suite of system properties.
 *
 */
 export class SystemProperties extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "SystemProperties",
     id: "ec4b79d5845ad495",
     size: new $.ObjectSize(0, 2),
@@ -261,7 +261,7 @@ export class SystemProperties extends $.Struct {
   set layers(value: $.List<SystemProperties>) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "SystemProperties_" + super.toString(); }
+  override toString(): string { return "SystemProperties_" + super.toString(); }
 }
 SystemProperties._Properties = $.CompositeList(SystemProperty);
 SystemProperties._Layers = $.CompositeList(SystemProperties);

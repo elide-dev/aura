@@ -6,10 +6,10 @@ export const _capnpFileId = 0xaa01e7a2eaee812cn;
 *
 */
 export class URL extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "URL",
     id: "e30c061ac8586b8f",
     size: new $.ObjectSize(0, 0),
   };
-  toString(): string { return "URL_" + super.toString(); }
+  override toString(): string { return "URL_" + super.toString(); }
 }

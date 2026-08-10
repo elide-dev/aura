@@ -45,7 +45,7 @@ export type EnvironmentSource_Context_Which = (typeof EnvironmentSource_Context_
 export class EnvironmentSource_Context extends $.Struct {
   static readonly NO_CONTEXT = EnvironmentSource_Context_Which.NO_CONTEXT;
   static readonly DOTENV_FILE = EnvironmentSource_Context_Which.DOTENV_FILE;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "context",
     id: "f49e9b7de1c3e0c4",
     size: new $.ObjectSize(8, 2),
@@ -71,7 +71,7 @@ export class EnvironmentSource_Context extends $.Struct {
     $.utils.setUint16(2, 1, this);
     $.utils.setText(1, value, this);
   }
-  toString(): string { return "EnvironmentSource_Context_" + super.toString(); }
+  override toString(): string { return "EnvironmentSource_Context_" + super.toString(); }
   which(): EnvironmentSource_Context_Which {
     return $.utils.getUint16(2, this) as EnvironmentSource_Context_Which;
   }
@@ -81,7 +81,7 @@ export class EnvironmentSource_Context extends $.Struct {
 *
 */
 export class EnvironmentSource extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EnvironmentSource",
     id: "ac9a6418896742a7",
     size: new $.ObjectSize(8, 2),
@@ -116,14 +116,14 @@ export class EnvironmentSource extends $.Struct {
   _initContext(): EnvironmentSource_Context {
     return $.utils.getAs(EnvironmentSource_Context, this);
   }
-  toString(): string { return "EnvironmentSource_" + super.toString(); }
+  override toString(): string { return "EnvironmentSource_" + super.toString(); }
 }
 /**
 * Represents an environment variable as a key-value pair.
 *
 */
 export class EnvironmentVariable extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EnvironmentVariable",
     id: "b75e4b9620070b9e",
     size: new $.ObjectSize(0, 3),
@@ -170,14 +170,14 @@ export class EnvironmentVariable extends $.Struct {
   set source(value: EnvironmentSource) {
     $.utils.copyFrom(value, $.utils.getPointer(2, this));
   }
-  toString(): string { return "EnvironmentVariable_" + super.toString(); }
+  override toString(): string { return "EnvironmentVariable_" + super.toString(); }
 }
 /**
 * Map of environment variables.
 *
 */
 export class EnvironmentMap extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "EnvironmentMap",
     id: "8db36ac76a783405",
     size: new $.ObjectSize(8, 1),
@@ -215,6 +215,6 @@ export class EnvironmentMap extends $.Struct {
   set vars(value: $.List<EnvironmentVariable>) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "EnvironmentMap_" + super.toString(); }
+  override toString(): string { return "EnvironmentMap_" + super.toString(); }
 }
 EnvironmentMap._Vars = $.CompositeList(EnvironmentVariable);

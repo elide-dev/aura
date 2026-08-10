@@ -6,7 +6,7 @@ export const _capnpFileId = 0x8d1206f134815fa8n;
 *
 */
 export class NumericDuration extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "NumericDuration",
     id: "89cc2ceafc61abfa",
     size: new $.ObjectSize(16, 0),
@@ -31,14 +31,14 @@ export class NumericDuration extends $.Struct {
   set nanos(value: number) {
     $.utils.setInt32(8, value, this);
   }
-  toString(): string { return "NumericDuration_" + super.toString(); }
+  override toString(): string { return "NumericDuration_" + super.toString(); }
 }
 /**
 * Models a span of time with a well-formatted string of text.
 *
 */
 export class HumanDuration extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HumanDuration",
     id: "843cfd417ed8c741",
     size: new $.ObjectSize(0, 1),
@@ -53,7 +53,7 @@ export class HumanDuration extends $.Struct {
   set span(value: string) {
     $.utils.setText(0, value, this);
   }
-  toString(): string { return "HumanDuration_" + super.toString(); }
+  override toString(): string { return "HumanDuration_" + super.toString(); }
 }
 export const Duration_DurationValue_Which = {
   /**
@@ -71,7 +71,7 @@ export type Duration_DurationValue_Which = (typeof Duration_DurationValue_Which)
 export class Duration_DurationValue extends $.Struct {
   static readonly NUMERIC = Duration_DurationValue_Which.NUMERIC;
   static readonly HUMAN = Duration_DurationValue_Which.HUMAN;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "durationValue",
     id: "834ffa65fe03abf7",
     size: new $.ObjectSize(8, 1),
@@ -134,7 +134,7 @@ export class Duration_DurationValue extends $.Struct {
     $.utils.setUint16(0, 1, this);
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "Duration_DurationValue_" + super.toString(); }
+  override toString(): string { return "Duration_DurationValue_" + super.toString(); }
   which(): Duration_DurationValue_Which {
     return $.utils.getUint16(0, this) as Duration_DurationValue_Which;
   }
@@ -144,7 +144,7 @@ export class Duration_DurationValue extends $.Struct {
 *
 */
 export class Duration extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Duration",
     id: "a71b5422661c59e2",
     size: new $.ObjectSize(8, 1),
@@ -155,14 +155,14 @@ export class Duration extends $.Struct {
   _initDurationValue(): Duration_DurationValue {
     return $.utils.getAs(Duration_DurationValue, this);
   }
-  toString(): string { return "Duration_" + super.toString(); }
+  override toString(): string { return "Duration_" + super.toString(); }
 }
 /**
 * Models a point in time, represented as seconds and nanoseconds since the Unix epoch.
 *
 */
 export class Timestamp extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Timestamp",
     id: "8f85e5352db97d5e",
     size: new $.ObjectSize(16, 0),
@@ -187,5 +187,5 @@ export class Timestamp extends $.Struct {
   set nanos(value: number) {
     $.utils.setInt32(8, value, this);
   }
-  toString(): string { return "Timestamp_" + super.toString(); }
+  override toString(): string { return "Timestamp_" + super.toString(); }
 }

@@ -78,7 +78,7 @@ export type HttpMethod = (typeof HttpMethod)[keyof typeof HttpMethod];
 *
 */
 export class HttpHeader extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpHeader",
     id: "db996b3654d87f57",
     size: new $.ObjectSize(0, 2),
@@ -103,14 +103,14 @@ export class HttpHeader extends $.Struct {
   set value(value: string) {
     $.utils.setText(1, value, this);
   }
-  toString(): string { return "HttpHeader_" + super.toString(); }
+  override toString(): string { return "HttpHeader_" + super.toString(); }
 }
 /**
 * Models HTTP headers as a repetitive map of key-value pairs.
 *
 */
 export class HttpHeaders extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpHeaders",
     id: "c12a94149fa43a98",
     size: new $.ObjectSize(8, 1),
@@ -148,14 +148,14 @@ export class HttpHeaders extends $.Struct {
   set entries(value: $.List<HttpHeader>) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "HttpHeaders_" + super.toString(); }
+  override toString(): string { return "HttpHeaders_" + super.toString(); }
 }
 /**
 * Models a payload of HTTP body data.
 *
 */
 export class HttpBody extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpBody",
     id: "e74bdc4edc42f223",
     size: new $.ObjectSize(8, 2),
@@ -202,14 +202,14 @@ export class HttpBody extends $.Struct {
   set data(value: $.Data) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "HttpBody_" + super.toString(); }
+  override toString(): string { return "HttpBody_" + super.toString(); }
 }
 /**
 * Metadata about the HTTP connection.
 *
 */
 export class HttpConnectionMetadata extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpConnectionMetadata",
     id: "c73e0102114189be",
     size: new $.ObjectSize(8, 0),
@@ -234,7 +234,7 @@ export class HttpConnectionMetadata extends $.Struct {
   set secure(value: boolean) {
     $.utils.setBit(1, value, this);
   }
-  toString(): string { return "HttpConnectionMetadata_" + super.toString(); }
+  override toString(): string { return "HttpConnectionMetadata_" + super.toString(); }
 }
 export const HttpRequest_Method_Which = {
   /**
@@ -252,7 +252,7 @@ export type HttpRequest_Method_Which = (typeof HttpRequest_Method_Which)[keyof t
 export class HttpRequest_Method extends $.Struct {
   static readonly STANDARD = HttpRequest_Method_Which.STANDARD;
   static readonly CUSTOM = HttpRequest_Method_Which.CUSTOM;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "method",
     id: "d1fb632b8ca8a92d",
     size: new $.ObjectSize(8, 6),
@@ -287,7 +287,7 @@ export class HttpRequest_Method extends $.Struct {
     $.utils.setUint16(4, 1, this);
     $.utils.setText(1, value, this);
   }
-  toString(): string { return "HttpRequest_Method_" + super.toString(); }
+  override toString(): string { return "HttpRequest_Method_" + super.toString(); }
   which(): HttpRequest_Method_Which {
     return $.utils.getUint16(4, this) as HttpRequest_Method_Which;
   }
@@ -308,7 +308,7 @@ export type HttpRequest_Body_Which = (typeof HttpRequest_Body_Which)[keyof typeo
 export class HttpRequest_Body extends $.Struct {
   static readonly EMPTY = HttpRequest_Body_Which.EMPTY;
   static readonly PAYLOAD = HttpRequest_Body_Which.PAYLOAD;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "body",
     id: "d5290d9da1b4d051",
     size: new $.ObjectSize(8, 6),
@@ -348,13 +348,13 @@ export class HttpRequest_Body extends $.Struct {
     $.utils.setUint16(6, 1, this);
     $.utils.copyFrom(value, $.utils.getPointer(4, this));
   }
-  toString(): string { return "HttpRequest_Body_" + super.toString(); }
+  override toString(): string { return "HttpRequest_Body_" + super.toString(); }
   which(): HttpRequest_Body_Which {
     return $.utils.getUint16(6, this) as HttpRequest_Body_Which;
   }
 }
 export class HttpRequest extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpRequest",
     id: "bb0b18c9ee5e891c",
     size: new $.ObjectSize(8, 6),
@@ -469,14 +469,14 @@ export class HttpRequest extends $.Struct {
   set trailers(value: HttpHeaders) {
     $.utils.copyFrom(value, $.utils.getPointer(5, this));
   }
-  toString(): string { return "HttpRequest_" + super.toString(); }
+  override toString(): string { return "HttpRequest_" + super.toString(); }
 }
 /**
 * Models an HTTP response status.
 *
 */
 export class HttpStatus extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpStatus",
     id: "847aa5e2415d8f5a",
     size: new $.ObjectSize(8, 1),
@@ -501,7 +501,7 @@ export class HttpStatus extends $.Struct {
   set message(value: string) {
     $.utils.setText(0, value, this);
   }
-  toString(): string { return "HttpStatus_" + super.toString(); }
+  override toString(): string { return "HttpStatus_" + super.toString(); }
 }
 export const HttpResponse_Body_Which = {
   /**
@@ -519,7 +519,7 @@ export type HttpResponse_Body_Which = (typeof HttpResponse_Body_Which)[keyof typ
 export class HttpResponse_Body extends $.Struct {
   static readonly EMPTY = HttpResponse_Body_Which.EMPTY;
   static readonly PAYLOAD = HttpResponse_Body_Which.PAYLOAD;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "body",
     id: "d0c291a4f31d11df",
     size: new $.ObjectSize(8, 5),
@@ -559,13 +559,13 @@ export class HttpResponse_Body extends $.Struct {
     $.utils.setUint16(2, 1, this);
     $.utils.copyFrom(value, $.utils.getPointer(3, this));
   }
-  toString(): string { return "HttpResponse_Body_" + super.toString(); }
+  override toString(): string { return "HttpResponse_Body_" + super.toString(); }
   which(): HttpResponse_Body_Which {
     return $.utils.getUint16(2, this) as HttpResponse_Body_Which;
   }
 }
 export class HttpResponse extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpResponse",
     id: "fdc7361b4dfd39e1",
     size: new $.ObjectSize(8, 5),
@@ -674,14 +674,14 @@ export class HttpResponse extends $.Struct {
   set trailers(value: HttpHeaders) {
     $.utils.copyFrom(value, $.utils.getPointer(4, this));
   }
-  toString(): string { return "HttpResponse_" + super.toString(); }
+  override toString(): string { return "HttpResponse_" + super.toString(); }
 }
 /**
 * Models an HTTP exchange with a request and response.
 *
 */
 export class HttpUnaryExchange extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "HttpUnaryExchange",
     id: "8c9b19c407e38857",
     size: new $.ObjectSize(0, 2),
@@ -730,6 +730,6 @@ export class HttpUnaryExchange extends $.Struct {
   set response(value: HttpResponse) {
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "HttpUnaryExchange_" + super.toString(); }
+  override toString(): string { return "HttpUnaryExchange_" + super.toString(); }
 }
 HttpHeaders._Entries = $.CompositeList(HttpHeader);

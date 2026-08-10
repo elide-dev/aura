@@ -132,18 +132,12 @@ import {
 	runtimeAdapterFromEnvironment,
 } from "./runtime";
 import {
-	builtinCredentialSecretEntries,
-	collectEnvSecrets,
+	buildSecretObfuscator,
 	deobfuscateSessionContext,
 	deobfuscateToolArguments,
-	getExistingSecretPlaceholderKey,
-	getSecretPlaceholderKey,
-	getSecretPlaceholderKeySync,
-	loadSecrets,
 	obfuscateMessages,
 	obfuscateProviderContext,
-	SecretObfuscator,
-	secretEntriesNeedPlaceholderKey,
+	type SecretObfuscator,
 } from "./secrets";
 import { AgentSession, type InitialRetryFallbackState, type PlanYolo, type Prewalk } from "./session/agent-session";
 import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/auth-broker-config";
@@ -1078,7 +1072,7 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 					success: event.success,
 					attempt: event.attempt,
 					finalError: event.finalError,
-					recoveredErrors: event.recoveredErrors,
+					retryErrors: event.retryErrors,
 				},
 				ctx,
 			),
@@ -1420,46 +1414,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 	// Load and create secret obfuscator early so resumed session state and prompt warnings
 	// reflect actual loaded secrets, not just the setting toggle.
-	let obfuscator: SecretObfuscator | undefined;
-	if (settings.get("secrets.enabled")) {
-		const fileEntries = await logger.time("loadSecrets", loadSecrets, cwd, agentDir);
-		const envEntries = collectEnvSecrets();
-		// Built-in credential-pattern entries come last so user-configured entries
-		// (plain literals, custom regexes) take precedence in the scan order.
-		const allEntries = [...envEntries, ...fileEntries, ...builtinCredentialSecretEntries()];
-		// Only CONFIGURED entries force startup key creation: a configured
-		// obfuscate-mode secret — or a default (no custom `replacement`)
-		// replace-mode regex whose key-derived idempotent fallback marker needs a
-		// stable key across restarts (see `secretEntryNeedsPlaceholderKey`) —
-		// mints placeholders as soon as the obfuscator is built. The built-in
-		// credential-pattern entry matches dynamically, so it resolves the
-		// persisted key lazily on first match instead of creating the key file
-		// for every secrets.enabled session; a session whose content never
-		// contains a credential-shaped token must not require the key, otherwise a
-		// headless run on an unwritable default config root pays for a feature it
-		// does not use.
-		const needsPlaceholderKey = secretEntriesNeedPlaceholderKey([...envEntries, ...fileEntries]);
-		const explicitAgentDir = options.agentDir;
-		const placeholderKey = needsPlaceholderKey
-			? await getSecretPlaceholderKey(explicitAgentDir)
-			: await getExistingSecretPlaceholderKey(explicitAgentDir);
-		if (allEntries.length > 0) {
-			obfuscator = new SecretObfuscator(
-				allEntries,
-				placeholderKey ?? (() => getSecretPlaceholderKeySync(explicitAgentDir)),
-			);
-		}
-		if (obfuscator?.hasSecrets() !== true && placeholderKey !== undefined) {
-			// No configured entry produced an active secret (e.g. only ignored short
-			// plain entries, or no entries at all), but a persisted key exists. Build a
-			// redaction-only obfuscator so a tool read of the key file does not ship the
-			// reusable HMAC key to the provider.
-			obfuscator = new SecretObfuscator(
-				[{ type: "plain", mode: "replace", content: placeholderKey }],
-				placeholderKey,
-			);
-		}
-	}
+	const obfuscator: SecretObfuscator | undefined = settings.get("secrets.enabled")
+		? await buildSecretObfuscator(cwd, agentDir, options.agentDir)
+		: undefined;
 	const secretsEnabled = obfuscator?.hasSecrets() === true;
 
 	// An abnormal process exit after a non-terminal message tail is durable
@@ -2350,9 +2307,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}
 				}
 				const usageReservePolicy = settings.get("retry.usageReservePolicy");
+				const modelFallbackEnabled = settings.get("retry.modelFallback");
 				if (
-					(hasUsageFallbackCandidate || usageReservePolicy === "fail-closed") &&
-					settings.get("retry.modelFallback") &&
+					((modelFallbackEnabled && (hasUsageFallbackCandidate || usageFallbackTriggered)) ||
+						usageReservePolicy === "fail-closed") &&
 					settings.get("retry.usageAwareFallback")
 				) {
 					let usageHealth: ModelUsageHealth | undefined;
@@ -2375,8 +2333,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								`Usage depleted for ${primary.model.provider}/${primary.model.id}; reserve policy is fail-closed.`,
 							);
 						}
-						usageFallbackTriggered = true;
-						continue;
+						if (modelFallbackEnabled) {
+							usageFallbackTriggered = true;
+							continue;
+						}
 					}
 					if (usageHealth?.state === "reserve") {
 						if (usageReservePolicy === "fail-closed") {
@@ -2384,7 +2344,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								`Usage reserve reached for ${primary.model.provider}/${primary.model.id}; reserve policy is fail-closed.`,
 							);
 						}
-						if (usageReservePolicy === "auto" || (!options.hasUI && !options.deferUsageReserveConfirmation)) {
+						if (
+							modelFallbackEnabled &&
+							(usageReservePolicy === "auto" || (!options.hasUI && !options.deferUsageReserveConfirmation))
+						) {
 							usageFallbackTriggered = true;
 							continue;
 						}

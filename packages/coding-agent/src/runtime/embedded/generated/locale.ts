@@ -49,7 +49,7 @@ export type SupportedLanguage = (typeof SupportedLanguage)[keyof typeof Supporte
 *
 */
 export class Locale extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Locale",
     id: "9dafdcd670bad239",
     size: new $.ObjectSize(0, 2),
@@ -74,5 +74,5 @@ export class Locale extends $.Struct {
   set region(value: string) {
     $.utils.setText(1, value, this);
   }
-  toString(): string { return "Locale_" + super.toString(); }
+  override toString(): string { return "Locale_" + super.toString(); }
 }

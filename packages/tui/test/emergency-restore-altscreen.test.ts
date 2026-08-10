@@ -22,6 +22,11 @@ const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin,
 // helper) so the blind restore branch — gated on !isTerminalHeadless() — still
 // runs while the test drives emergencyTerminalRestore() after terminal.stop().
 let previousHeadless = false;
+// Upstream's ConPTY carve-out (`isConPTYHosted()`) downgrades the kitty push to
+// flag 1 on Windows AND WSL. This suite asserts the flag-5 enable/pop pair, so the
+// WSL markers are cleared for its duration to pin the non-ConPTY path on any host.
+const originalWslDistro = Bun.env.WSL_DISTRO_NAME;
+const originalWslInterop = Bun.env.WSL_INTEROP;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -56,6 +61,8 @@ function startCapturedTerminal() {
 describe("emergencyTerminalRestore alt-screen gating", () => {
 	beforeEach(() => {
 		previousHeadless = setTerminalHeadless(false);
+		delete Bun.env.WSL_DISTRO_NAME;
+		delete Bun.env.WSL_INTEROP;
 	});
 
 	afterEach(() => {
@@ -65,6 +72,10 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
+		if (originalWslDistro === undefined) delete Bun.env.WSL_DISTRO_NAME;
+		else Bun.env.WSL_DISTRO_NAME = originalWslDistro;
+		if (originalWslInterop === undefined) delete Bun.env.WSL_INTEROP;
+		else Bun.env.WSL_INTEROP = originalWslInterop;
 	});
 
 	it("does not emit DECRST 1049 on the post-stop (graceful exit) path when the alt screen was never entered", () => {

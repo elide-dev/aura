@@ -24,7 +24,7 @@ export class Argument_Value extends $.Struct {
   static readonly NO_VALUE = Argument_Value_Which.NO_VALUE;
   static readonly SINGLE_VALUE = Argument_Value_Which.SINGLE_VALUE;
   static readonly ARG_FILE = Argument_Value_Which.ARG_FILE;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "value",
     id: "fb465729b0189b1a",
     size: new $.ObjectSize(8, 2),
@@ -79,7 +79,7 @@ export class Argument_Value extends $.Struct {
     $.utils.setUint16(0, 2, this);
     $.utils.copyFrom(value, $.utils.getPointer(1, this));
   }
-  toString(): string { return "Argument_Value_" + super.toString(); }
+  override toString(): string { return "Argument_Value_" + super.toString(); }
   which(): Argument_Value_Which {
     return $.utils.getUint16(0, this) as Argument_Value_Which;
   }
@@ -89,7 +89,7 @@ export class Argument_Value extends $.Struct {
 *
 */
 export class Argument extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "Argument",
     id: "b92d53f762b2463c",
     size: new $.ObjectSize(8, 2),
@@ -110,7 +110,7 @@ export class Argument extends $.Struct {
   _initValue(): Argument_Value {
     return $.utils.getAs(Argument_Value, this);
   }
-  toString(): string { return "Argument_" + super.toString(); }
+  override toString(): string { return "Argument_" + super.toString(); }
 }
 export const ArgumentSuite_Args_Which = {
   /**
@@ -128,7 +128,7 @@ export type ArgumentSuite_Args_Which = (typeof ArgumentSuite_Args_Which)[keyof t
 export class ArgumentSuite_Args extends $.Struct {
   static readonly LIST = ArgumentSuite_Args_Which.LIST;
   static readonly USE_ARGV = ArgumentSuite_Args_Which.USE_ARGV;
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "args",
     id: "e3d5241e04f915a5",
     size: new $.ObjectSize(8, 1),
@@ -178,7 +178,7 @@ export class ArgumentSuite_Args extends $.Struct {
     $.utils.setUint16(0, 1, this);
     $.utils.setBit(16, value, this);
   }
-  toString(): string { return "ArgumentSuite_Args_" + super.toString(); }
+  override toString(): string { return "ArgumentSuite_Args_" + super.toString(); }
   which(): ArgumentSuite_Args_Which {
     return $.utils.getUint16(0, this) as ArgumentSuite_Args_Which;
   }
@@ -188,7 +188,7 @@ export class ArgumentSuite_Args extends $.Struct {
 *
 */
 export class ArgumentSuite extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "ArgumentSuite",
     id: "a6f1b4a889619681",
     size: new $.ObjectSize(8, 1),
@@ -199,14 +199,14 @@ export class ArgumentSuite extends $.Struct {
   _initArgs(): ArgumentSuite_Args {
     return $.utils.getAs(ArgumentSuite_Args, this);
   }
-  toString(): string { return "ArgumentSuite_" + super.toString(); }
+  override toString(): string { return "ArgumentSuite_" + super.toString(); }
 }
 /**
 * Represents a known-valid slice within the program argument vector.
 *
 */
 export class ArgumentSlice extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "ArgumentSlice",
     id: "d8b7769cabc7c8d7",
     size: new $.ObjectSize(8, 0),
@@ -231,7 +231,7 @@ export class ArgumentSlice extends $.Struct {
   set count(value: number) {
     $.utils.setUint16(2, value, this);
   }
-  toString(): string { return "ArgumentSlice_" + super.toString(); }
+  override toString(): string { return "ArgumentSlice_" + super.toString(); }
 }
 export const CliCommand = {
   NO_COMMAND: 0,

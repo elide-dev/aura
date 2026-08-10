@@ -48,7 +48,7 @@ export type ProfilerMode = (typeof ProfilerMode)[keyof typeof ProfilerMode];
 *
 */
 export class DebuggerParameters extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "DebuggerParameters",
     id: "969c2188a7875a5c",
     size: new $.ObjectSize(8, 0),
@@ -74,14 +74,14 @@ export class DebuggerParameters extends $.Struct {
   set mode(value: DebuggerMode) {
     $.utils.setUint16(2, value, this);
   }
-  toString(): string { return "DebuggerParameters_" + super.toString(); }
+  override toString(): string { return "DebuggerParameters_" + super.toString(); }
 }
 /**
 * Parameters which apply to guest profiling.
 *
 */
 export class ProfilerParameters extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "ProfilerParameters",
     id: "8252e7a1099f675d",
     size: new $.ObjectSize(8, 1),
@@ -119,14 +119,14 @@ export class ProfilerParameters extends $.Struct {
   set modes(value: $.List<ProfilerMode>) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "ProfilerParameters_" + super.toString(); }
+  override toString(): string { return "ProfilerParameters_" + super.toString(); }
 }
 /**
 * Parameters which apply to guest coverage.
 *
 */
 export class CoverageParameters extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "CoverageParameters",
     id: "ea9a944a915aa10b",
     size: new $.ObjectSize(8, 0),
@@ -142,14 +142,14 @@ export class CoverageParameters extends $.Struct {
   set active(value: boolean) {
     $.utils.setBit(0, value, this, CoverageParameters._capnp.defaultActive);
   }
-  toString(): string { return "CoverageParameters_" + super.toString(); }
+  override toString(): string { return "CoverageParameters_" + super.toString(); }
 }
 /**
 * Parameters which apply to guest insight scripts.
 *
 */
 export class InsightParameters extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "InsightParameters",
     id: "9081812c6bdb04d8",
     size: new $.ObjectSize(8, 1),
@@ -188,7 +188,7 @@ export class InsightParameters extends $.Struct {
   set scripts(value: $.List<Path>) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
-  toString(): string { return "InsightParameters_" + super.toString(); }
+  override toString(): string { return "InsightParameters_" + super.toString(); }
 }
 /**
 * Filesystem capability sandbox parameters. When enabled, guest filesystem
@@ -197,7 +197,7 @@ export class InsightParameters extends $.Struct {
 *
 */
 export class SandboxParameters extends $.Struct {
-  static readonly _capnp = {
+  static override readonly _capnp = {
     displayName: "SandboxParameters",
     id: "9862f099343932ff",
     size: new $.ObjectSize(8, 6),
@@ -424,6 +424,6 @@ export class SandboxParameters extends $.Struct {
   set denyNet(value: $.List<string>) {
     $.utils.copyFrom(value, $.utils.getPointer(5, this));
   }
-  toString(): string { return "SandboxParameters_" + super.toString(); }
+  override toString(): string { return "SandboxParameters_" + super.toString(); }
 }
 InsightParameters._Scripts = $.CompositeList(Path);
