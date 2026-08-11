@@ -164,6 +164,52 @@ describe("AgentSession user shortcut hooks", () => {
 		});
 	});
 
+	// A runtime RPC failure no longer throws out of the run tool: it settles as a
+	// failed result whose details are the redacted projection (runtime/format.ts).
+	// This caller reads details rather than text, so both branches of that shape
+	// are pinned here.
+	it("reports a cancelled runtime call from the local Python shell as a cancelled result", async () => {
+		createSession();
+		const execute = vi.fn().mockResolvedValue({
+			content: [{ type: "text", text: "The runtime call failed (cancelled): Runtime execution was cancelled." }],
+			details: { code: "cancelled", message: "Runtime execution was cancelled." },
+			isError: true,
+		});
+		vi.spyOn(session, "getToolByName").mockReturnValue({ execute } as never);
+
+		const result = await session.executePythonShell("print('embedded')");
+
+		expect(result).toMatchObject({
+			output: "",
+			exitCode: undefined,
+			cancelled: true,
+			truncated: false,
+			totalLines: 0,
+			totalBytes: 0,
+			stdinRequested: false,
+		});
+	});
+
+	it("rethrows a failed runtime call from the local Python shell, carrying the rendered diagnostic", async () => {
+		createSession();
+		const execute = vi.fn().mockResolvedValue({
+			content: [
+				{
+					type: "text",
+					text: "The runtime call failed (internal): Embedded runtime execution worker failed.\n--- stderr ---\nworker exited with signal SIGSEGV",
+				},
+			],
+			details: { code: "internal", message: "Embedded runtime execution worker failed." },
+			isError: true,
+		});
+		vi.spyOn(session, "getToolByName").mockReturnValue({ execute } as never);
+
+		// The detail the throw used to destroy is exactly what the message now carries.
+		await expect(session.executePythonShell("print('embedded')")).rejects.toThrow(
+			/Embedded runtime execution worker failed[\s\S]*SIGSEGV/,
+		);
+	});
+
 	it("falls back to normal execution when hook does not return a replacement", async () => {
 		const extensionRunner = {
 			hasHandlers: vi.fn((eventType: string) => eventType === "user_bash" || eventType === "user_python"),

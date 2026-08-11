@@ -85,12 +85,18 @@ const REDACTED_PATH = "[path outside the project]";
 const ENV_KEY = /env/i;
 
 /**
- * An absolute path in free text. The leading lookbehind keeps this off URL
- * authorities (`https://host/p`) and relative fragments (`a/b`): only a path
- * that genuinely starts a token is a candidate. The trailing class stops at the
- * punctuation diagnostics wrap paths in (`tar: /x/y.tar: Cannot open`).
+ * An absolute path in free text. The lookbehind keeps this off relative
+ * fragments (`a/b`) — only a path that starts a token is a candidate. It
+ * deliberately does NOT exempt a preceding `:`: JVM and GraalVM diagnostics
+ * print locations scheme-prefixed (`file:/home/…`, `jar:file:/home/…`), and
+ * those are exactly as revealing as a bare path. URLs are spared by shape
+ * instead, in {@link redactPaths}. The trailing class stops at the punctuation
+ * diagnostics wrap paths in (`tar: /x/y.tar: Cannot open`).
  */
-const ABSOLUTE_PATH = /(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\/)[^\s'"`:,;)\]}]+/g;
+const ABSOLUTE_PATH = /(?<![\w\\])(?:[A-Za-z]:[\\/]|\/)[^\s'"`:,;)\]}]+/g;
+
+/** Sentence punctuation that trails a path in prose rather than belonging to it. */
+const TRAILING_PUNCTUATION = /[.!?]+$/;
 
 /** Whether `candidate` is `root` itself or lives under it. */
 function isInsideRoot(root: string, candidate: string): boolean {
@@ -107,9 +113,18 @@ function isInsideRoot(root: string, candidate: string): boolean {
  * Replacing rather than deleting is deliberate: the reader still sees that an
  * argument was a path and where it sat in the command line, without learning
  * where it pointed.
+ *
+ * A URL is not a location on this host, so `//host/p` (whatever scheme preceded
+ * it — the match starts at the slashes) is kept. `///p` is not an authority: it
+ * is the `file:///path` spelling, and its path is redacted like any other.
  */
 function redactPaths(text: string, root: string): string {
-	return text.replace(ABSOLUTE_PATH, match => (isInsideRoot(root, match) ? match : REDACTED_PATH));
+	return text.replace(ABSOLUTE_PATH, match => {
+		if (match.startsWith("//") && !match.startsWith("///")) return match;
+		const trailing = TRAILING_PUNCTUATION.exec(match)?.[0] ?? "";
+		const candidate = match.slice(0, match.length - trailing.length).replace(/^\/+/, "/");
+		return isInsideRoot(root, candidate) ? match : `${REDACTED_PATH}${trailing}`;
+	});
 }
 
 /** Keep the last {@link DATA_TAIL_LIMIT} characters of an oversized value. */
@@ -121,12 +136,14 @@ function capTail(text: string): string {
  * Render a protocol failure for the model, with a redacted projection of its
  * `data` payload.
  *
- * What travels: `code`, `message`, scalars, and string arrays — `argv` joined
+ * What travels: `code`, the message, scalars, and string arrays — `argv` joined
  * with spaces, the way it would be typed. What does not: environment variables
  * (see {@link ENV_KEY}), absolute paths outside `root` (see {@link redactPaths}),
  * anything past the {@link DATA_TAIL_LIMIT} tail cap, and every nested object —
  * dropping those wholesale is the second guard on environment snapshots, and a
- * nested structure has no honest one-line rendering anyway.
+ * nested structure has no honest one-line rendering anyway. The message is
+ * redacted on the same terms as the data, and `data` fields named `code` or
+ * `message` are skipped so they cannot shadow this projection's own contract.
  *
  * @param root Project root paths are judged against; defaults to the process cwd.
  */
@@ -135,12 +152,21 @@ export function formatRuntimeRpcError(
 	root?: string,
 ): { text: string; details: RuntimeErrorDetails } {
 	const base = path.resolve(root ?? process.cwd());
-	const details: RuntimeErrorDetails = { code: error.code, message: error.message };
+	// The message gets the same treatment as the data: an error routinely names in
+	// prose the very path it also attaches (`provision.ts` reports the install
+	// directory both ways), and scrubbing one while printing the other is no
+	// redaction at all.
+	const message = redactPaths(error.message, base);
+	const details: RuntimeErrorDetails = { code: error.code, message };
 	const fields: string[] = [];
 	const blocks: string[] = [];
 
 	for (const [key, raw] of Object.entries(error.data ?? {})) {
 		if (ENV_KEY.test(key)) continue;
+		// `code` and `message` are this projection's own contract — callers narrow on
+		// them (the `$` Python shell reads `code === "cancelled"`). A same-named data
+		// field must not shadow them.
+		if (key === "code" || key === "message") continue;
 		if (typeof raw === "number" || typeof raw === "boolean") {
 			details[key] = raw;
 			fields.push(`${key}: ${raw}`);
@@ -162,7 +188,7 @@ export function formatRuntimeRpcError(
 		else fields.push(`${key}: ${value}`);
 	}
 
-	const header = `The runtime call failed (${error.code}): ${error.message}`;
+	const header = `The runtime call failed (${error.code}): ${message}`;
 	return { text: [header, ...fields, ...blocks].join("\n"), details };
 }
 

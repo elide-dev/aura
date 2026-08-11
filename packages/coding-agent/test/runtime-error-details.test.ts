@@ -209,6 +209,64 @@ describe("runtime RPC detail redaction", () => {
 		expect(details.argv).toContain(inside);
 	});
 
+	test("a path named in the message is redacted too, not just the one in data", () => {
+		// The exact shape provision.ts throws when the install cannot be placed: the
+		// same out-of-project path appears in `data` AND in the message prose.
+		const versionDir = "/home/someone-else/.cache/aura/runtime/1.0.0";
+		const { text, details } = formatRuntimeRpcError(
+			new RuntimeRpcError(
+				"download-failed",
+				`Runtime install could not be placed at ${versionDir}. Remove that directory and retry.`,
+				{ versionDir, cause: "Error: EEXIST: file already exists" },
+			),
+			PROJECT_ROOT,
+		);
+
+		const serialized = `${text}\n${JSON.stringify(details)}`;
+		expect(serialized).not.toContain(versionDir);
+		expect(serialized).not.toContain("someone-else");
+		// The message still explains the failure, sentence punctuation intact.
+		expect(details.message).toContain("Runtime install could not be placed at");
+		expect(details.message).toContain("Remove that directory and retry.");
+		expect(text).toContain("Remove that directory and retry.");
+	});
+
+	test("scheme-prefixed paths are redacted; URLs with an authority survive", () => {
+		const jarPath = "/home/someone-else/.m2/repository/app/x.jar";
+		const secret = "/home/someone-else/secret.txt";
+		const url = "https://elide.dev/dl/cli/v1.0.0/elide.tar.gz";
+		const { text, details } = formatRuntimeRpcError(
+			new RuntimeRpcError("internal", "The JVM flow failed.", {
+				stderr: `Caused by: java.io.FileNotFoundException: jar:file:${jarPath}\nalso file:${secret}\nand file://${secret}`,
+				url,
+			}),
+			PROJECT_ROOT,
+		);
+
+		const serialized = `${text}\n${JSON.stringify(details)}`;
+		expect(serialized).not.toContain(jarPath);
+		expect(serialized).not.toContain(secret);
+		expect(serialized).not.toContain("someone-else");
+		// A URL names a host, not this filesystem — it must survive intact.
+		expect(details.url).toBe(url);
+		expect(text).toContain(url);
+	});
+
+	test("a data field cannot shadow the projection's own code or message", () => {
+		const { details } = formatRuntimeRpcError(
+			new RuntimeRpcError("cancelled", "Runtime execution was cancelled.", {
+				code: "internal",
+				message: "something else entirely",
+				argv: ["elide", "run", "main.ts"],
+			}),
+			PROJECT_ROOT,
+		);
+
+		expect(details.code).toBe("cancelled");
+		expect(details.message).toBe("Runtime execution was cancelled.");
+		expect(details.argv).toBe("elide run main.ts");
+	});
+
 	test("environment variables are never emitted", () => {
 		const { text, details } = formatRuntimeRpcError(
 			new RuntimeRpcError("internal", "The runtime process failed to start.", {
