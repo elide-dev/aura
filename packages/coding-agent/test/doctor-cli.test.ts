@@ -52,7 +52,12 @@ function healthyInput(overrides: Partial<DoctorInput> = {}): DoctorInput {
 			},
 		},
 		natives: { loaded: true, version: "17.1.3", target: "linux-x64-modern" },
-		tools: { available: ["read", "bash", "run"], active: ["read", "bash", "run"], gatedOff: [], sessionGated: [] },
+		tools: {
+			available: ["read", "bash", "insights"],
+			active: ["read", "bash", "insights"],
+			gatedOff: [],
+			sessionGated: [],
+		},
 		plugins: { checks: [{ name: "plugins_directory", status: "ok", message: "Found at /x" }] },
 		terminal: {
 			detectedId: "wezterm",
@@ -383,11 +388,11 @@ describe("buildDoctorReport", () => {
 		const report = buildDoctorReport(
 			healthyInput({
 				tools: {
-					available: ["read", "bash", "run", "check"],
+					available: ["read", "bash", "insights", "profile"],
 					active: ["read", "bash"],
 					gatedOff: [
-						{ name: "run", reason: "runtime.enabled = false" },
-						{ name: "check", reason: "runtime.enabled = false" },
+						{ name: "insights", reason: "runtime.enabled = false" },
+						{ name: "profile", reason: "runtime.enabled = false" },
 					],
 					sessionGated: [],
 				},
@@ -397,7 +402,7 @@ describe("buildDoctorReport", () => {
 		expect(entries.map(e => e.detail).join(" ")).toContain("2/4");
 		// The gated-off names are named, with the reason, so a missing tool is diagnosable.
 		const gated = entries.find(e => e.label === "gated off");
-		expect(gated?.detail).toContain("run, check");
+		expect(gated?.detail).toContain("insights, profile");
 		expect(gated?.detail).toContain("runtime.enabled = false");
 	});
 
@@ -503,16 +508,7 @@ describe("resolveToolGating", () => {
 		autolearnEnabled: true,
 	};
 	const MEMORY_TOOLS = ["retain", "recall", "reflect", "memory_edit"];
-	const RUNTIME_TOOLS = [
-		"run",
-		"check",
-		"insights",
-		"profile",
-		"jvm_disassemble",
-		"jvm_format",
-		"jvm_jar",
-		"jvm_deps",
-	];
+	const RUNTIME_TOOLS = ["insights", "profile", "jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps"];
 
 	test("everything on registers every name", () => {
 		const result = resolveToolGating(

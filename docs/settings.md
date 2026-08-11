@@ -508,14 +508,14 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `l
 
 Python has a parent/child capability hierarchy. `python.enabled` is the parent
 gate for every Python surface. `python.embedded` controls Python in the managed
-`run`, `insights`, and `profile` tools. The local `$`/`$$` snake action routes to
-that embedded runtime when it is on; `python.shell` adds a subprocess-interpreter
-fallback for when it is not. The two are alternatives, so either one keeps the
-action alive and only `python.enabled` withdraws it outright.
+`insights` and `profile` tools. The local `$`/`$$` snake action executes in the
+same shared CPython kernel as `eval`'s Python backend, so a `$` cell and an
+`eval` cell see the same names; either `python.embedded` or `python.shell` keeps
+the action offered, and only `python.enabled` withdraws it outright.
 
 ### Runtime
 
-The `run`, `check`, `insights`, and `profile` tools execute on a managed runtime binary, as do four JVM specialists (`jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps`). Java and Kotlin execution is part of `run`. The `serve` long-running flow is supervised as a `hub` job rather than by the runtime layer. All nine tools are gated on `runtime.enabled`; when it is off, none register.
+The `insights` and `profile` tools execute on a managed runtime binary, as do four JVM specialists (`jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps`). The `serve` long-running flow is supervised as a `hub` job rather than by the runtime layer. All seven tools are gated on `runtime.enabled`; when it is off, none register. Code execution itself is not one of them: `eval` and `bash` own that surface.
 
 ```yaml
 runtime:
@@ -530,7 +530,7 @@ runtime:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`insights`/`profile`, `serve`, and four specialized `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
+| `runtime.enabled` | boolean | `true` | Enable the innate `insights`/`profile`, `serve`, and four specialized `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.adapter` | `process` \| `embedded` \| `auto` | `process` | Select the runtime process, require the embedded runtime library, or choose the library automatically when it is available and compatible. Explicit `embedded` mode never falls back to the process adapter when the library is missing or incompatible. |
 | `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. Also settable per-run with `--runtime <path>`, which reports `source: flag` in `aura runtime status`. |
@@ -544,9 +544,9 @@ Embedded library resolution checks a nonblank `runtime.embeddedPath`, then a non
 #### Inherent runtime guidance
 
 Runtime selection is part of Aura's system policy whenever runtime tools are
-registered. The agent chooses direct execution (`run`), validation (`check`),
-instrumentation (`insights`), profiling (`profile`), serving, and the four JVM
-specialists from the available tool inventory. Project builds use the project's
+registered. The agent chooses execution (`eval`, `bash`), instrumentation
+(`insights`), profiling (`profile`), serving, and the four JVM specialists from
+the available tool inventory. Project builds use the project's
 declared build command rather than a separate runtime tool. Tool prompts remain
 the argument and failure-shape reference.
 
@@ -557,7 +557,7 @@ trip. `runtime.enabled` remains the single capability gate.
 
 `aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 
-See [run](./tools/run.md), [check](./tools/check.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for core behavior; [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), and [jvm_deps](./tools/jvm_deps.md) for JVM specialists; and [serve](./tools/serve.md) for the supervised long-running flow. Its handle is a `hub` job name, so `hub logs` and `hub stop` apply; there is no separate stop tool. `jvm_jar` creation and `jvm_deps` with `output` are the only runtime flows that write into the project. Both require `output` to resolve inside the session cwd and refuse an existing output unless `overwrite: true` is passed. Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
+See [insights](./tools/insights.md) and [profile](./tools/profile.md) for core behavior; [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), and [jvm_deps](./tools/jvm_deps.md) for JVM specialists; and [serve](./tools/serve.md) for the supervised long-running flow. Its handle is a `hub` job name, so `hub logs` and `hub stop` apply; there is no separate stop tool. `jvm_jar` creation and `jvm_deps` with `output` are the only runtime flows that write into the project. Both require `output` to resolve inside the session cwd and refuse an existing output unless `overwrite: true` is passed. Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
 
 ### Window-scoped computer use
 
@@ -615,8 +615,8 @@ lsp:
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
 | `python.enabled` | boolean | `true` | Parent gate for every Python capability. When false, child settings cannot re-enable Python. |
-| `python.embedded` | boolean | `true` | Permit Python in the managed `run`, `insights`, and `profile` tools when `python.enabled` is true. Disabled sessions omit Python from those tools' schemas and descriptions. |
-| `python.shell` | boolean | `false` | Fall back to a subprocess Python interpreter for the local `$`/`$$` snake action when the embedded runtime is unavailable. The action itself follows `python.embedded`, so it already works by default; this key only adds the subprocess route for hosts running without the embedded runtime. With `python.enabled` off, or with embedded and this both off, sigil input is ordinary prompt text and the action is omitted from welcome and hotkey guidance. Disabled sessions treat sigil input as ordinary prompt text and omit the action from welcome and hotkey guidance. |
+| `python.embedded` | boolean | `true` | Permit Python in the managed `insights` and `profile` tools when `python.enabled` is true. Disabled sessions omit Python from those tools' schemas and descriptions. |
+| `python.shell` | boolean | `false` | Offer the local `$`/`$$` snake action on hosts running without the embedded runtime. The action executes in the shared CPython kernel either way; this key only decides whether it is offered when `python.embedded` is off, so it already works by default. With `python.enabled` off, or with embedded and this both off, sigil input is ordinary prompt text and the action is omitted from welcome and hotkey guidance. |
 | `eval.py` | boolean | `true` | Permit the Python eval backend when `python.enabled` is also true. `PI_PY=0` disables it for the process; `PI_PY=1` cannot bypass `python.enabled`. |
 | `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
 | `eval.jsEngine` | enum | `bun` | Engine that executes JavaScript eval cells: `bun` (in-process Bun runtime) or `elide` (no kernel ships yet; falls back to Bun with a notice). `AURA_EVAL_JS_ENGINE` overrides it for the process; an unrecognized value is an error. |

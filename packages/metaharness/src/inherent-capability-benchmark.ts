@@ -10,8 +10,6 @@ const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 const INHERENT_TREATMENT_FILES = [
 	"packages/coding-agent/src/prompts/system/system-prompt.md",
-	"packages/coding-agent/src/prompts/tools/runtime-run.md",
-	"packages/coding-agent/src/prompts/tools/runtime-check.md",
 	"packages/coding-agent/src/prompts/tools/runtime-insights.md",
 	"packages/coding-agent/src/prompts/tools/runtime-profile.md",
 	"packages/coding-agent/src/prompts/tools/runtime-serve.md",
@@ -77,7 +75,7 @@ export interface InherentBenchmarkLaunch {
 }
 
 export interface InherentTranscriptFacts {
-	firstCapabilityTool: "run" | "check" | "jvm_deps" | "bash" | undefined;
+	firstCapabilityTool: "jvm_deps" | "eval" | "bash" | undefined;
 	coreSkillLoads: number;
 }
 
@@ -161,10 +159,7 @@ export function scanInherentTranscript(content: string): InherentTranscriptFacts
 			if (!isRecord(event) || event.type !== "tool_execution_start" || typeof event.toolName !== "string") continue;
 			if (
 				firstCapabilityTool === undefined &&
-				(event.toolName === "run" ||
-					event.toolName === "check" ||
-					event.toolName === "jvm_deps" ||
-					event.toolName === "bash")
+				(event.toolName === "jvm_deps" || event.toolName === "eval" || event.toolName === "bash")
 			) {
 				firstCapabilityTool = event.toolName;
 			}
@@ -248,8 +243,12 @@ export function analyzeInherentBenchmark(
 ): InherentBenchmarkAnalysis {
 	const comparison = legacy !== undefined;
 	const inherentPassRate = inherent.trials === 0 ? 0 : inherent.pass / inherent.trials;
-	const expectedFirstTool: Readonly<Record<InherentBenchmarkTaskId, "run" | "jvm_deps">> = {
-		"typescript-execution": "run",
+	// `typescript-execution` used to expect `run`. With the fork's execution tools
+	// retired, the arm carries no execution tool of its own, so `bash` is the only
+	// capability the transcript can show; the gate stays structural until the eval
+	// backend gives execution tasks a runtime-backed surface to select again.
+	const expectedFirstTool: Readonly<Record<InherentBenchmarkTaskId, "bash" | "jvm_deps">> = {
+		"typescript-execution": "bash",
 		"jvm-dependencies": "jvm_deps",
 	};
 	const selectedCorrectly = inherentTranscripts.filter(
@@ -276,7 +275,7 @@ export function analyzeInherentBenchmark(
 		reasons.push("inherent arm did not use a runtime tool in every trial");
 	if (inherentTranscripts.length !== inherent.trials) reasons.push("inherent arm is missing transcript evidence");
 	if (firstExecutionSelectionRate !== 1)
-		reasons.push("inherent arm did not select the task-specific runtime tool before bash in every trial");
+		reasons.push("inherent arm did not select the task-specific capability tool first in every trial");
 	if (coreSkillLoads !== 0) reasons.push("inherent arm loaded a promoted runtime or core workflow skill");
 	if (comparison) {
 		const legacyPairs = benchmarkPairs(legacy);

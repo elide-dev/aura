@@ -71,44 +71,34 @@ describe("runtime tool renderers: registration", () => {
 		}
 	});
 
-	it("covers runtime execution and analysis, four specialized JVM tools, and one job tool", () => {
+	it("covers runtime analysis, four specialized JVM tools, and one job tool", () => {
 		expect([...RUNTIME_RENDERER_TOOL_NAMES].sort()).toEqual(
-			[
-				"check",
-				"insights",
-				"jvm_deps",
-				"jvm_disassemble",
-				"jvm_format",
-				"jvm_jar",
-				"profile",
-				"run",
-				"serve",
-			].sort(),
+			["insights", "jvm_deps", "jvm_disassemble", "jvm_format", "jvm_jar", "profile", "serve"].sort(),
 		);
 	});
 });
 
-describe("run", () => {
-	it("shows language and inline-vs-path on the call line", () => {
-		expect(call("run", { code: "console.log(1)" })).toContain("Run");
-		expect(call("run", { code: "console.log(1)" })).toContain("inline");
-		expect(call("run", { code: "console.log(1)" })).toContain("ts");
-		expect(call("run", { code: "print(1)", language: "python" })).toContain("python");
-		expect(call("run", { path: "scripts/build.ts" })).toContain("scripts/build.ts");
+// The exec-result summary is the shared factory's, not any one tool's; `insights`
+// stands in for every exec-shaped runtime tool here.
+describe("exec-result framing", () => {
+	it("shows inline-vs-path on the call line", () => {
+		expect(call("insights", { code: "console.log(1)" })).toContain("Insights");
+		expect(call("insights", { code: "console.log(1)" })).toContain("inline");
+		expect(call("insights", { path: "scripts/build.ts" })).toContain("scripts/build.ts");
 		// A path run is not "inline" — the distinction is the whole point of the line.
-		expect(call("run", { path: "scripts/build.ts" })).not.toContain("inline");
+		expect(call("insights", { path: "scripts/build.ts" })).not.toContain("inline");
 	});
 
 	it("summarizes a successful run without an exit-code note", () => {
-		const text = settled("run", { content: [{ type: "text", text: "hello" }], details: exec() }, { code: "x" });
-		expect(text).toContain("Run");
+		const text = settled("insights", { content: [{ type: "text", text: "hello" }], details: exec() }, { code: "x" });
+		expect(text).toContain("Insights");
 		expect(text).toContain("hello");
 		expect(text).not.toContain("exit");
 	});
 
 	it("surfaces the exit code and stderr preview on a failed run", () => {
 		const text = settled(
-			"run",
+			"insights",
 			{
 				content: [{ type: "text", text: "--- stderr ---\nReferenceError: nope" }],
 				isError: true,
@@ -125,7 +115,7 @@ describe("run", () => {
 		// header already carries it, so the body must not repeat it — the same
 		// reason `bash` strips its own exit-code notice before previewing.
 		const text = settled(
-			"run",
+			"insights",
 			{
 				content: [{ type: "text", text: "boom\n(exit code 3)" }],
 				isError: true,
@@ -140,34 +130,21 @@ describe("run", () => {
 
 	it("drops a body that was only the no-output annotation", () => {
 		const text = settled(
-			"run",
+			"insights",
 			{ content: [{ type: "text", text: "(no output, exit code 0)" }], details: exec() },
 			{ code: "x" },
 		);
 		expect(text).not.toContain("no output, exit code");
-		expect(text).toContain("Run");
+		expect(text).toContain("Insights");
 	});
 
 	it("reports a killed run", () => {
 		const text = settled(
-			"run",
+			"insights",
 			{ content: [{ type: "text", text: "" }], details: exec({ exitCode: 137, killed: true }) },
 			{ code: "while(true){}" },
 		);
 		expect(text).toContain("killed");
-	});
-});
-
-describe("check", () => {
-	it("shows pass on a clean check and fail on a broken one", () => {
-		expect(settled("check", { content: [{ type: "text", text: "ok" }], details: exec() }, {})).toContain("passed");
-		const failed = settled(
-			"check",
-			{ content: [{ type: "text", text: "boom" }], isError: true, details: exec({ exitCode: 2 }) },
-			{},
-		);
-		expect(failed).toContain("failed");
-		expect(failed).toContain("exit 2");
 	});
 });
 
@@ -189,15 +166,17 @@ describe("insights and profile", () => {
 });
 
 describe("jvm tools", () => {
-	it("shows the main class for unified Java run", () => {
-		expect(call("run", { language: "java", code: "class Main {}", mainClass: "Main" })).toContain("Run");
+	it("shows the resolved class for a JVM flow", () => {
+		expect(call("jvm_disassemble", { language: "java", code: "class Main {}", mainClass: "Main" })).toContain(
+			"JVM Disassemble",
+		);
 		const text = settled(
-			"run",
+			"jvm_disassemble",
 			{
 				content: [{ type: "text", text: "hi" }],
 				details: exec({
-					action: "run",
-					phase: "run",
+					action: "disassemble",
+					phase: "disassemble",
 					language: "java",
 					className: "Main",
 					engine: "elide",
@@ -211,13 +190,13 @@ describe("jvm tools", () => {
 
 	it("reports the phase a failed JVM flow stopped at", () => {
 		const text = settled(
-			"run",
+			"jvm_disassemble",
 			{
 				content: [{ type: "text", text: "Main.java:1: error: bad" }],
 				isError: true,
 				details: exec({
 					exitCode: 1,
-					action: "run",
+					action: "disassemble",
 					phase: "compile",
 					language: "java",
 					engine: "elide",
@@ -323,7 +302,7 @@ describe("serve", () => {
 describe("spilled output", () => {
 	it("shows the artifact reference the central spill attached", () => {
 		const text = settled(
-			"run",
+			"insights",
 			{
 				content: [{ type: "text", text: "tail of the output" }],
 				details: exec({
@@ -352,11 +331,8 @@ describe("spilled output", () => {
 describe("naming rule", () => {
 	it("never says Elide in a rendered runtime frame", () => {
 		const frames = [
-			call("run", { code: "x" }),
-			call("check", {}),
 			call("insights", { code: "x" }),
 			call("profile", { mode: "cputracing", code: "x" }),
-			call("run", { language: "java", code: "class Main {}" }),
 			call("jvm_deps", { path: "app.jar" }),
 			call("jvm_format", { language: "kotlin", code: "fun main(){}" }),
 			call("jvm_disassemble", { language: "java", code: "class Main {}" }),

@@ -126,17 +126,7 @@ describe("doctor's tool-gate table matches the real registry", () => {
 		const off = await registryActive({ ...ALL_ON, runtimeEnabled: false });
 		const dropped = [...on].filter(name => !off.has(name)).sort();
 		expect(dropped).toEqual(
-			[
-				"check",
-				"insights",
-				"jvm_deps",
-				"jvm_disassemble",
-				"jvm_format",
-				"jvm_jar",
-				"profile",
-				"run",
-				"serve",
-			].sort(),
+			["insights", "jvm_deps", "jvm_disassemble", "jvm_format", "jvm_jar", "profile", "serve"].sort(),
 		);
 	});
 

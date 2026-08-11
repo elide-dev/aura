@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Removed the `run` and `check` tools from the model surface; `eval` and `bash` are the execution surface, and the local `$`/`$$` action now runs in the same shared CPython kernel as `eval`'s Python backend instead of a one-shot managed runtime. `insights`, `profile`, `serve`, and the four `jvm_*` tools are unaffected; JVM and project-validation one-shots have no direct tool until the runtime eval backends land.
 - Removed the public `jvm_run` tool; execute Java and Kotlin through the unified `run` tool with `language`, optional `mainClass`, and the existing args/stdin/cwd controls.
 - Removed the `runtime_debug` tool and CDP/DAP launch protocol; use Aura's interactive `debug` tool until runtime-backed debugging is integrated there.
 

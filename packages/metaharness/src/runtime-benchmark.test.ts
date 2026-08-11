@@ -216,8 +216,10 @@ describe("runtime benchmark orchestration", () => {
 		expect(launches.filter(launch => launch.arm === "baseline")).toHaveLength(RUNTIME_TASKS.length);
 		expect(launches.filter(launch => launch.arm === "runtime")).toHaveLength(RUNTIME_TASKS.length);
 		expect(launches[0].args).toContain(`--agent-arg=${BASELINE_TOOLS.join(",")}`);
-		expect(launches.find(launch => launch.arm === "runtime")?.args).toContain(
-			`--agent-arg=${[...BASELINE_TOOLS, "run", "check"].join(",")}`,
+		// A task that names a discoverable runtime tool is what separates the arms
+		// now that no runtime tool rides along in every runtime launch.
+		expect(launches.find(launch => launch.arm === "runtime" && launch.taskId === "instrumentation")?.args).toContain(
+			`--agent-arg=${[...BASELINE_TOOLS, "insights"].join(",")}`,
 		);
 		expect(launches.every(launch => launch.args.includes("--host-network"))).toBe(true);
 	});
@@ -236,7 +238,9 @@ describe("runtime benchmark orchestration", () => {
 		});
 		const runtimeArgs = (taskId: string) =>
 			launches.find(launch => launch.arm === "runtime" && launch.taskId === taskId)?.args;
-		const essentials = [...BASELINE_TOOLS, "run", "check"];
+		// `run`/`check` are retired, so the runtime arm's floor is the baseline set:
+		// a task that names no runtime tool mounts exactly what the baseline does.
+		const essentials = BASELINE_TOOLS;
 
 		expect(runtimeArgs("project-validation")).toContain(`--agent-arg=${essentials.join(",")}`);
 		expect(runtimeArgs("project-validation")?.join(" ")).not.toContain("project_advice");
@@ -389,11 +393,11 @@ describe("runtime benchmark orchestration", () => {
 		cleanups.push(jobDir);
 		const agentDir = path.join(jobDir, "trial", "agent");
 		fs.mkdirSync(agentDir, { recursive: true });
-		const call = { type: "toolCall", id: "call-1", name: "run", arguments: {} };
+		const call = { type: "toolCall", id: "call-1", name: "insights", arguments: {} };
 		const lines = [
 			{ type: "message_start", message: { role: "assistant", content: [call] } },
 			{ type: "message_end", message: { role: "assistant", content: [call] } },
-			{ type: "tool_execution_start", toolCallId: "call-1", toolName: "run" },
+			{ type: "tool_execution_start", toolCallId: "call-1", toolName: "insights" },
 		];
 		fs.writeFileSync(path.join(agentDir, "omp.txt"), lines.map(line => JSON.stringify(line)).join("\n"));
 
@@ -423,7 +427,7 @@ describe("runtime benchmark orchestration", () => {
 		);
 		fs.writeFileSync(
 			path.join(trialDir, "agent", "omp.txt"),
-			`${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "run" })}\n`,
+			`${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "insights" })}\n`,
 		);
 
 		expect(countTrialToolCalls(jobDir, trialName)).toEqual({ total: 1, runtimeUsed: true });
@@ -732,7 +736,7 @@ describe("runtime benchmark orchestration", () => {
 			tools: {
 				baseline: BASELINE_TOOLS,
 				runtimeByTask: {
-					"python-execution": [...BASELINE_TOOLS, "run", "check"],
+					"python-execution": BASELINE_TOOLS,
 				},
 				historical: BASELINE_TOOLS,
 			},

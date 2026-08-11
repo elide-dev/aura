@@ -1,6 +1,6 @@
 /**
- * TUI renderers for the runtime tool family (`run`, `check`, `insights`,
- * `profile`, the four specialized `jvm_*` flows, and hub-backed `serve`).
+ * TUI renderers for the runtime tool family (`insights`, `profile`, the four
+ * specialized `jvm_*` flows, and hub-backed `serve`).
  *
  * These are deliberately *thin*. The house style for an exec-shaped tool is a
  * status line plus a short output preview (`glob`, `hub`), and everything that
@@ -12,7 +12,7 @@
  * invoked* on the call line, and *how did it end* on the result line — and let
  * the shared preview machinery handle the rest.
  *
- * One factory drives all eleven because the result shapes collapse to three:
+ * One factory drives all seven because the result shapes collapse to three:
  * `RuntimeExecResult` (exit code / duration / killed), `RuntimeJvmResult` (that
  * plus the flow's phase and what it produced), and `RuntimeJobDetails` (an
  * endpoint and a hub job handle). Per-tool differences are declarative
@@ -20,24 +20,18 @@
  * renderer a data change rather than another copy of this file.
  *
  * Naming rule: nothing rendered here names the runtime binary. Frames say the
- * tool's own label ("Run", "JVM Jar") or "the runtime".
+ * tool's own label ("Insights", "JVM Jar") or "the runtime".
  */
 
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir, isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import type { RuntimeExecResult, RuntimeJvmResult } from "../runtime/protocol";
 import { renderStatusLine, truncateToWidth } from "../tui";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
-import {
-	capPreviewLines,
-	createCachedComponent,
-	formatToolWorkingDirectory,
-	replaceTabs,
-	shortenPath,
-} from "./render-utils";
+import { capPreviewLines, createCachedComponent, replaceTabs, shortenPath } from "./render-utils";
 import type { ToolRenderer } from "./renderers";
 import type { RuntimeJobDetails } from "./runtime-launch";
 
@@ -67,12 +61,6 @@ interface RuntimeRendererSpec {
 	 * {@link describeCall} so a tool whose result adds nothing stays a one-liner.
 	 */
 	describeResult?: (details: AnyDetails | undefined, args: Args, uiTheme: Theme) => Frame;
-	/**
-	 * Append a `passed` / `failed` verdict to the result line. For `check`,
-	 * whose whole purpose is the verdict, an exit code alone makes the reader
-	 * do the translation.
-	 */
-	passFail?: boolean;
 	/** Result details are a hub job descriptor, not an exec result. */
 	job?: boolean;
 }
@@ -94,7 +82,7 @@ const num = (args: Args, key: string): number | undefined => {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
-/** `run`/`insights`/`profile` all take either inline source or an existing file. */
+/** `insights`/`profile` both take either inline source or an existing file. */
 function describeSource(args: Args): string {
 	const filePath = str(args, "path");
 	return filePath ? shortenPath(filePath) : "inline";
@@ -236,9 +224,6 @@ export function createRuntimeToolRenderer(spec: RuntimeRendererSpec): ToolRender
 			const frame = spec.describeResult ? spec.describeResult(details, args, uiTheme) : spec.describeCall(args);
 
 			const meta = metaOf(frame);
-			if (spec.passFail && !isPartial) {
-				meta.push(success ? uiTheme.fg("success", "passed") : uiTheme.fg("error", "failed"));
-			}
 			if (!spec.job) meta.push(...metaOf({ meta: execMeta(isExecDetails(details) ? details : undefined) }));
 
 			// A job that launched but printed no endpoint inside the wait window is
@@ -301,11 +286,6 @@ function jobResultFrame(fallback: (args: Args) => Frame) {
 	};
 }
 
-const runCallFrame = (args: Args): Frame => ({
-	description: describeSource(args),
-	meta: [str(args, "language") ?? (str(args, "path") ? undefined : "ts"), str(args, "engine"), str(args, "mainClass")],
-});
-
 const serveCallFrame = (args: Args): Frame => {
 	const port = num(args, "port");
 	return {
@@ -337,16 +317,6 @@ const jvmDepsCallFrame = (args: Args): Frame => {
 };
 
 const RUNTIME_RENDERER_SPECS: Record<string, RuntimeRendererSpec> = {
-	run: { title: "Run", describeCall: runCallFrame, describeResult: jvmResultFrame(runCallFrame) },
-
-	check: {
-		title: "Check",
-		passFail: true,
-		describeCall: args => ({
-			description: formatToolWorkingDirectory(str(args, "cwd"), getProjectDir()) ?? "project",
-		}),
-	},
-
 	insights: {
 		title: "Insights",
 		describeCall: args => {

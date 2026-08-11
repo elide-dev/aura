@@ -4,7 +4,7 @@ import { BUILTIN_TOOLS, type ToolSession } from "../src/tools";
 import { BUILTIN_TOOL_NAMES, normalizeToolName } from "../src/tools/builtin-names";
 import { ESSENTIAL_BUILTIN_TOOL_NAMES } from "../src/tools/essential-tools";
 
-const RUNTIME_TOOLS = ["run", "check", "insights", "profile", "serve"] as const;
+const RUNTIME_TOOLS = ["insights", "profile", "serve"] as const;
 
 /** The long-running flow supervised by hub rather than by the runtime layer. */
 const LAUNCH_TOOLS = ["serve"] as const;
@@ -38,9 +38,15 @@ describe("runtime tool registry", () => {
 		for (const name of RUNTIME_TOOLS) expect(normalizeToolName(name)).toBe(name);
 	});
 
-	test("run/check are essential; removed runtime surfaces stay absent", () => {
-		expect(ESSENTIAL_BUILTIN_TOOL_NAMES.run).toBe(true);
-		expect(ESSENTIAL_BUILTIN_TOOL_NAMES.check).toBe(true);
+	test("no runtime tool is essential; removed runtime surfaces stay absent", () => {
+		// `run` and `check` were the fork's parallel execution surface. `eval` and
+		// `bash` own execution now, so nothing in the runtime family is top-level.
+		expect(BUILTIN_TOOL_NAMES).not.toContain("run");
+		expect(BUILTIN_TOOL_NAMES).not.toContain("check");
+		expect("run" in BUILTIN_TOOLS).toBe(false);
+		expect("check" in BUILTIN_TOOLS).toBe(false);
+		expect("run" in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
+		expect("check" in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
 		expect(BUILTIN_TOOL_NAMES).not.toContain("build");
 		expect(BUILTIN_TOOL_NAMES).not.toContain("project_advice");
 		expect("build" in BUILTIN_TOOLS).toBe(false);
@@ -49,12 +55,11 @@ describe("runtime tool registry", () => {
 		expect("jvm_javadoc" in BUILTIN_TOOLS).toBe(false);
 		expect(BUILTIN_TOOL_NAMES).not.toContain("runtime_debug");
 		expect("runtime_debug" in BUILTIN_TOOLS).toBe(false);
-		for (const name of ["insights", "profile", ...LAUNCH_TOOLS]) {
+		for (const name of [...RUNTIME_TOOLS]) {
 			expect(name in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
 		}
 	});
 	test("keeps inherent runtime provider payloads compact", async () => {
-		expect(await providerPayloadBytes(["run", "check"])).toBeLessThanOrEqual(1_800);
 		expect(await providerPayloadBytes([...RUNTIME_TOOLS, ...JVM_TOOLS])).toBeLessThanOrEqual(8_500);
 	});
 

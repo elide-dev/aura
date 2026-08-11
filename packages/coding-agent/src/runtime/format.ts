@@ -214,7 +214,13 @@ export type RuntimeCallOutcome<T> =
  * and the loop's own error path is the right place for them.
  *
  * `onRpcError` runs before the result is built, so a tool that must react to a
- * failure (retiring a poisoned service, say) still does so on the way out.
+ * failure (retiring a poisoned service, say) still does so on the way out. No
+ * shipped tool passes it right now: `run` was its only caller and retired with
+ * the fork's execution surface, so an `internal` failure currently leaves the
+ * cached service in place for `insights`/`profile`/`jvm_*`. The hook keeps its
+ * contract test — closing that gap means giving this helper the service and
+ * scope so every runtime tool inherits the retirement, not re-adding a private
+ * method to each one.
  */
 export async function callRuntime<T>(
 	invoke: () => Promise<T>,

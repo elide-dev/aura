@@ -98,7 +98,7 @@ describe("inherent capability benchmark", () => {
 	it("extracts first execution choice and promoted skill loads from emitted transcript events", () => {
 		const transcript = [
 			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "/app/events.jsonl" } }),
-			JSON.stringify({ type: "tool_execution_start", toolName: "run", args: { path: "/app/aggregate.py" } }),
+			JSON.stringify({ type: "tool_execution_start", toolName: "eval", args: { path: "/app/aggregate.py" } }),
 			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "skill://runtime" } }),
 			JSON.stringify({
 				type: "tool_execution_start",
@@ -107,7 +107,7 @@ describe("inherent capability benchmark", () => {
 			}),
 			JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "skill://frontend-design" } }),
 		].join("\n");
-		expect(scanInherentTranscript(transcript)).toEqual({ firstCapabilityTool: "run", coreSkillLoads: 2 });
+		expect(scanInherentTranscript(transcript)).toEqual({ firstCapabilityTool: "eval", coreSkillLoads: 2 });
 	});
 
 	it("passes only when behavior improves without tool-call or token regression", () => {
@@ -117,7 +117,7 @@ describe("inherent capability benchmark", () => {
 		});
 		const inherent = summary("runtime");
 		const traces = Array.from({ length: 3 }, () => [
-			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "bash" as const, coreSkillLoads: 0 } },
 			{ taskId: "jvm-dependencies", facts: { firstCapabilityTool: "jvm_deps" as const, coreSkillLoads: 0 } },
 		]).flat();
 		const analysis = analyzeInherentBenchmark(legacy, inherent, traces);
@@ -137,13 +137,13 @@ describe("inherent capability benchmark", () => {
 			inputTokens: [130, 130, 140, 140, 150, 150],
 		});
 		const analysis = analyzeInherentBenchmark(legacy, inherent, [
-			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "bash", coreSkillLoads: 1 } },
+			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "eval", coreSkillLoads: 1 } },
 		]);
 		expect(analysis.verdict).toBe("fail");
 		expect(analysis.reasons).toEqual([
 			"inherent arm did not pass every trial",
 			"inherent arm is missing transcript evidence",
-			"inherent arm did not select the task-specific runtime tool before bash in every trial",
+			"inherent arm did not select the task-specific capability tool first in every trial",
 			"inherent arm loaded a promoted runtime or core workflow skill",
 			"median paired tool calls increased",
 			"median paired input tokens increased",
@@ -154,7 +154,7 @@ describe("inherent capability benchmark", () => {
 		const inherent = summary("runtime");
 		inherent.runtimeTrials -= 1;
 		const traces = Array.from({ length: 3 }, () => [
-			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "run" as const, coreSkillLoads: 0 } },
+			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "bash" as const, coreSkillLoads: 0 } },
 			{ taskId: "jvm-dependencies", facts: { firstCapabilityTool: "jvm_deps" as const, coreSkillLoads: 0 } },
 		]).flat();
 		const analysis = analyzeInherentBenchmark(undefined, inherent, traces);

@@ -28,8 +28,6 @@ const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 const RUNTIME_TOOL_NAMES: Record<string, true> = {
-	run: true,
-	check: true,
 	insights: true,
 	profile: true,
 	serve: true,
@@ -40,7 +38,6 @@ const RUNTIME_TOOL_NAMES: Record<string, true> = {
 };
 
 export const BASELINE_TOOLS = ["read", "write", "edit", "bash", "grep", "glob"];
-export const ESSENTIAL_RUNTIME_TOOLS = [...BASELINE_TOOLS, "run", "check"];
 
 export type BenchmarkArm = "baseline" | "runtime" | "historical";
 
@@ -205,10 +202,16 @@ export interface RuntimeBenchmarkCliOptions {
 	allowMissingRuntime: boolean;
 }
 
+/**
+ * The runtime arm's tool set: the baseline plus whatever discoverable runtime
+ * tool the task is actually about. `run` and `check` used to ride along in every
+ * runtime arm; with those retired, a task that names no runtime tool now differs
+ * from its baseline only in the binary under test.
+ */
 export function runtimeToolsForTask(taskId: string): string[] {
 	const task = RUNTIME_TASKS.find(candidate => candidate.id === taskId);
 	if (!task) throw new Error(`unknown runtime task: ${taskId}`);
-	return [...ESSENTIAL_RUNTIME_TOOLS, ...task.runtimeTools];
+	return [...BASELINE_TOOLS, ...task.runtimeTools];
 }
 
 export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {

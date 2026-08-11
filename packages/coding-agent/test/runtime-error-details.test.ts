@@ -19,12 +19,12 @@ import {
 	getOrCreateRuntimeService,
 	type RuntimeServiceScope,
 } from "../src/runtime";
-import { formatRuntimeRpcError, isRuntimeExecResult } from "../src/runtime/format";
+import { callRuntime, formatRuntimeRpcError, isRuntimeExecResult } from "../src/runtime/format";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 import type { ToolSession } from "../src/tools";
 import { JvmJarTool } from "../src/tools/jvm-jar";
-import { RuntimeCheckTool } from "../src/tools/runtime-check";
-import { RuntimeRunTool } from "../src/tools/runtime-run";
+import { RuntimeInsightsTool } from "../src/tools/runtime-insights";
+import { RuntimeProfileTool } from "../src/tools/runtime-profile";
 
 /** The package root stands in for the project root the tools redact against. */
 const PROJECT_ROOT = path.resolve(import.meta.dir, "..");
@@ -51,12 +51,12 @@ const textOf = (result: { content: Array<{ type: string; text?: string }> }): st
 		.join("\n");
 
 describe("runtime RPC failures reach the model as detailed tool results", () => {
-	test("a failed run carries argv and stderr in both the text and the details", async () => {
+	test("a failed call carries argv and stderr in both the text and the details", async () => {
 		const error = new RuntimeRpcError("download-failed", "Runtime archive extraction failed.", {
 			argv: ["tar", "-xJf", "archive.tar.xz", "-C", "extract"],
 			stderr: "tar: unexpected end of file\n",
 		});
-		const tool = RuntimeRunTool.createIf(sessionThrowing(error));
+		const tool = RuntimeInsightsTool.createIf(sessionThrowing(error));
 
 		const result = await tool!.execute("id", { code: "console.log(1)" } as never);
 
@@ -74,13 +74,15 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 		});
 	});
 
-	test("the sibling tools share the conversion (check, jvm_jar)", async () => {
+	test("the sibling tools share the conversion (profile, jvm_jar)", async () => {
 		const error = new RuntimeRpcError("timeout", "The runtime call timed out.", { timeoutMs: 5000 });
 
-		const check = await RuntimeCheckTool.createIf(sessionThrowing(error))!.execute("id", {} as never);
-		expect(check.isError).toBe(true);
-		expect(textOf(check)).toContain("The runtime call timed out.");
-		expect(check.details).toMatchObject({ code: "timeout", timeoutMs: 5000 });
+		const profile = await RuntimeProfileTool.createIf(sessionThrowing(error))!.execute("id", {
+			code: "console.log(1)",
+		} as never);
+		expect(profile.isError).toBe(true);
+		expect(textOf(profile)).toContain("The runtime call timed out.");
+		expect(profile.details).toMatchObject({ code: "timeout", timeoutMs: 5000 });
 
 		const jar = await JvmJarTool.createIf(sessionThrowing(error))!.execute("id", {
 			action: "inspect",
@@ -93,7 +95,7 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 
 	test("a 10 KiB stderr is tail-capped at 2 KiB — the tail, not the head", async () => {
 		const stderr = `HEAD-MARKER${"e".repeat(10 * 1024)}TAIL-MARKER`;
-		const tool = RuntimeRunTool.createIf(
+		const tool = RuntimeInsightsTool.createIf(
 			sessionThrowing(new RuntimeRpcError("internal", "The runtime aborted.", { stderr })),
 		);
 
@@ -116,13 +118,19 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 		expect(projection.text).toContain("No runtime binary is available.");
 		expect(projection.details).toMatchObject({ code: "runtime-missing", message: "No runtime binary is available." });
 
-		const result = await RuntimeCheckTool.createIf(sessionThrowing(bare))!.execute("id", {} as never);
+		const result = await RuntimeInsightsTool.createIf(sessionThrowing(bare))!.execute("id", {
+			code: "console.log(1)",
+		} as never);
 		expect(result.isError).toBe(true);
 		expect(textOf(result).trim().length).toBeGreaterThan(0);
 		expect(textOf(result)).toContain("No runtime binary is available.");
 	});
 
-	test("an internal failure still retires the cached service before returning the result", async () => {
+	// `onRpcError` runs inside `callRuntime`, before the projection is built, so a
+	// caller can retire the cached service it just proved suspect and still return
+	// the diagnostic. No shipped tool passes the hook today (it left with `run`);
+	// this pins the contract a caller would depend on.
+	test("callRuntime runs onRpcError before returning, so a caller can retire the cached service", async () => {
 		const options = { adapter: "process" as const, autoDownload: false, explicitPath: "/runtime-fixture" };
 		const scope: RuntimeServiceScope = {
 			readSettings: () => ({
@@ -143,21 +151,21 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 					stderr: "worker exited with signal SIGSEGV",
 				}),
 			);
-			const session = {
-				settings: {
-					get: (key: string) => key === "runtime.enabled" || key === "python.enabled" || key === "python.embedded",
+
+			const call = await callRuntime(() => first.run({ code: "print('first')", language: "python" }), {
+				root: PROJECT_ROOT,
+				onRpcError: async error => {
+					if (error.code === "internal") await disposeCachedRuntimeService(first, scope);
 				},
-				runtimeServiceScope: scope,
-				getRuntimeService: () => getOrCreateRuntimeService(options, undefined, scope),
-			} as unknown as ToolSession;
+			});
 
-			const result = await new RuntimeRunTool(session).execute("id", { code: "print('first')", language: "python" });
-
-			// Retirement happened during execute, so it is already observable here.
+			// Retirement happened during callRuntime, so it is already observable here.
 			expect(close).toHaveBeenCalledTimes(1);
-			expect(result.isError).toBe(true);
-			expect(textOf(result)).toContain("Embedded runtime execution worker failed.");
-			expect(result.details).toMatchObject({ code: "internal", stderr: "worker exited with signal SIGSEGV" });
+			expect(call.ok).toBe(false);
+			if (call.ok) throw new Error("expected the RPC failure to settle as a tool result");
+			expect(call.result.isError).toBe(true);
+			expect(textOf(call.result)).toContain("Embedded runtime execution worker failed.");
+			expect(call.result.details).toMatchObject({ code: "internal", stderr: "worker exited with signal SIGSEGV" });
 			const replacement = getOrCreateRuntimeService(options, undefined, scope);
 			expect(replacement).not.toBe(first);
 			await disposeCachedRuntimeService(replacement, scope);
@@ -167,10 +175,10 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 	});
 
 	test("a failure that is not a RuntimeRpcError still propagates as a throw", async () => {
-		const tool = RuntimeRunTool.createIf(sessionThrowing(new TypeError("service.run is not a function")));
+		const tool = RuntimeInsightsTool.createIf(sessionThrowing(new TypeError("service.insights is not a function")));
 
 		await expect(tool!.execute("id", { code: "console.log(1)" } as never)).rejects.toThrow(
-			"service.run is not a function",
+			"service.insights is not a function",
 		);
 	});
 });
