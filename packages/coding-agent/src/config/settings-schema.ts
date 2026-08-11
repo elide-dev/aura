@@ -3678,6 +3678,26 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"eval.jsEngine": {
+		type: "enum",
+		values: ["bun", "elide"] as const,
+		default: "bun",
+		ui: {
+			tab: "shell",
+			group: "Eval & Runtimes",
+			label: "JavaScript Eval Engine",
+			description: "Engine that executes JavaScript eval cells.",
+			options: [
+				{ value: "bun", label: "Bun", description: "Execute JavaScript cells on the in-process Bun runtime." },
+				{
+					value: "elide",
+					label: "Elide",
+					description: "Execute JavaScript cells on the Elide runtime.",
+				},
+			],
+		},
+	},
+
 	"eval.rb": {
 		type: "boolean",
 		default: false,

@@ -619,6 +619,7 @@ lsp:
 | `python.shell` | boolean | `false` | Fall back to a subprocess Python interpreter for the local `$`/`$$` snake action when the embedded runtime is unavailable. The action itself follows `python.embedded`, so it already works by default; this key only adds the subprocess route for hosts running without the embedded runtime. With `python.enabled` off, or with embedded and this both off, sigil input is ordinary prompt text and the action is omitted from welcome and hotkey guidance. Disabled sessions treat sigil input as ordinary prompt text and omit the action from welcome and hotkey guidance. |
 | `eval.py` | boolean | `true` | Permit the Python eval backend when `python.enabled` is also true. `PI_PY=0` disables it for the process; `PI_PY=1` cannot bypass `python.enabled`. |
 | `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
+| `eval.jsEngine` | enum | `bun` | Engine that executes JavaScript eval cells: `bun` (in-process Bun runtime) or `elide`. `AURA_EVAL_JS_ENGINE` overrides it for the process; an unrecognized value is an error. |
 | `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |
 | `python.interpreter` | string | `""` | Path to a Python interpreter; empty = auto-detect. |
 | `lsp.enabled` | boolean | `true` | Language-server integration. `--no-lsp` disables for the run. |
