@@ -612,6 +612,7 @@ async function gatherNatives(): Promise<DoctorNativesInput> {
  */
 export interface ToolGateSettings {
 	runtimeEnabled: boolean;
+	launchEnabled: boolean;
 	debugEnabled: boolean;
 	memoryBackend: string;
 	autolearnEnabled: boolean;
@@ -619,13 +620,14 @@ export interface ToolGateSettings {
 
 /**
  * The gate settings doctor assumes when the settings document cannot be read.
- * Transcribed from `settings-schema.ts` defaults — `runtime.enabled` and
- * `debug.enabled` default on, `memory.backend` off, `autolearn.enabled` off —
- * so a failed read reports what a default install actually has, in neither
- * direction.
+ * Transcribed from `settings-schema.ts` defaults — `runtime.enabled`,
+ * `launch.enabled`, and `debug.enabled` default on, `memory.backend` off,
+ * `autolearn.enabled` off — so a failed read reports what a default install
+ * actually has, in neither direction.
  */
 export const DEFAULT_TOOL_GATE_SETTINGS: ToolGateSettings = {
 	runtimeEnabled: true,
+	launchEnabled: true,
 	debugEnabled: true,
 	memoryBackend: "off",
 	autolearnEnabled: false,
@@ -649,14 +651,18 @@ export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint",
  * drift test can enumerate it and compare against the real registry.
  */
 const SETTINGS_GATED_TOOLS: Record<string, (s: ToolGateSettings) => string | undefined> = {
-	// Runtime analysis, the launch tool, and the four specialized Jvm*Tool classes
-	// gate on `runtime.enabled`.
+	// Runtime analysis and the four specialized Jvm*Tool classes gate on
+	// `runtime.enabled` alone.
 	...Object.fromEntries(
-		["insights", "profile", "serve", "jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps"].map(name => [
+		["insights", "profile", "jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps"].map(name => [
 			name,
 			(s: ToolGateSettings) => (s.runtimeEnabled ? undefined : "runtime.enabled = false"),
 		]),
 	),
+	// RuntimeServeTool.createIf carries a second gate: serve starts a hub job, so
+	// it also needs `launch.enabled`, the same kill switch hub itself honors.
+	// Reported runtime-first, matching the order `createIf` checks them.
+	serve: s => (!s.runtimeEnabled ? "runtime.enabled = false" : s.launchEnabled ? undefined : "launch.enabled = false"),
 	// DebugTool.createIf
 	debug: s => (s.debugEnabled ? undefined : "debug.enabled = false"),
 	// MemoryRetainTool/MemoryRecallTool/MemoryReflectTool.createIf
@@ -723,6 +729,7 @@ async function gatherTools(): Promise<DoctorToolsInput> {
 	const read = await attempt(
 		(): ToolGateSettings => ({
 			runtimeEnabled: settings.get("runtime.enabled") !== false,
+			launchEnabled: settings.get("launch.enabled") !== false,
 			debugEnabled: settings.get("debug.enabled") !== false,
 			memoryBackend: String(settings.get("memory.backend") ?? "off"),
 			autolearnEnabled: settings.get("autolearn.enabled") !== false,

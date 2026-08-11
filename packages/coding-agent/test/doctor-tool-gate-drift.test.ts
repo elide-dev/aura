@@ -28,6 +28,7 @@ import { BUILTIN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools
 function settingsFor(vector: ToolGateSettings): Record<string, unknown> {
 	return {
 		"runtime.enabled": vector.runtimeEnabled,
+		"launch.enabled": vector.launchEnabled,
 		"debug.enabled": vector.debugEnabled,
 		"memory.backend": vector.memoryBackend,
 		"autolearn.enabled": vector.autolearnEnabled,
@@ -84,6 +85,7 @@ function doctorActive(vector: ToolGateSettings): Set<string> {
 
 const ALL_ON: ToolGateSettings = {
 	runtimeEnabled: true,
+	launchEnabled: true,
 	debugEnabled: true,
 	memoryBackend: "mnemopi",
 	autolearnEnabled: true,
@@ -96,9 +98,19 @@ const VECTORS: [string, ToolGateSettings][] = [
 	["memory.backend = hindsight", { ...ALL_ON, memoryBackend: "hindsight" }],
 	["memory.backend = local", { ...ALL_ON, memoryBackend: "local" }],
 	["runtime.enabled = false", { ...ALL_ON, runtimeEnabled: false }],
+	["launch.enabled = false", { ...ALL_ON, launchEnabled: false }],
 	["debug.enabled = false", { ...ALL_ON, debugEnabled: false }],
 	["autolearn.enabled = false", { ...ALL_ON, autolearnEnabled: false }],
-	["everything off", { runtimeEnabled: false, debugEnabled: false, memoryBackend: "off", autolearnEnabled: false }],
+	[
+		"everything off",
+		{
+			runtimeEnabled: false,
+			launchEnabled: false,
+			debugEnabled: false,
+			memoryBackend: "off",
+			autolearnEnabled: false,
+		},
+	],
 ];
 
 describe("doctor's tool-gate table matches the real registry", () => {
@@ -114,6 +126,7 @@ describe("doctor's tool-gate table matches the real registry", () => {
 		const allOn = await registryActive(ALL_ON);
 		const allOff = await registryActive({
 			runtimeEnabled: false,
+			launchEnabled: false,
 			debugEnabled: false,
 			memoryBackend: "off",
 			autolearnEnabled: false,
@@ -128,6 +141,18 @@ describe("doctor's tool-gate table matches the real registry", () => {
 		expect(dropped).toEqual(
 			["insights", "jvm_deps", "jvm_disassemble", "jvm_format", "jvm_jar", "profile", "serve"].sort(),
 		);
+	});
+
+	/**
+	 * serve is the one runtime tool with a second gate: it starts a hub job, so
+	 * upstream's process-supervision kill switch withholds it even with the whole
+	 * runtime family enabled. hub itself is not in this list because it always
+	 * registers and refuses per-op instead.
+	 */
+	test("launch.enabled = false drops serve and nothing else", async () => {
+		const on = await registryActive(ALL_ON);
+		const off = await registryActive({ ...ALL_ON, launchEnabled: false });
+		expect([...on].filter(name => !off.has(name))).toEqual(["serve"]);
 	});
 
 	test("memory.backend = off drops exactly the memory tool family", async () => {

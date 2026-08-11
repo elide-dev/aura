@@ -503,6 +503,7 @@ describe("buildDoctorReport", () => {
 describe("resolveToolGating", () => {
 	const ALL_ON: ToolGateSettings = {
 		runtimeEnabled: true,
+		launchEnabled: true,
 		debugEnabled: true,
 		memoryBackend: "mnemopi",
 		autolearnEnabled: true,
@@ -542,6 +543,23 @@ describe("resolveToolGating", () => {
 		expect(result.gatedOff.map(g => g.name).sort()).toEqual([...RUNTIME_TOOLS].sort());
 		expect(result.gatedOff.every(g => g.reason === "runtime.enabled = false")).toBe(true);
 		expect(result.active).toEqual(["read", "retain"]);
+	});
+
+	/**
+	 * serve carries two gates, so the reason doctor prints has to be the one that
+	 * actually withheld it — naming `runtime.enabled` for a session whose runtime
+	 * is on would send the user to fix the wrong key.
+	 */
+	test("serve reports whichever of its two gates is off", () => {
+		const launchOff = resolveToolGating(["serve", "insights"], { ...ALL_ON, launchEnabled: false });
+		expect(launchOff.gatedOff).toEqual([{ name: "serve", reason: "launch.enabled = false" }]);
+		expect(launchOff.active).toEqual(["insights"]);
+
+		const runtimeOff = resolveToolGating(["serve"], { ...ALL_ON, runtimeEnabled: false });
+		expect(runtimeOff.gatedOff).toEqual([{ name: "serve", reason: "runtime.enabled = false" }]);
+
+		const bothOff = resolveToolGating(["serve"], { ...ALL_ON, runtimeEnabled: false, launchEnabled: false });
+		expect(bothOff.gatedOff).toEqual([{ name: "serve", reason: "runtime.enabled = false" }]);
 	});
 
 	test("debug.enabled = false gates off debug only", () => {

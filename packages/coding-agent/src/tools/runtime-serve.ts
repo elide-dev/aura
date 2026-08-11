@@ -41,8 +41,16 @@ export class RuntimeServeTool implements AgentTool<typeof serveSchema, RuntimeJo
 		private readonly launch?: LaunchExecutor,
 	) {}
 
+	/**
+	 * Two gates, both required. `runtime.enabled` is the fork's own switch for
+	 * every runtime tool; `launch.enabled` is upstream's kill switch for process
+	 * supervision, which hub enforces on every op it routes to the broker. serve
+	 * starts a hub job through that same broker, so honoring only the first would
+	 * make this tool a way around a switch the user already threw.
+	 */
 	static createIf(session: ToolSession): RuntimeServeTool | null {
 		if (!session.settings.get("runtime.enabled")) return null;
+		if (!session.settings.get("launch.enabled")) return null;
 		return new RuntimeServeTool(session);
 	}
 

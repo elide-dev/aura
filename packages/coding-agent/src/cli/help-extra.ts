@@ -72,8 +72,7 @@ ${chalk.bold("Available Tools (default-enabled unless noted):")}
   grep          - Search file contents
   glob          - Find files by glob pattern
   lsp           - Language server protocol (code intelligence)
-  run           - Execute Python, JavaScript, TypeScript, Java, or Kotlin with the managed runtime
-  notebook      - Edit Jupyter notebooks
+  eval          - Execute Python and JavaScript cells in a persistent kernel (Ruby/Julia opt-in)
   inspect_image - Analyze images with a vision model
   browser       - Browser automation (Puppeteer)
   computer      - Native host desktop capture and input (disabled by default)
