@@ -47,7 +47,7 @@ export default {
 	 * and the eval tool falls back to Bun with a notice.
 	 */
 	async isAvailable(session: ToolSession): Promise<boolean> {
-		return resolveJsEvalEngine(session) === "runtime" && getElideJsKernelFactory() !== undefined;
+		return resolveJsEvalEngine(session) === "elide" && getElideJsKernelFactory() !== undefined;
 	},
 
 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {

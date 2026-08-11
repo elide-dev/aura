@@ -31,15 +31,15 @@ describe("eval.jsEngine", () => {
 		expect(resolveJsEvalEngine(makeSession())).toBe("bun");
 	});
 
-	it('returns "runtime" when the setting selects it', () => {
-		const session = makeSession(Settings.isolated({ "eval.jsEngine": "runtime" }));
-		expect(resolveJsEvalEngine(session)).toBe("runtime");
+	it('returns "elide" when the setting selects it', () => {
+		const session = makeSession(Settings.isolated({ "eval.jsEngine": "elide" }));
+		expect(resolveJsEvalEngine(session)).toBe("elide");
 	});
 
 	it("lets AURA_EVAL_JS_ENGINE override the configured engine", () => {
-		Bun.env.AURA_EVAL_JS_ENGINE = "runtime";
+		Bun.env.AURA_EVAL_JS_ENGINE = "elide";
 		const session = makeSession(Settings.isolated({ "eval.jsEngine": "bun" }));
-		expect(resolveJsEvalEngine(session)).toBe("runtime");
+		expect(resolveJsEvalEngine(session)).toBe("elide");
 	});
 
 	it("throws when AURA_EVAL_JS_ENGINE names an unknown engine", () => {
@@ -47,32 +47,27 @@ describe("eval.jsEngine", () => {
 		expect(() => resolveJsEvalEngine(makeSession())).toThrow(/nope/);
 	});
 
-	/**
-	 * The product name is never user-facing (`AGENTS.md`); the noun is "the
-	 * runtime". `elide` was the value this setting shipped with in-flight, and
-	 * nothing may quietly keep accepting it — an accepted alias is exactly how a
-	 * name the docs no longer mention stays alive in people's configs.
-	 */
-	it("does not accept the product name as an engine value", () => {
-		Bun.env.AURA_EVAL_JS_ENGINE = "elide";
-		expect(() => resolveJsEvalEngine(makeSession())).toThrow(/elide/);
+	/** An engine name the enum does not know is rejected, not silently defaulted. */
+	it("does not accept an unknown engine value from the environment", () => {
+		Bun.env.AURA_EVAL_JS_ENGINE = "deno";
+		expect(() => resolveJsEvalEngine(makeSession())).toThrow(/deno/);
 	});
 
 	/**
 	 * The stored value gets the same validation the env override gets. Without it a
-	 * stale `eval.jsEngine: "elide"` flows through unchecked, misses the `runtime`
-	 * branch in `resolveBackend`, and runs on Bun forever with no notice — silently
+	 * malformed `eval.jsEngine` flows through unchecked, misses the `elide` branch
+	 * in `resolveBackend`, and runs on Bun forever with no notice — silently
 	 * ignoring a setting `docs/settings.md` promises is an error. That stays wrong
 	 * once a kernel lands, which is exactly when it would be hardest to notice.
 	 */
 	it("throws when the stored setting names an unknown engine", () => {
-		const session = makeSession(Settings.isolated({ "eval.jsEngine": "elide" }));
-		expect(() => resolveJsEvalEngine(session)).toThrow(/elide/);
+		const session = makeSession(Settings.isolated({ "eval.jsEngine": "deno" }));
+		expect(() => resolveJsEvalEngine(session)).toThrow(/deno/);
 		expect(() => resolveJsEvalEngine(session)).toThrow(/eval\.jsEngine/);
 	});
 
 	it("accepts both valid stored values", () => {
-		for (const engine of ["bun", "runtime"] as const) {
+		for (const engine of ["bun", "elide"] as const) {
 			expect(resolveJsEvalEngine(makeSession(Settings.isolated({ "eval.jsEngine": engine })))).toBe(engine);
 		}
 	});
@@ -80,15 +75,15 @@ describe("eval.jsEngine", () => {
 	/** A valid env override does not rescue a malformed stored value silently. */
 	it("reports a malformed stored value even when the env override is valid", () => {
 		Bun.env.AURA_EVAL_JS_ENGINE = "bun";
-		const session = makeSession(Settings.isolated({ "eval.jsEngine": "elide" }));
-		expect(() => resolveJsEvalEngine(session)).toThrow(/elide/);
+		const session = makeSession(Settings.isolated({ "eval.jsEngine": "deno" }));
+		expect(() => resolveJsEvalEngine(session)).toThrow(/deno/);
 	});
 
 	it("ignores an empty or whitespace-only AURA_EVAL_JS_ENGINE", () => {
-		const session = makeSession(Settings.isolated({ "eval.jsEngine": "runtime" }));
+		const session = makeSession(Settings.isolated({ "eval.jsEngine": "elide" }));
 		Bun.env.AURA_EVAL_JS_ENGINE = "";
-		expect(resolveJsEvalEngine(session)).toBe("runtime");
+		expect(resolveJsEvalEngine(session)).toBe("elide");
 		Bun.env.AURA_EVAL_JS_ENGINE = "   ";
-		expect(resolveJsEvalEngine(session)).toBe("runtime");
+		expect(resolveJsEvalEngine(session)).toBe("elide");
 	});
 });

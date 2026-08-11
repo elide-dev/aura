@@ -3680,7 +3680,7 @@ export const SETTINGS_SCHEMA = {
 
 	"eval.jsEngine": {
 		type: "enum",
-		values: ["bun", "runtime"] as const,
+		values: ["bun", "elide"] as const,
 		default: "bun",
 		ui: {
 			tab: "shell",
@@ -3690,7 +3690,7 @@ export const SETTINGS_SCHEMA = {
 			options: [
 				{ value: "bun", label: "Bun", description: "Execute JavaScript cells on the in-process Bun runtime." },
 				{
-					value: "runtime",
+					value: "elide",
 					label: "Runtime",
 					description:
 						"Execute JavaScript cells on the managed runtime (no kernel ships yet; falls back to Bun with a notice).",

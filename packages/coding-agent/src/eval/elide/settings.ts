@@ -11,16 +11,16 @@ import type { ToolSession } from "../../tools";
 /**
  * Engine that executes JavaScript eval cells.
  *
- * `"runtime"` is the non-Bun engine. The value is deliberately not the product
+ * `"elide"` is the non-Bun engine. The value is deliberately not the product
  * name: by the fork's naming rule the product is never user-facing and the noun
  * is "the runtime", and this string is typed into config files and env vars.
  * The module and directory names around it are code-internal and stay as they
  * are.
  */
-export type JsEvalEngine = "bun" | "runtime";
+export type JsEvalEngine = "bun" | "elide";
 
 /** The accepted engine values, named once so the two validators cannot drift. */
-const JS_EVAL_ENGINES: readonly string[] = ["bun", "runtime"];
+const JS_EVAL_ENGINES: readonly string[] = ["bun", "elide"];
 
 function isJsEvalEngine(value: string): value is JsEvalEngine {
 	return JS_EVAL_ENGINES.includes(value);
@@ -37,7 +37,7 @@ export function jsEvalEngineFromEnvironment(
 	const value = env.AURA_EVAL_JS_ENGINE?.trim();
 	if (!value) return configured;
 	if (isJsEvalEngine(value)) return value;
-	throw new Error(`AURA_EVAL_JS_ENGINE must be bun or runtime; received ${JSON.stringify(value)}.`);
+	throw new Error(`AURA_EVAL_JS_ENGINE must be bun or elide; received ${JSON.stringify(value)}.`);
 }
 
 /**
@@ -51,7 +51,7 @@ function jsEvalEngineFromSetting(configured: string | undefined): JsEvalEngine {
 	const value = configured?.trim();
 	if (!value) return "bun";
 	if (isJsEvalEngine(value)) return value;
-	throw new Error(`eval.jsEngine must be bun or runtime; received ${JSON.stringify(value)}.`);
+	throw new Error(`eval.jsEngine must be bun or elide; received ${JSON.stringify(value)}.`);
 }
 
 /**
