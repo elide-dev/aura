@@ -10,26 +10,38 @@
  * 1. {@link PERMISSIVE_TOOL_GATE_SETTINGS} is genuinely permissive — under it,
  *    no builtin tool declines to register. A new gate on a setting doctor does
  *    not track (say a future `serve.enabled`) breaks this and is reported as
- *    unattributable instead of silently blamed on an unrelated setting.
+ *    unattributable instead of silently blamed on an unrelated setting. Note the
+ *    invariant assumes gates stay fail-closed on an unknown key: the stub
+ *    settings document answers `undefined` outside {@link TOOL_GATE_SETTINGS}, so
+ *    a gate written as `=== false` would pass this check while never gating
+ *    anything in doctor's report. Gates read truthiness today.
  * 2. Every reason doctor prints is attributable: it names a tracked settings key
  *    at its configured value, and restoring that key to its permissive value
  *    really does make the factory produce a tool.
- * 3. {@link SESSION_GATED_TOOL_NAMES} — the one annotation doctor still carries
- *    by hand — stays a subset of the gates that are genuinely not
- *    settings-decidable: every name in it must be a real builtin whose
- *    registration is unchanged by every settings vector below.
+ * 3. The two hand-carried annotations stay honest.
+ *    {@link SESSION_GATED_TOOL_NAMES} must be real builtins whose registration no
+ *    settings vector changes (a settings-decidable one would mean doctor is
+ *    punting on a question it could answer), and {@link UNPROBED_TOOL_NAMES} —
+ *    skipped only because constructing them does filesystem work — must actually
+ *    register under every vector.
+ * 4. No factory throws. The probe counts a throw as "registers", which is the
+ *    right default but a silent one, so a tool that starts throwing has to fail
+ *    here rather than be reported as available forever.
  */
 import { describe, expect, test } from "bun:test";
 import {
 	createBuiltinToolGateProbe,
+	createToolGateProbeSession,
 	isolateToolGate,
 	PERMISSIVE_TOOL_GATE_SETTINGS,
 	resolveToolGating,
 	SESSION_GATED_TOOL_NAMES,
 	TOOL_GATE_SETTINGS,
 	type ToolGateSettings,
+	UNPROBED_TOOL_NAMES,
 } from "@oh-my-pi/pi-coding-agent/cli/doctor-cli";
 import { BUILTIN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { BUILTIN_TOOLS, type ToolFactory } from "@oh-my-pi/pi-coding-agent/tools/index";
 
 const ALL_ON = PERMISSIVE_TOOL_GATE_SETTINGS;
 const ALL_OFF: ToolGateSettings = {
@@ -54,6 +66,8 @@ const VECTORS: [string, ToolGateSettings][] = [
 ];
 
 const probe = await createBuiltinToolGateProbe();
+/** The same registry the probe wraps, for the assertions that must see a throw or a `null`. */
+const registry: Record<string, ToolFactory> = BUILTIN_TOOLS;
 
 /** Doctor's own report over the whole builtin registry, for one vector. */
 function gating(vector: ToolGateSettings) {
@@ -88,6 +102,37 @@ describe("doctor derives its tool gates from the real registry", () => {
 			}
 		});
 	}
+
+	// The probe reports a throwing factory as "registers". That is the right
+	// default (a throw is a bug, not a gate) but it is invisible, so the throw
+	// itself has to be caught here.
+	test("no builtin factory throws under the permissive vector", async () => {
+		for (const name of BUILTIN_TOOL_NAMES) {
+			// Session-gated names are the ones doctor never constructs *because*
+			// constructing them needs a live session or shells out.
+			if (SESSION_GATED_TOOL_NAMES.includes(name)) continue;
+			try {
+				await registry[name](createToolGateProbeSession(PERMISSIVE_TOOL_GATE_SETTINGS));
+			} catch (error) {
+				throw new Error(
+					`${name}'s factory threw under the permissive vector, so doctor silently reports it as registered: ${error}`,
+				);
+			}
+		}
+	});
+
+	test("the never-probed names really are ungated, so skipping them hides nothing", async () => {
+		const builtin = new Set<string>(BUILTIN_TOOL_NAMES);
+		for (const name of UNPROBED_TOOL_NAMES) {
+			expect(builtin.has(name)).toBe(true);
+			for (const [label, vector] of VECTORS) {
+				const tool = await registry[name](createToolGateProbeSession(vector));
+				if (tool === null || tool === undefined) {
+					throw new Error(`${name} declines under ${label}, but doctor skips probing it and reports it active`);
+				}
+			}
+		}
+	});
 
 	test("session-gated names are real builtins whose registration no settings vector changes", async () => {
 		const builtin = new Set<string>(BUILTIN_TOOL_NAMES);

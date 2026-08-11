@@ -639,25 +639,67 @@ export const DEFAULT_TOOL_GATE_SETTINGS: ToolGateSettings = {
 };
 
 /**
- * Names whose `createIf` gate needs a live session or an external probe, so
- * doctor declines to decide them: `ask` needs `session.hasUI`,
- * `checkpoint`/`rewind` and `lsp` read live session state, and `github` runs a
- * `gh` availability probe. These are reported as `sessionGated`, counted as
- * active, and never probed at all — "probably yes" is the honest default for a
- * gate doctor cannot evaluate, and a diagnostic must not shell out to answer it.
+ * Names doctor reports as `sessionGated`: whether they register is not decided
+ * by the settings below, so doctor states that rather than guessing. `ask` reads
+ * `session.hasUI`, `lsp` reads `session.enableLsp`, `github` runs a `gh`
+ * availability probe, and `checkpoint`/`rewind` construct unconditionally at
+ * `createIf` but are gated later by `checkpoint.enabled` inside `createTools`.
+ * All five are counted as active and never probed — "probably yes" is the honest
+ * default for a gate doctor cannot evaluate, and a diagnostic must not shell out
+ * to answer one.
  *
- * This is the one hand-maintained annotation left in the gate report, so
- * `doctor-tool-gate-drift.test.ts` holds it to being a subset of the gates that
- * really are not settings-decidable.
+ * `doctor-tool-gate-drift.test.ts` pins exactly what that claim is worth: every
+ * name here is a real builtin whose registration no settings vector changes. It
+ * does not (and cannot) prove the *reason* each one gives.
  */
 export const SESSION_GATED_TOOL_NAMES: readonly string[] = ["ask", "checkpoint", "rewind", "lsp", "github"];
 
 /**
+ * Names doctor takes as registered without constructing them, because
+ * constructing them is not free: `task`'s factory runs agent discovery across
+ * project, user, and extension directories (and memoizes it process-wide), which
+ * is real filesystem work a readiness report has no reason to do.
+ *
+ * Only ungated factories belong here — the drift test constructs each one under
+ * every vector and fails if it ever declines, so a future gate on one of these
+ * cannot hide behind the skip.
+ */
+export const UNPROBED_TOOL_NAMES: readonly string[] = ["task"];
+
+/** True when doctor answers for `name` from the annotations above instead of the registry. */
+function isUnprobedToolName(name: string): boolean {
+	return SESSION_GATED_TOOL_NAMES.includes(name) || UNPROBED_TOOL_NAMES.includes(name);
+}
+
+/** The vector under which no settings-decidable gate turns any tool off. */
+export const PERMISSIVE_TOOL_GATE_SETTINGS: ToolGateSettings = {
+	runtimeEnabled: true,
+	// `serve` needs this one on top of `runtime.enabled`: it starts a hub job, so
+	// upstream's process-supervision kill switch withholds it too.
+	launchEnabled: true,
+	debugEnabled: true,
+	// `mnemopi` is the most permissive backend: it satisfies the memory family,
+	// `memory_edit` (which accepts nothing else), and `learn`.
+	memoryBackend: "mnemopi",
+	autolearnEnabled: true,
+};
+
+/**
+ * The settings-document key behind each {@link ToolGateSettings} field. Typed as
+ * a total `Record` on purpose: a field added to the interface without a key here
+ * is a compile error, not a gate doctor silently stops tracking.
+ */
+const TOOL_GATE_KEYS: Record<keyof ToolGateSettings, string> = {
+	runtimeEnabled: "runtime.enabled",
+	launchEnabled: "launch.enabled",
+	debugEnabled: "debug.enabled",
+	memoryBackend: "memory.backend",
+	autolearnEnabled: "autolearn.enabled",
+};
+
+/**
  * One settings key a `createIf` gate may read, paired with the value at which it
- * gates nothing. This table is the whole settings vocabulary of the gate report:
- * it drives the probe's stub settings document, the permissive vector, and the
- * reason strings. It says nothing about *which* tools read a key — that is
- * derived from the registry, so a new or renamed tool needs no edit here.
+ * gates nothing.
  */
 export interface ToolGateSetting {
 	/** Field on {@link ToolGateSettings} mirroring this key. */
@@ -665,31 +707,24 @@ export interface ToolGateSetting {
 	/** Settings-document key the tool factories read. */
 	readonly key: string;
 	/** Value at which this setting gates no tool. */
-	readonly permissive: boolean | string;
+	readonly permissive: ToolGateSettings[keyof ToolGateSettings];
 }
 
-export const TOOL_GATE_SETTINGS: readonly ToolGateSetting[] = [
-	{ field: "runtimeEnabled", key: "runtime.enabled", permissive: true },
-	// `serve` needs this one on top of `runtime.enabled`: it starts a hub job, so
-	// upstream's process-supervision kill switch withholds it too.
-	{ field: "launchEnabled", key: "launch.enabled", permissive: true },
-	{ field: "debugEnabled", key: "debug.enabled", permissive: true },
-	// `mnemopi` is the most permissive backend: it satisfies the memory family,
-	// `memory_edit` (which accepts nothing else), and `learn`.
-	{ field: "memoryBackend", key: "memory.backend", permissive: "mnemopi" },
-	{ field: "autolearnEnabled", key: "autolearn.enabled", permissive: true },
-];
-
-/** The vector under which no settings-decidable gate turns any tool off. */
-export const PERMISSIVE_TOOL_GATE_SETTINGS: ToolGateSettings = Object.fromEntries(
-	TOOL_GATE_SETTINGS.map(gate => [gate.field, gate.permissive]),
-) as unknown as ToolGateSettings;
+/**
+ * The whole settings vocabulary of the gate report: it drives the probe's stub
+ * settings document, the permissive vector, and the reason strings. It says
+ * nothing about *which* tools read a key — that is derived from the registry, so
+ * a new or renamed tool needs no edit here.
+ */
+export const TOOL_GATE_SETTINGS: readonly ToolGateSetting[] = (
+	Object.entries(TOOL_GATE_KEYS) as [keyof ToolGateSettings, string][]
+).map(([field, key]) => ({ field, key, permissive: PERMISSIVE_TOOL_GATE_SETTINGS[field] }));
 
 /** `gateSettings` with one field replaced. The cast is the computed-key widening only. */
 function withGateSetting(
 	gateSettings: ToolGateSettings,
 	field: keyof ToolGateSettings,
-	value: boolean | string,
+	value: ToolGateSettings[keyof ToolGateSettings],
 ): ToolGateSettings {
 	return { ...gateSettings, [field]: value } as ToolGateSettings;
 }
@@ -721,7 +756,10 @@ export type ToolGateProbe = (name: string, gateSettings: ToolGateSettings) => bo
  * A factory that throws counts as *registering*: a throw is a bug or a field the
  * stub session does not carry, not a gate, and it behaves identically under
  * every vector, so counting it either way is stable — and "registers" is the
- * answer that does not invent a gate that is not there.
+ * answer that does not invent a gate that is not there. That answer is also a
+ * quiet one, so the drift test asserts separately that no builtin factory throws
+ * under the permissive vector; a tool that starts throwing fails there instead of
+ * being reported as registered forever.
  */
 export function createToolGateProbe(registry: Readonly<Record<string, ToolFactory>>): ToolGateProbe {
 	return async (name, gateSettings) => {
@@ -788,11 +826,12 @@ async function deriveGateReason(name: string, gateSettings: ToolGateSettings, pr
  * Partition tool names into what registers and what a gate turns off, by asking
  * the registry rather than by consulting a copy of its gates.
  *
- * `active` is "every available name whose factory produced a tool". It is not a
- * promise that every listed tool registers in a real session: the
- * {@link SESSION_GATED_TOOL_NAMES} entries are never probed, stay in `active`,
- * and are called out separately, because their gates read the live session,
- * which doctor deliberately never builds.
+ * `active` is "every available name whose factory produced a tool", plus the two
+ * annotated sets doctor answers for instead of probing: the
+ * {@link SESSION_GATED_TOOL_NAMES} entries (whose gates read the live session
+ * doctor deliberately never builds, and which are called out separately in the
+ * report) and the {@link UNPROBED_TOOL_NAMES} entries (ungated, but expensive to
+ * construct).
  */
 export async function resolveToolGating(
 	available: readonly string[],
@@ -802,7 +841,7 @@ export async function resolveToolGating(
 	const gatedOff: { name: string; reason: string }[] = [];
 	const active: string[] = [];
 	for (const name of available) {
-		if (SESSION_GATED_TOOL_NAMES.includes(name) || (await probe(name, gateSettings))) {
+		if (isUnprobedToolName(name) || (await probe(name, gateSettings))) {
 			active.push(name);
 			continue;
 		}

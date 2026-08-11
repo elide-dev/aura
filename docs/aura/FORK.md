@@ -264,9 +264,12 @@ Wayland/WSL host. Reproduces identically before the merge. Upstream test gap.
   *derived*, not transcribed: each `BUILTIN_TOOLS` factory is constructed against a
   stub session and the `null` returns are the gated-off set, with the responsible
   setting found by holding every tracked gate setting permissive except one. Nothing
-  here enumerates tool names, so upstream tool additions/renames need no edit;
-  `SESSION_GATED_TOOL_NAMES` is the sole remaining annotation and
-  `test/doctor-tool-gate-drift.test.ts` holds it (and the permissive vector) honest
+  here enumerates tool names, so upstream tool additions/renames need no edit. Two
+  small annotations remain: `SESSION_GATED_TOOL_NAMES` (registration not decidable
+  from settings) and `UNPROBED_TOOL_NAMES` (`task`, whose factory runs agent
+  discovery — real filesystem work a readiness report must not do). Both, plus the
+  permissive vector and the absence of throwing factories, are held honest by
+  `test/doctor-tool-gate-drift.test.ts`
 - `packages/coding-agent/src/cli/version-identity.ts` — `--version` identity line
   (`<app>/<version>` + runtime protocol version)
 - `scripts/build-relocatable-runtime-bundle.ts`,

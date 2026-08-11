@@ -16,6 +16,7 @@ import {
 	SESSION_GATED_TOOL_NAMES,
 	type ToolGateProbe,
 	type ToolGateSettings,
+	UNPROBED_TOOL_NAMES,
 } from "../src/cli/doctor-cli";
 import { RuntimeService } from "../src/runtime";
 import { okResponse, RUNTIME_PROTOCOL_VERSION, RuntimeRpcError } from "../src/runtime/protocol";
@@ -593,6 +594,20 @@ describe("resolveToolGating", () => {
 
 	test("sessionGated never lists a name that is not available", async () => {
 		expect((await resolveToolGating(["read"], ALL_ON, probeOver({}))).sessionGated).toEqual([]);
+	});
+
+	// `task` builds its tool by discovering agents across project/user/extension
+	// dirs: a readiness report must not pay for that, and must not report it as
+	// session-gated either, since nothing about it depends on the session.
+	test("expensive-to-construct names are never probed, stay active, and are not called session-gated", async () => {
+		const probe: ToolGateProbe = name => {
+			if (UNPROBED_TOOL_NAMES.includes(name)) throw new Error(`constructed the unprobed ${name}`);
+			return true;
+		};
+		const result = await resolveToolGating([...UNPROBED_TOOL_NAMES, "read"], ALL_ON, probe);
+		expect(result.active).toEqual([...UNPROBED_TOOL_NAMES, "read"]);
+		expect(result.gatedOff).toEqual([]);
+		expect(result.sessionGated).toEqual([]);
 	});
 
 	test("the unreadable-settings fallback matches the settings-schema defaults", async () => {
