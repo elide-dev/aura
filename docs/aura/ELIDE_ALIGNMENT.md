@@ -239,8 +239,10 @@ and re-run the model-free adapter sweep for 2–3.
 
 ### Equivalence matrix (verified 2026-08-10)
 
-Step 1's output. Every verdict below is backed by a pinning test that fails when
-the claim stops being true — not by reading the code. Verdicts:
+Step 1's output. Every `equivalent` verdict below is backed by a pinning test
+that fails when the claim stops being true — not by reading the code; rows with
+an empty pin column carry no verified claim, and any residue inside an
+`equivalent` row is named in its own verdict cell. Verdicts:
 
 - **`equivalent`** — the omp construct demonstrably does the fork construct's job
   on every path the fork threads its own object through.
@@ -256,7 +258,7 @@ Pinning tests (paths relative to the repo root):
 
 | Fork construct | omp equivalent | Verdict | Pinning test |
 |---|---|---|---|
-| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent` — ownership resolves from the owner id alone on every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
+| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent + gap: the two intermediate forwarding hops are read-verified, not pinned.` Ownership resolves from the owner id alone at both ends of every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else. [B] pins the **producers** (`structured-subagent.ts`, `vibe/runtime.ts` → `ExecutorOptions`) and the **consumer** (`AgentSession` config → shared kernel + fresh owner); it does **not** pin the wire between them — `task/executor.ts`'s forward of `parentEvalSessionId` into the child `createAgentSession`, and `sdk.ts`'s forward of it into the `AgentSession` config. Nothing in the repo does. Deleting either forward leaves every pin green while subagents and vibe workers silently stop sharing the parent's kernel, so milestone 2 must review those two lines by hand | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
 | `acquireRuntimeServiceLease` + last-release disposal | Owner registration in `eval/js/context-manager.ts`; `RefCountedWorkerHandle` (`subprocess/worker-client.ts`) | `equivalent` — a co-owned context survives every owner but the last, which is the whole semantic the lease provides | [A] "keeps a co-owned context alive until its last owner is disposed" (real JS worker, no mocks) |
 | `runtime/index.ts` selected-service cache, atomic swap/retirement | `createKernelSessionRegistry` | `equivalent + gap: kernel lifecycles only.` The owner-keyed session registry covers per-session kernel creation/reuse/disposal. The runtime **service** cache (selecting and atomically retiring an engine) is an orthogonal concern these pins say nothing about; it is in scope at milestone 2, not here | [A] + [B] cover the kernel-lifecycle half; the service cache has **no pin yet** |
 | `runtime/embedded/{worker-core,worker-entry,control-worker-entry,worker-protocol}.ts` | `createWorkerHandle` / `createWorkerSubprocess` + the `eval/js` worker pattern | `fork-owned, stays` — the `worker_threads` embedded host is a genuine variant of the shared client, not a duplicate of it. What collapses is the duplicated plumbing around it, deleted in Tasks 6–8 | n/a — behavior change, gated by the embedded suites |

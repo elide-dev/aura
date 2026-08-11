@@ -20,9 +20,22 @@
  *     is inert and owner-scoped disposal has nothing to reap.
  *
  * Companion to `kernel-owner-disposal-coverage.test.ts` (Task 4), which pins the
- * disposal fan-out these owner ids are the key for. Both are regression gates:
- * anything that re-mints an inherited kernel session, shares one owner id across
- * sessions, or drops the inheritance on a spawn path has to break a test here.
+ * disposal fan-out these owner ids are the key for.
+ *
+ * **Scope — read before trusting this file as a gate.** It pins the two *ends* of
+ * the inheritance chain, not the wire between them: the producers (where
+ * `parentEvalSessionId` is put onto `ExecutorOptions` — `structured-subagent.ts`,
+ * `vibe/runtime.ts`) and the consumer (where an `AgentSession` config turns it
+ * into a shared kernel + a fresh owner). The intermediate forwarding hops —
+ * `task/executor.ts`'s `parentEvalSessionId: options.parentEvalSessionId` into
+ * the child `createAgentSession`, and `sdk.ts`'s forward of the same field into
+ * the `AgentSession` config — are **not** pinned here or anywhere in the repo.
+ * Deleting either one leaves every test in this file green while subagents and
+ * vibe workers silently stop sharing the parent's kernel.
+ *
+ * Within that scope these are regression gates: anything that re-mints an
+ * inherited kernel session, shares one owner id across sessions, or stops a
+ * spawn path from *producing* the inheritance has to break a test here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
