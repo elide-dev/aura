@@ -9,12 +9,22 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Settings, settings } from "../config/settings";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import { theme } from "../modes/theme/theme";
+import type { ResolvedRuntime, RuntimeSettingsValues, RuntimeStatusResult } from "../runtime";
 import { downloadSttModel, isSttModelCached } from "../stt/downloader";
 import { isSttModelKey, STT_MODEL_OPTIONS } from "../stt/models";
 import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODEL_OPTIONS } from "../tts";
+import {
+	createStatusRuntime,
+	ensureRuntimeInstalled,
+	formatRuntimeStatus,
+	isRuntimeDisabled,
+	readRuntimeSettings,
+	runRuntimeCommand,
+	type StatusRuntime,
+} from "./runtime-cli";
 import { selectSetupModel } from "./setup-model-picker";
 
-export type SetupComponent = "python" | "speech";
+export type SetupComponent = "python" | "speech" | "runtime";
 
 export interface SetupCommandArgs {
 	component: SetupComponent;
@@ -24,7 +34,7 @@ export interface SetupCommandArgs {
 	};
 }
 
-const VALID_COMPONENTS: SetupComponent[] = ["python", "speech"];
+const VALID_COMPONENTS: SetupComponent[] = ["python", "speech", "runtime"];
 
 const MANAGED_PYTHON_ENV = getPythonEnvDir();
 
@@ -111,6 +121,9 @@ export async function runSetupCommand(cmd: SetupCommandArgs): Promise<void> {
 		case "speech":
 			await handleSpeechSetup(cmd.flags);
 			break;
+		case "runtime":
+			await handleRuntimeSetup(cmd.flags);
+			break;
 	}
 }
 
@@ -144,6 +157,122 @@ async function handlePythonSetup(flags: { json?: boolean; check?: boolean }): Pr
 
 	console.error(chalk.red(`\n${theme.status.error} Python interpreter reported failure`));
 	process.exit(1);
+}
+
+/**
+ * Injection points for {@link runRuntimeSetup}. Production passes none; tests
+ * drive every branch without a runtime, a network, or a settings document.
+ */
+export interface RuntimeSetupDependencies {
+	readSettings?: () => RuntimeSettingsValues;
+	createRuntime?: (values: RuntimeSettingsValues) => StatusRuntime;
+	install?: (values: RuntimeSettingsValues, onProgress: (message: string) => void) => Promise<ResolvedRuntime>;
+	print?: (line: string) => void;
+	/** Transient single-line sink for download progress. */
+	progress?: (text: string) => void;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** One status probe, always closing the service it was given. */
+async function probeRuntimeStatus(service: StatusRuntime): Promise<RuntimeStatusResult> {
+	if (isRuntimeDisabled(service)) throw new Error("runtime.enabled = false");
+	try {
+		return await service.status();
+	} finally {
+		await service.close?.();
+	}
+}
+
+/**
+ * `aura setup runtime` — the component form of the managed runtime.
+ *
+ * `--check`/`--json` are `aura runtime status` exactly: the same probe (which
+ * forces `autoDownload: false`), the same renderer, the same exit code, so the
+ * two commands can never disagree. The command's own surface is the bare install
+ * path, which performs the managed download that otherwise only happens
+ * implicitly inside the first innate tool call, then re-probes and reports the
+ * real adapter/ABI/schema state it produced.
+ */
+export async function runRuntimeSetup(
+	flags: { json?: boolean; check?: boolean },
+	deps: RuntimeSetupDependencies = {},
+): Promise<number> {
+	const createRuntime = deps.createRuntime ?? createStatusRuntime;
+	const install = deps.install ?? ensureRuntimeInstalled;
+	const print = deps.print ?? (line => console.log(line));
+	// An injected sink owns its own line discipline; the default one overwrites a
+	// single terminal row, so it has to close that row — and only if it opened one.
+	const sink = deps.progress;
+	let progressed = false;
+	const progress = (text: string) => {
+		progressed = true;
+		if (sink) sink(text);
+		else process.stdout.write(`\r${chalk.dim(text)}\x1b[K`);
+	};
+	const endProgress = () => {
+		if (progressed && !sink) process.stdout.write("\n");
+	};
+	const values = (deps.readSettings ?? readRuntimeSettings)();
+	const service = createRuntime(values);
+
+	if (flags.check || flags.json) {
+		return runRuntimeCommand({ action: "status", flags: { json: flags.json } }, service, print);
+	}
+	if (isRuntimeDisabled(service)) {
+		const code = await runRuntimeCommand({ action: "status", flags: {} }, service, print);
+		print(chalk.dim(`Enable it with \`${APP_NAME} config set runtime.enabled true\`, then rerun this command.`));
+		return code;
+	}
+
+	let status: RuntimeStatusResult;
+	try {
+		status = await probeRuntimeStatus(service);
+	} catch (error) {
+		print(chalk.red(`${theme.status.error} ${errorMessage(error)}`));
+		return 1;
+	}
+	if (status.available) {
+		print(formatRuntimeStatus(status));
+		print(chalk.green(`\n${theme.status.success} The runtime is installed and ready`));
+		return 0;
+	}
+
+	print(chalk.dim("Installing the managed runtime..."));
+	try {
+		await install(values, message => progress(message));
+	} catch (error) {
+		endProgress();
+		// The runtime's own refusal, verbatim: it is the surface that knows why.
+		print(chalk.red(`${theme.status.error} ${errorMessage(error)}`));
+		return 1;
+	}
+	endProgress();
+
+	let installed: RuntimeStatusResult;
+	try {
+		installed = await probeRuntimeStatus(createRuntime(values));
+	} catch (error) {
+		print(chalk.red(`${theme.status.error} ${errorMessage(error)}`));
+		return 1;
+	}
+	print(formatRuntimeStatus(installed));
+	if (!installed.available) {
+		print(chalk.red(`\n${theme.status.error} The runtime is installed but not usable`));
+		return 1;
+	}
+	print(chalk.green(`\n${theme.status.success} The runtime is installed and ready`));
+	return 0;
+}
+
+async function handleRuntimeSetup(flags: { json?: boolean; check?: boolean }): Promise<void> {
+	await Settings.init({ cwd: getProjectDir() });
+	const code = await runRuntimeSetup(flags);
+	// `Command` has no `exit()`; set the code and return so stdout flushes first
+	// (the `commands/runtime.ts` precedent).
+	if (code !== 0) process.exitCode = code;
 }
 
 /**
@@ -297,6 +426,7 @@ ${chalk.bold("Usage:")}
 ${chalk.bold("Components:")}
   python    Verify a Python 3 interpreter is reachable for code execution
   speech    Pick and download speech-to-text and text-to-speech models
+  runtime   Install the managed runtime that powers the innate execution tools
 
 ${chalk.bold("Options:")}
   -c, --check   Check if dependencies are installed without installing
@@ -308,5 +438,7 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} setup speech           Pick and download the STT and TTS models
   ${APP_NAME} setup speech --check   Check if speech dependencies are available
   ${APP_NAME} setup python --check   Check if Python execution is available
+  ${APP_NAME} setup runtime          Download the managed runtime if it is missing
+  ${APP_NAME} setup runtime --check  Report runtime readiness (same as \`${APP_NAME} runtime status\`)
 `);
 }

@@ -4,7 +4,11 @@
  */
 import { settings } from "../config/settings";
 import {
+	type LocalEndpointOptions,
+	LocalRuntimeEndpoint,
+	type ResolvedRuntime,
 	RUNTIME_PROTOCOL_VERSION,
+	RuntimeRpcError,
 	RuntimeService,
 	type RuntimeSettingsValues,
 	resolveRuntimeEndpointOptions,
@@ -27,7 +31,7 @@ export type StatusRuntime =
 	| (Pick<RuntimeService, "status"> & Partial<Pick<RuntimeService, "close">>)
 	| typeof RUNTIME_DISABLED;
 
-function isDisabled(runtime: StatusRuntime): runtime is typeof RUNTIME_DISABLED {
+export function isRuntimeDisabled(runtime: StatusRuntime): runtime is typeof RUNTIME_DISABLED {
 	return "disabled" in runtime;
 }
 
@@ -74,6 +78,38 @@ export function createStatusRuntime(
 	return new RuntimeService(new SelectedRuntimeEndpoint(opts));
 }
 
+/** Injection points for {@link ensureRuntimeInstalled}; production passes none. */
+export type RuntimeInstallOverrides = Pick<LocalEndpointOptions, "managedRoot" | "provision" | "resolve" | "env">;
+
+/**
+ * Install the managed runtime on demand — the provisioning `aura setup runtime`
+ * performs, which otherwise only ever happens implicitly inside the first innate
+ * tool call.
+ *
+ * Deliberately routed through `LocalRuntimeEndpoint.ensureBinary`: the
+ * preconditions for downloading (`runtime.autoDownload`, an explicit
+ * `runtime.path`, an off-pin `runtime.version`) and the guidance text for every
+ * refusal live there, and a CLI surface that re-decided them would be a second
+ * source of truth for whether Aura is allowed to fetch a binary.
+ */
+export async function ensureRuntimeInstalled(
+	values: RuntimeSettingsValues,
+	onProgress: (message: string) => void = () => {},
+	overrides: RuntimeInstallOverrides = {},
+): Promise<ResolvedRuntime> {
+	const opts = resolveRuntimeEndpointOptions(values);
+	if (opts === undefined) {
+		throw new RuntimeRpcError(
+			"runtime-missing",
+			"The runtime is disabled (runtime.enabled = false), so there is nothing to install.",
+		);
+	}
+	// The managed distribution carries both the runtime binary and the embedded
+	// library, so this is the install for every adapter; which one is *used* is
+	// then reported by the status probe.
+	return new LocalRuntimeEndpoint({ ...opts, ...overrides, onProgress }).ensureBinary();
+}
+
 function formatRuntimeSelection(status: RuntimeStatusResult): string[] {
 	const lines: string[] = [];
 	if (status.adapter) lines.push(`  adapter: ${status.adapter}`);
@@ -117,7 +153,7 @@ export async function runRuntimeCommand(
 	service: StatusRuntime = createStatusRuntime(),
 	print: (line: string) => void = line => process.stdout.write(`${line}\n`),
 ): Promise<number> {
-	if (isDisabled(service)) {
+	if (isRuntimeDisabled(service)) {
 		print(
 			cmd.flags.json
 				? JSON.stringify(
