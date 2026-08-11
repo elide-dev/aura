@@ -224,8 +224,12 @@ export async function startRuntimeJob(
  *   went through `createTools` — the common case is assumed.
  * - `launch.enabled` may be off. hub then still exists but refuses every
  *   supervision op (`tools/hub/index.ts`), so having the tool is not the same as
- *   being able to use it. Composed the same way `bash`'s description composes
- *   its own `hasLaunch` hint.
+ *   being able to use it.
+ *
+ * The two are independent, so they compose with AND. `bash`'s `hasLaunch` hint
+ * originally passed the setting as the tool-presence FALLBACK instead, which
+ * applied it only to sessions with no `isToolActive` at all — it was corrected
+ * to this same conjunction rather than copied.
  *
  * It matters because the guidance these tools print names the tool that stops the
  * job: telling a model to call `hub` it does not have — or that will refuse — is
