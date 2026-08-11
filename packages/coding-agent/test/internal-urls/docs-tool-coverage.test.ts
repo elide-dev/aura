@@ -34,4 +34,21 @@ describe("omp:// root docs coverage", () => {
 		const present = candidates.find(candidate => fs.existsSync(candidate));
 		expect(present, `Missing docs/tools/<name>.md for injected custom tool "${name}".`).toBeDefined();
 	});
+
+	// The converse of the two cases above. `omp://` serves every file under
+	// `docs/`, so a page left behind by a retired tool keeps advertising that
+	// tool to the model long after the code is gone (this is how
+	// `docs/tools/jvm_run.md` outlived `jvm_run`). Deleting a tool must delete
+	// its page in the same commit.
+	it("has no docs/tools page for a tool that does not exist", () => {
+		const documented = new Set<string>([...BUILTIN_TOOL_NAMES, ...CUSTOM_TOOL_NAMES]);
+		const orphans = fs
+			.readdirSync(docsToolsDir)
+			.filter(entry => entry.endsWith(".md"))
+			.filter(entry => !documented.has(entry.slice(0, -".md".length).replace(/-/g, "_")));
+		expect(
+			orphans,
+			`docs/tools pages with no matching tool: ${orphans.join(", ")}. Delete the page or register the tool.`,
+		).toEqual([]);
+	});
 });

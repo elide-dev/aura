@@ -1,7 +1,10 @@
 # Aura ↔ Elide alignment: collapse the fork's runtime onto omp's kernel architecture
 
 Status: proposal. Written 2026-08-10 after the post-merge runtime benchmark and
-two rounds of engine measurement.
+two rounds of engine measurement. Amended 2026-08-11: `run` and `check` are
+**retired** from the model surface (`0e7871de4`, `3dbf7bca6`), so "What must
+stay fork-owned", Seam 3, and the M4 outline now describe a seven-tool fork
+surface with `eval` as the single code-execution tool.
 
 Companions: `ACTIONS_CONSOLIDATE.md` (the tool-surface plan),
 `WHIPLASH_ENGINE_BRIEF.md` (the Elide-side ask), `FORK.md` (fork inventory),
@@ -64,21 +67,51 @@ which is a recurring merge-conflict site (this merge hit `sdk.ts`,
 
 ## What must stay fork-owned
 
-omp's `eval` is **cell-oriented** (`execute(code, opts)`). These are genuinely
-absent upstream and should remain, slimmed:
+**Code execution is not on this list.** `run` and `check` were retired from the
+model surface (commits `0e7871de4`, `3dbf7bca6`); upstream `eval` owns code
+execution semantics and `bash` owns the shell. Earlier drafts of this section
+argued the opposite — that `run`'s one-shot/file/argv shape was genuinely absent
+upstream and had to stay — and that argument is superseded twice over:
 
-- **One-shot program execution** — `run` takes a file path, argv, stdin, cwd
-  (`EmbeddedRunInvocation` in `runtime/embedded/codec.ts`). `eval` has no
-  file-execution or argv concept.
-- **JVM tooling** — `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`, and
-  Java/Kotlin compile+run. No upstream analogue, and the strongest measured
-  Elide win (Java compile+run **0.19×**, i.e. 5.2× faster).
-- **`check`** — validation-only.
+- **`check` was never a measured win.** Its analogue is `bash` plus the
+  diagnostics tools, and project validation measured **2.08–3.37× slower** than
+  direct invocation in both micro sweeps.
+- **`run`'s file+argv shape is a Tier 2 gap, not a permanent one.**
+  `EmbeddedContextCall` carries `source :union { code | file }`, `args`,
+  `stdin`, and an `EmbeddedEvalMode.mainScript` entrypoint mode
+  (`WHIPLASH_QUEUE.md:156-174`, item J). That carrier is **the** path for file
+  execution through `eval`; it is what makes a separate one-shot tool
+  unnecessary rather than merely undesirable. (The fork's own
+  `EmbeddedRunInvocation` in `runtime/embedded/codec.ts` carries the same
+  four fields and stays as the transport-level shape behind the surviving
+  tools.)
+
+What genuinely has no upstream analogue, and stays:
+
+- **JVM tooling** — `jvm_disassemble`, `jvm_format`, `jvm_jar`, `jvm_deps`.
 - **`serve`** — hub-supervised launch.
 - **`insights` / `profile`** — profiling surfaces (measured wins:
-  cpu-sampling 0.810×, instrumentation 0.801×).
+  cpu-sampling 0.810×, instrumentation 0.801×; `insights` pending re-baseline
+  after a 3.71× overhead reading in the noisy m1-post micro).
 - The **Cap'n Proto embedded ABI** itself, plus the checked-in schema closure
   and its drift check.
+
+That is **seven** built-in tools (`BUILTIN_TOOL_NAMES` in
+`packages/coding-agent/src/tools/builtin-names.ts`), all `discoverable`, all on
+the `runtime.enabled` gate.
+
+Two directions of travel for that list, neither of them this milestone's work:
+
+- **JVM one-shots come back through `eval`, not through a tool.** Java/Kotlin
+  compile+run is the strongest measured Elide win (**0.19×**, i.e. 5.2× faster)
+  and it left the model surface with `run`. It returns as a `java`/`kotlin`
+  `ExecutorBackend` on Elide contexts — the same ~45-line shape as
+  `eval/js/index.ts` — so the win is recovered inside `eval` rather than by
+  reviving a second execution tool.
+- **The four JVM analysis tools consolidate toward one `jvm` tool** with an
+  action union (`disassemble` | `format` | `jar` | `deps`), and jar *inspection*
+  folds into `read`. Direction only: the consolidation is a later task, and
+  nothing here should be built as though it had already happened.
 
 ## Target architecture
 
@@ -100,13 +133,21 @@ display, cancellation, and ownership for free.
 
 **This is what makes the WHIPLASH ask much smaller** — see "Revised Elide ask".
 
-### Seam 3 — one-shot and tooling stay as tools
+### Seam 3 — tooling stays as tools; execution does not
 
-`run`, `check`, JVM tools, `serve`, `insights`, `profile` remain fork tools, but
-share Seam 1's transport and Seam 2's lifecycle rather than owning a parallel
-cache. This also resolves the duplicate-surface problem in
-`ACTIONS_CONSOLIDATE.md`: `eval` owns *stateful cells*, `run` owns *one-shot
-programs*, and the overlap (py/js one-liners) collapses into `eval`.
+The four JVM analysis tools, `serve`, `insights`, and `profile` remain fork
+tools, but share Seam 1's transport and Seam 2's lifecycle rather than owning a
+parallel cache.
+
+The duplicate-surface problem in `ACTIONS_CONSOLIDATE.md` is resolved by
+**deletion, not division**. The earlier answer was "`eval` owns stateful cells,
+`run` owns one-shot programs, and the py/js overlap collapses into `eval`" — two
+tools with a boundary the model had to learn. The shipped answer is one tool:
+`eval` owns code execution, `bash` owns the shell, and the surviving fork tools
+are analysis and supervision surfaces that never execute user-supplied programs.
+File execution reaches `eval` through the Tier 2 carrier (see "What must stay
+fork-owned"), so the one-shot case is a *mode* of the execution tool rather than
+a second tool.
 
 ## An honest correction to "drop-in replace Python and JS"
 
@@ -258,7 +299,7 @@ Pinning tests (paths relative to the repo root):
 
 | Fork construct | omp equivalent | Verdict | Pinning test |
 |---|---|---|---|
-| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent + gap: the two intermediate forwarding hops are read-verified, not pinned.` Ownership resolves from the owner id alone at both ends of every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else. [B] pins the **producers** (`structured-subagent.ts`, `vibe/runtime.ts` → `ExecutorOptions`) and the **consumer** (`AgentSession` config → shared kernel + fresh owner); it does **not** pin the wire between them — `task/executor.ts:3073`'s forward of `parentEvalSessionId` into the child `createAgentSession`, `sdk.ts:3490`'s forward of it into the `AgentSession` config, and `sdk.ts:1750-1751`'s `getEvalSessionId: () => session?.getEvalSessionId() ?? options.parentEvalSessionId ?? defaultEvalSessionId(...)` fallback — the middle arm of that chain is what makes a **nested** subagent (one whose own session has no eval session id yet) inherit the parent's kernel rather than mint its own. Nothing in the repo pins any of the three. Deleting any one leaves every pin green while subagents and vibe workers silently stop sharing the parent's kernel, so milestone 2 must review those three lines by hand | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
+| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent + gap: the three intermediate forwarding hops are read-verified, not pinned.` Ownership resolves from the owner id alone at both ends of every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else. [B] pins the **producers** (`structured-subagent.ts`, `vibe/runtime.ts` → `ExecutorOptions`) and the **consumer** (`AgentSession` config → shared kernel + fresh owner); it does **not** pin the wire between them — (1) `task/executor.ts:3073`'s forward of `parentEvalSessionId` into the child `createAgentSession`, (2) `sdk.ts:3491`'s forward of it into the `AgentSession` config, and (3) `sdk.ts:1750-1751`'s `getEvalSessionId: () => session?.getEvalSessionId() ?? options.parentEvalSessionId ?? defaultEvalSessionId(...)` fallback. **Nested inheritance flows through hop 2, not hop 3.** Hop 3's middle arm is unreachable once the session exists: `AgentSession.getEvalSessionId()` delegates to `EvalRunner.getSessionId()` (`session/eval-runner.ts:155-161`), which returns `#parentSessionId` when set and otherwise a `defaultEvalSessionId(...)` string — it never returns null, so `??` never falls through to `options.parentEvalSessionId`. A nested subagent inherits the parent kernel because hop 2 put `parentEvalSessionId` into its own `AgentSession` config (`session/agent-session.ts:981` → `EvalRunner`'s `parentSessionId`). Hop 3's real exposure is the **pre-construction window**: `toolSession` is built at `sdk.ts:1750` and `session` is not assigned until `sdk.ts:3397`, so any consumer that reads `toolSession.getEvalSessionId` in between gets the `options.parentEvalSessionId` arm — that is the arm's only live caller, and it is why deleting it is not obviously safe. Nothing in the repo pins any of the three. Deleting any one leaves every pin green while subagents and vibe workers silently stop sharing the parent's kernel, so milestone 2 must review those three lines by hand | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
 | `acquireRuntimeServiceLease` + last-release disposal | Owner registration in `eval/js/context-manager.ts`; `RefCountedWorkerHandle` (`subprocess/worker-client.ts`) | `equivalent` — a co-owned context survives every owner but the last, which is the whole semantic the lease provides | [A] "keeps a co-owned context alive until its last owner is disposed" (real JS worker, no mocks) |
 | `runtime/index.ts` selected-service cache, atomic swap/retirement | `createKernelSessionRegistry` | `equivalent + gap: kernel lifecycles only.` The owner-keyed session registry covers per-session kernel creation/reuse/disposal. The runtime **service** cache (selecting and atomically retiring an engine) is an orthogonal concern these pins say nothing about; it is in scope at milestone 2, not here | [A] + [B] cover the kernel-lifecycle half; the service cache has **no pin yet** |
 | `runtime/embedded/{worker-core,worker-entry,control-worker-entry,worker-protocol}.ts` | `createWorkerHandle` / `createWorkerSubprocess` + the `eval/js` worker pattern | `fork-owned, stays` — the `worker_threads` embedded host is a genuine variant of the shared client, not a duplicate of it. What collapses is the duplicated plumbing around it, deleted in Tasks 6–8 | n/a — behavior change, gated by the embedded suites |
@@ -304,7 +345,7 @@ and it is what holds the backend's `isAvailable()` false
 This section exists so filling that slot is a **small, unambiguous task**: what
 changes, what must not, which seam method maps to which embedded-ABI op, and
 what is known to still be broken. Run it alongside the **Aura-side regeneration
-checklist** in `WHIPLASH_QUEUE.md:699-753` — that checklist's step 7 ("implement
+checklist** in `WHIPLASH_QUEUE.md:708-762` — that checklist's step 7 ("implement
 the factory over the embedded transport … then flip the parity suite from the
 fake factory to the real one") *is* this section. Do steps 1–6 there first — the
 ABI pin, the schema sync, the
@@ -318,18 +359,18 @@ prerequisites, not part of this seam and not counted against its four files.
 Code paths below are `packages/coding-agent`-relative unless fully qualified;
 sibling docs live in `docs/aura/`.
 
-### Changes — four files, three of them code
+### Changes — five files, four of them code
 
 | # | File | Change |
 |---|---|---|
-| 1 | `src/eval/elide/kernel-embedded.ts` (**new**; name proposed) | The real `ElideJsKernelFactory` over the embedded transport, per the method↔ask map below. This and row 3 are the only new code; rows 2 and 4 are a call site and a doc line. |
+| 1 | `src/eval/elide/kernel-embedded.ts` (**new**; name proposed) | The real `ElideJsKernelFactory` over the embedded transport, per the method↔ask map below. This and row 3 are the only *new* code; row 2 is a call site and row 4 is a deletion in two files. |
 | 2 | Install site for **one** `setElideJsKernelFactory(...)` — **DESIGN CALL, unresolved; see the note below.** Candidate: `src/runtime/index.ts` `getOrCreateRuntimeService` (`:58`) | Wherever it lands, import lazily — `src/eval/elide/*` is deliberately outside the `eval` barrel so a default session never loads it (`src/eval/elide/index.ts:15-17`). |
 | 3 | `src/eval/elide/guest-entry.ts` (**new**; name proposed) — the guest-side analogue of `src/eval/js/worker-entry.ts` | Evaluate the `WorkerCore` + prelude bundle **once per persistent context**, right after `contextOpen`, so the context speaks `WorkerInbound`/`WorkerOutbound` from its first cell. Same 37-line shape as `worker-entry.ts`: build a `Transport` over the ABI in place of `parentPort`, then `new WorkerCore(transport, { mode: "isolated" })`. Its `Transport` is where guest→host tool calls resolve, and there are two shapes — take the first. **(v1) HTTP-loopback tool bridge**: zero Elide work, Aura's existing `ensurePyToolBridge` pattern (`src/eval/py/tool-bridge.ts:156`), Elide's JS has `fetch` (`WHIPLASH_QUEUE.md:85`, decision 5). **(v2) in-guest host-call pump** over `hostCallPoll`/`hostCallResolve`: the ops ship in the ABI but return `unsupportedOperation` until Tier 2.2 (item L, `WHIPLASH_QUEUE.md:585`). Writing v1 behind the `Transport` keeps the v2 switch inside this one file. |
-| 4 | `docs/settings.md:622` (doc, not code) | The `eval.jsEngine` row names `elide` as a selectable value but says nothing about whether a kernel exists to serve it — today selecting it silently falls back to Bun with a notice. When a kernel lands, record that `elide` is functional. The settings **schema** (`packages/coding-agent/src/config/settings-schema.ts:3680-3698`) already carries engine-neutral option descriptions and needs no change, which is what keeps this row's cost to one doc line. |
+| 4 | `docs/settings.md:624` (doc) **and** `src/config/settings-schema.ts:3696` (code) | Both currently tell the user that selecting `elide` does nothing: the `eval.jsEngine` docs row and the schema's `elide` option description each carry the clause *"(no kernel ships yet; falls back to Bun with a notice)"*. **When a kernel lands, delete that clause from both** — the schema string is what `/settings` renders, so leaving it would keep the UI advertising a fallback that no longer happens. An earlier revision of this row claimed the schema was engine-neutral and needed no change; it is not, and the row costs two edits, one of them code. |
 
-Nothing else is in scope. Once queue steps 1–6 have landed, a diff that reaches a
-fifth code file means something in the scaffold was wrong and should be fixed
-rather than worked around.
+Nothing else is in scope. Once queue steps 1–6 have landed, a diff that touches a
+file outside these five means something in the scaffold was wrong and should be
+fixed rather than worked around.
 
 #### Row 2 is an unresolved design call, not a prescription
 
@@ -390,7 +431,7 @@ existing JS worker protocol plus three lifecycle asks. Each maps to one Tier 2 o
 | Seam method | Embedded-ABI op | Notes |
 |---|---|---|
 | `factory.open(opts)` | `contextOpen(EmbeddedContextSpec)` | `languages = [js, ts]`, `primaryLanguage = js`, `allowThreads = false` (rejected for JS/TS anyway — `WHIPLASH_QUEUE.md:125-127`), `streamOutput = true`, `workingDir = opts.cwd`, `label = opts.sessionId`. `hostCalls = false` for v1 — it returns `unsupportedOperation` until Tier 2.2, so the loopback bridge does not depend on it. Fresh context per call — see the contract above. |
-| `send(msg)` for a `run` | `contextCall` | Execution worker. Serialized per context; a second concurrent eval returns `busy` (decision 9). |
+| `send(msg)` for a `{type:"run"}` worker message (not the retired `run` tool) | `contextCall` | Execution worker. Serialized per context; a second concurrent eval returns `busy` (decision 9). |
 | `onMessage(text/display)` | `pollOutput` pump | Control worker, driven as a loop; the transport's incremental chunks become the `text`/`display` outbounds `OutputSink` already consumes. |
 | `interrupt()` | `interrupt(timeoutMillis)` | Rung 1 of the cancellation ladder: context and guest state survive. |
 | `reset()` | `reset` (close + rebuild from the same `ElideRuntime`) | Guest state gone, engine warmth kept — costs exactly one of today's per-call context builds (decision 4). |
@@ -460,7 +501,7 @@ Naming these so the wiring diff stays reviewable:
    GraalPy-side, not ours: guest threads are refused while JavaScript shares the
    context (see the spike above), and `os.getppid()` is unsupported on the `java`
    POSIX backend — recorded as deliberately staying unsupported in
-   `WHIPLASH_QUEUE.md:642-647`, since in-process execution has no parent to
+   `WHIPLASH_QUEUE.md:651-656`, since in-process execution has no parent to
    orphan. Both are tracked there; revisit Python only against spike A's answer
    and Tier 2 numbers.
 3. **Guest→host v1 is a loopback HTTP bridge**, which means the guest needs a

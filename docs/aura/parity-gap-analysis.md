@@ -1,5 +1,17 @@
 # Aura v1 parity gap analysis — BUCKSHOT `aura` → aura fork
 
+> **HISTORICAL SNAPSHOT — do not build against the tool names in this file.**
+> Written 2026-07-27, when the fork's model surface still carried `run`,
+> `check`, and `jvm_run`. All three are gone: `jvm_run` folded into `run`, and
+> `run`/`check` were retired outright on 2026-08-11 (`0e7871de4`,
+> `3dbf7bca6`) in favor of upstream `eval` for code execution and `bash` for the
+> shell. The surviving fork tools are `insights`, `profile`, `serve`, and the
+> four `jvm_*` analysis tools. Every recommendation below that names `run` or
+> `check` — the bash-interceptor rules in §"Bash interception", the renderer
+> notes at the end — is superseded by `docs/aura/ELIDE_ALIGNMENT.md` and
+> `ACTIONS_CONSOLIDATE.md`. The *gap analysis itself* (what BUCKSHOT had that
+> the fork lacked) is still a useful record.
+
 **Date:** 2026-07-27
 **BUCKSHOT (v1 reference):** `/home/sam/workspace/labs/BUCKSHOT` — `@buckshot/cli` → `dist/aura`, a Pi-SDK harness with the Elide runtime fused in via an extension registry.
 **Fork (target):** `/home/sam/workspace/labs/BREAKDANCE` — an `oh-my-pi` fork rebranded to `aura`, with the runtime capability core merged (`packages/coding-agent/src/runtime/`, `src/tools/runtime-*.ts`, `aura runtime status`).

@@ -1,18 +1,48 @@
-# Consolidate the code-execution surfaces onto `run`
+# Consolidate the code-execution surfaces (originally: onto `run`)
 
 Handoff plan. Written 2026-08-10 after the first post-merge runtime benchmark
-(v17.2.12) came back invalid. Read this file top to bottom before touching code;
-Phase 0 is a hard prerequisite for measuring anything in Phase 1.
+(v17.2.12) came back invalid. Phase 0 is a hard prerequisite for measuring
+anything downstream, and its findings still stand.
+
+> **Phase 1's DIRECTION IS SUPERSEDED (2026-08-11).** This plan consolidated the
+> code-execution surfaces **onto `run`**. The consolidation happened in the
+> opposite direction: `run` and `check` were **retired** from the model surface
+> (`0e7871de4`, `3dbf7bca6`), and upstream **`eval` is the single code-execution
+> tool** with `bash` owning the shell. Read Phase 1 below as a record of the
+> alternative that was considered and rejected, not as an instruction. Its
+> *invariants* survive the reversal and are the acceptance criteria for the
+> surviving surface — see "Invariants" — but nothing here should be built.
+>
+> Why the reversal: `eval` (the 🐍/🟧 cell surfaces) already covered py/js
+> one-shot execution; `check`'s analogue is `bash` plus diagnostics and it was
+> measurably *slower* (project validation 2.08–3.37×); and `run`'s only genuine
+> advantage — file + argv + stdin — arrives inside `eval` through the Tier 2
+> `EmbeddedContextCall` carrier and its `mainScript` mode
+> (`WHIPLASH_QUEUE.md:156-174`). One surface, one gate hierarchy, one telemetry
+> path, without a second tool.
 
 > **Superseding context (read first):** `docs/aura/ELIDE_ALIGNMENT.md`. omp's
 > `src/eval/` already implements the persistent-kernel framework this plan's
 > Phase 1 was going to build — session-scoped kernel ownership, owner-scoped
 > disposal, host-callback bridges, streaming, display, cancellation, and a
-> shared worker client, across four language families. The consolidation should
-> therefore be framed as **collapsing the fork's parallel `src/runtime/` stack
-> onto omp's abstractions**, not as designing a new persistence model. Phase 1
-> below stays valid as the *tool-surface* target; the architecture and
-> sequencing now live in the alignment doc.
+> shared worker client, across four language families. The architecture and
+> sequencing live in the alignment doc.
+
+## What is left for M4
+
+The tool-surface half of this plan is done. What remains, in the alignment doc's
+sequencing rather than this one's:
+
+1. **Settings collapse** — fold `runtime.*` and `python.{enabled,embedded,shell}`
+   into the `eval.*` hierarchy plus one engine-selection key. User-visible
+   migration; deliberately sequenced after the backend lands.
+2. **`rb`/`jl`** — decide per language, on measured p50/p95, whether the opt-in
+   Ruby/Julia kernels move to Elide, stay put, or are dropped.
+3. **The Python engine question** — re-measure only against Tier 2 numbers; the
+   ~25 ms embedded floor is per-call context construction, so a persistent
+   context may change the answer entirely.
+4. **A JVM `ExecutorBackend`** — `java`/`kotlin` on Elide contexts, which is how
+   the 5.2× JVM execution win returns to the model after `run`'s retirement.
 
 ## Why
 
@@ -208,13 +238,14 @@ duplicate its detail here.
 
 Nothing reachable from our side moves embedded Python, so the engine-flag path
 is closed. The fix is **addressable persistent contexts** — Tier 2 in
-`docs/aura/WHIPLASH_ENGINE_BRIEF.md` — which is *also* the capability Phase 1
-needs in order to retire the separate `eval` kernels. One change unblocks both.
+`docs/aura/WHIPLASH_ENGINE_BRIEF.md`.
 
-**Phase 1 is therefore blocked on the WHIPLASH Tier 2 work.** The design goal
-is a **drop-in replacement for today's Python and JS eval kernels**, so the
-consolidation becomes a re-pointing of `eval`'s backends at `run` rather than a
-reimplementation of kernel semantics.
+**The engine work is therefore blocked on WHIPLASH Tier 2.** The design goal is
+a **drop-in replacement for today's Python and JS eval kernels**: re-point
+`eval`'s backends at Elide-hosted contexts through the `ExecutorBackend` seam,
+rather than reimplement kernel semantics. (The original text here said the
+backends would be re-pointed at `run`; with `run` retired, the seam is
+`eval/backend.ts` and the destination is an Elide `ExecutorBackend`.)
 
 Methodology caveats for anyone re-running: the host is noisy (process Python
 p50 swung 16→55 ms across cells in one run), and cold-open numbers are
@@ -320,44 +351,49 @@ With 0.1 + 0.2 in place, re-run both benchmarks and record the numbers as the
 real pre-consolidation baseline. Everything in Phase 1 is judged against that,
 not against the contaminated run.
 
-## Phase 1 — Consolidate onto `run`
+## Phase 1 — Consolidate onto `run` (SUPERSEDED — historical)
 
-### Current surface (what the model must disambiguate)
+> Everything in this section describes the **rejected** direction. It is kept
+> because the invariants below outlived it and are still binding. See the
+> superseding note at the top of this file.
 
-| Surface | Where | Semantics |
-|---|---|---|
-| `bash` | `tools/bash.ts` | shell |
-| `run` | `tools/runtime-run.ts` (fork) | **one-shot** execution via the runtime |
-| `check` | fork | validation only |
-| `eval` | `tools/eval.ts` | **stateful kernels**, `language: 'py'\|'js'\|'rb'\|'jl'` |
-| `$` / `$$` | `modes/controllers/input-controller.ts` | local Python actions; already route through the registered `run` tool (FORK.md row 31) |
+### Surface then, and now
+
+| Surface | Where | Semantics | Status |
+|---|---|---|---|
+| `bash` | `tools/bash.ts` | shell | unchanged — owns the shell |
+| `eval` | `tools/eval.ts` | **stateful kernels**, `language: 'py'\|'js'\|'rb'\|'jl'` | unchanged — now the **only** code-execution tool |
+| `run` | `tools/runtime-run.ts` (fork) | **one-shot** execution via the runtime | **RETIRED** (`0e7871de4`); file/argv/stdin returns as an `eval` mode via the Tier 2 carrier |
+| `check` | fork | validation only | **RETIRED** (`0e7871de4`); `bash` + diagnostics, and it was 2.08–3.37× slower |
+| `$` / `$$` | `modes/controllers/input-controller.ts` | local Python actions | now execute in the **shared CPython kernel** — the same one `eval`'s `py` backend uses (`08c50efd8`), so a `$` cell and an `eval` cell see the same names |
 
 `eval` gates live in `tools/eval-backends.ts`: `eval.py`/`eval.js` default on,
 `eval.rb`/`eval.jl` opt-in, with `PI_PY`/`PI_JS`/`PI_RB`/`PI_JL` env overrides,
 and `isPythonEnabled()` acting as an umbrella that `PI_PY` can narrow but not
-re-enable. Runtime gates live separately under `runtime.*` and
-`python.enabled`/`python.embedded`/`python.shell`
-(`config/settings-schema.ts`, FORK.md rows 27 and 31).
+re-enable. The surviving seven fork tools still gate separately under `runtime.*`
+and `python.enabled`/`python.embedded`/`python.shell`
+(`config/settings-schema.ts`, FORK.md rows 27 and 31) — collapsing those two
+hierarchies is the remaining M4 item, and it is now a *settings* problem rather
+than a tool-surface one.
 
-So "execute some code" is currently reachable four ways with two independent
-gate hierarchies. That is the thing to collapse.
+"Execute some code" is now reachable one way. That was the thing to collapse.
 
-### Target
+### Target (as originally written — NOT the shipped design)
 
-1. **`run` becomes the single code-execution tool.** Fold `eval`'s `py` and
-   `js` backends into it. Prefer the existing `run` implementation and existing
-   action plumbing over new code — `$`/`$$` already dispatch through `run`, so
-   extend that path rather than inventing another.
-2. **Elide backs the persistent kernel.** Replace the IPython kernel (`py`) and
-   the persistent JS VM (`js`) with Elide-hosted sessions, so one engine serves
-   both one-shot and kernel modes.
-3. **Drop the duplicate surface.** Once `run` covers one-shot *and* persistent
-   execution, remove the redundant `eval` entry point so the model sees one
-   tool for "run code" and `bash` for "run a shell command".
-4. **One gate hierarchy.** Collapse `eval.py`/`eval.js` into the
-   `runtime.*` + `python.*` hierarchy rather than maintaining both.
+1. ~~**`run` becomes the single code-execution tool.**~~ **Inverted:** `eval` is,
+   and `run` is gone.
+2. **Elide backs the persistent kernel.** Still the target, but as an
+   `ExecutorBackend` *behind* `eval` (JS/TS first), not as a `run` rewrite.
+3. ~~**Drop the duplicate surface** by removing `eval`.~~ **Inverted:** the
+   duplicate surface dropped was `run`/`check`.
+4. **One gate hierarchy.** Still open — but collapsing toward `eval.*`, not
+   toward `runtime.*` + `python.*`.
 
 ### Invariants — do not regress these
+
+These were written as constraints on a `run`-absorbs-`eval` merge. They read
+just as well as constraints on the surface that actually survived: `eval` had to
+already satisfy every one of them for the retirement to be safe, and it does.
 
 - **`eval` is stateful; `run` is one-shot.** `eval.ts:93` — "State persists
   within a language across calls" — and it exposes `reset?` to wipe a single
@@ -397,10 +433,10 @@ gate hierarchies. That is the thing to collapse.
    working runtime fixed it (`jvm-dependencies` now calls `jvm_deps` before
    `bash`). Consolidation is efficiency/code-health work. Only
    `java-execution` still leads with `bash` — worth one trace read to see why.
-2. What is the persistence model for `run` — an explicit session id, an
-   implicit per-language kernel, or an opt-in `persist` flag? **Decided in
-   principle:** go straight for persistent contexts and make them a drop-in
-   replacement for the current Python and JS eval kernels. The remaining
+2. ~~What is the persistence model for `run`?~~ **Moot — `run` is retired.** The
+   live form of the question is how an Elide-backed `eval` context is addressed.
+   **Decided in principle:** go straight for persistent contexts and make them a
+   drop-in replacement for the current Python and JS eval kernels. The remaining
    decision is how Aura addresses a context (session id vs. implicit
    per-session-per-language), which should follow whatever WHIPLASH's Tier 2
    surface makes natural. Blocked on that.

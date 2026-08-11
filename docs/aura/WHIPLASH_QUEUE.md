@@ -580,7 +580,7 @@ limit should be raisable above 16 MiB is open question 8.)
 | G | C shim + ABI 1u→2u + allowlist 7→9 | S | All three in one commit (§1.3). |
 | H | Tests, buffered path | M | Everything in §1.6 except streaming rows. |
 | I | `EmbeddedOutputPipe` + `pollOutput` + close-while-parked test | M | |
-| J | `mainScript` eval mode | S | Unblocks Aura deleting `pythonFileBootstrap` (§2.3). |
+| J | `mainScript` eval mode | S | **Raised: load-bearing, not hygiene.** Aura retired its `run` tool on 2026-08-11, so `eval` is now the *only* code-execution surface and `mainScript` (with `source.file` + `args` + `stdin`, all already in `EmbeddedContextCall`) is the whole path by which file execution reaches it. Ship it inside B–K, not as a trailing cleanup. Still also unblocks deleting `pythonFileBootstrap` (§2.3). |
 | K | Native smoke + sanitizer + benchmark numbers | S | Warm eval, reset cost, streaming throughput, interrupt latency. These numbers are what the regeneration checklist's no-regression floors get checked against. |
 | L | **Tier 2.2** host-call bridge | L | **Separate batch.** Schema already landed in B; ops return `unsupportedOperation` until this ships. |
 | M | Migrate `repl.capnp` onto `guest.capnp` | M | **Deferred.** Pure de-duplication; touches the Rust CLI REPL, so it should not ride the same batch as the ABI bump. |
@@ -635,9 +635,18 @@ is not something Aura wants or needs.
 
 Covered as item J in §1.7 and specified in §1.2. Calling it out separately here
 because its *value* is Aura-side: Aura currently prepends a bootstrap preamble
-to Python files to fix `__file__`, `sys.argv`, and `sys.path[0]`. A real
-entrypoint mode makes `pythonFileBootstrap` deletable outright rather than
+to Python files to fix `__file__`, `sys.argv`, and `sys.path[0]`
+(`packages/coding-agent/src/runtime/python.ts`, applied at
+`runtime/transport/local.ts:798` and `runtime/transport/embedded.ts:573`). A
+real entrypoint mode makes `pythonFileBootstrap` deletable outright rather than
 merely smaller.
+
+**Priority note (2026-08-11).** This item is no longer only a deleter. Aura
+retired its one-shot `run` tool, leaving `eval` as the single code-execution
+surface, so `mainScript` — together with `EmbeddedContextCall`'s
+`source.file`/`args`/`stdin` fields — is now the *only* route by which "execute
+this file with these arguments" reaches a model-facing tool. Treat J as part of
+the B–K shippable batch rather than as trailing hygiene.
 
 ### 2.4 `os.getppid()` — stays unsupported
 

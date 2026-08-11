@@ -32,8 +32,11 @@ interface GenerateCandidateOptions {
 type SaveCandidateResult = { kind: "saved" | "aborted" | "rejected" } | { kind: "amend"; feedback: string };
 
 const MAX_ATTEMPTS = 3;
-const PROJECT_OPTION = "This project (.omp/rules)";
-const GLOBAL_OPTION = "Global — all projects (~/.omp/agent/rules)";
+// Templated, not literal: these labels are the only description the user gets of
+// where the rule lands, and `#resolveTarget` writes under `CONFIG_DIR_NAME` /
+// the active agent dir. A hardcoded brand here names a directory nothing writes.
+const PROJECT_OPTION = `This project (${CONFIG_DIR_NAME}/rules)`;
+const GLOBAL_OPTION = `Global — all projects (~/${CONFIG_DIR_NAME}/agent/rules)`;
 const AMEND_OPTION = "Amend with feedback…";
 
 export class OmfgController {

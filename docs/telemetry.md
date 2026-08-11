@@ -2,11 +2,11 @@
 
 Aura exports its own operational telemetry — traces, structured logs, and metrics — to an OpenTelemetry collector over OTLP.
 
-**This build exports to the team's Grafana Cloud stack by default.** With nothing configured, `telemetry.enabled` defaults to `true` and export resolves to a built-in OTLP destination (`https://otlp-gateway-prod-us-west-0.grafana.net/otlp`) carrying a built-in `Authorization` credential. That destination and its credential live together in `packages/coding-agent/src/telemetry/init.ts` — not as a settings default — and they are the *lowest* tier of destination resolution, so anything you configure displaces them. See [Privacy](#privacy) for what actually leaves the process; it is pseudonymous, and prompt/completion content is never included.
+**This build exports to Aura's own collector by default.** With nothing configured, `telemetry.enabled` defaults to `true` and export resolves to a built-in OTLP destination, `https://aura.elide.events`. It carries **no credential**: the only header attached is `x-aura-install-id`, the same pseudonymous install id already sent as the `aura.install.id` resource attribute, so the collector can count unique installations at the HTTP layer. The collector accepts unauthenticated OTLP; if it ever requires a credential, an `Authorization` header slots in beside the install id. That destination and its header live together in `packages/coding-agent/src/telemetry/init.ts` (`BUILTIN_TELEMETRY_ENDPOINT` / `builtinTelemetryHeaders`) — not as a settings default — and they are the *lowest* tier of destination resolution, so anything you configure displaces them. See [Privacy](#privacy) for what actually leaves the process; it is pseudonymous, and prompt/completion content is never included.
 
 ### Where telemetry goes
 
-Highest tier wins; endpoint and credential always come from the *same* tier, so the built-in credential is never attached to a destination you configured, and a credential you configure is never sent to the built-in stack.
+Highest tier wins; endpoint and headers always come from the *same* tier, so the built-in install-id header is never attached to a destination you configured, and a credential you configure is never sent to the built-in collector.
 
 | Tier | Source | Notes |
 | ---- | ------ | ----- |
@@ -14,12 +14,12 @@ Highest tier wins; endpoint and credential always come from the *same* tier, so 
 | 2 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` | Generic, standard OTEL env |
 | 3 | `telemetry.endpoint` + `telemetry.headers` | Your explicit setting |
 | 4 | Aura: `AURA_TELEMETRY_URL`, or derived from `AURA_DOMAIN` | Only while `cloud.telemetry.enabled: true` (off by default) |
-| 5 | Built-in team Grafana Cloud stack | Applies when nothing above does |
+| 5 | Built-in Aura collector `https://aura.elide.events` + `x-aura-install-id` (no credential) | Applies when nothing above does |
 
 Two consequences worth knowing:
 
-- **Pointing it somewhere else takes one line.** Set `telemetry.endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) to your own collector and supply its auth via `telemetry.headers` (or `OTEL_EXPORTER_OTLP_HEADERS`) — env still wins per key. The built-in destination drops out entirely; its credential is not sent to your collector.
-- **The Aura relay will take over on its own.** Because the built-in stack sits *below* the Aura tier, switching `cloud.telemetry.enabled` on with an Aura telemetry endpoint configured cuts export over with no further edit.
+- **Pointing it somewhere else takes one line.** Set `telemetry.endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) to your own collector and supply its auth via `telemetry.headers` (or `OTEL_EXPORTER_OTLP_HEADERS`) — env still wins per key. The built-in destination drops out entirely, install-id header included.
+- **The Aura relay will take over on its own.** Because the built-in collector sits *below* the Aura tier, switching `cloud.telemetry.enabled` on with an Aura telemetry endpoint configured cuts export over with no further edit.
 
 ### Turning it off
 
@@ -150,7 +150,7 @@ The three `telemetry.identity.*` opt-ins are **not** gated on `telemetry.enabled
 
 1. **`OTEL_SDK_DISABLED=true` wins over everything.** It is read from the raw process environment only; no setting can re-enable export against it.
 2. **Environment wins per key.** A `telemetry.*` value is used only when neither the signal-specific nor the generic `OTEL_*` key for that value is set. Your own `telemetry.headers` are resolved independently of the endpoint, so you can point the endpoint at a collector via env while keeping headers in settings.
-3. **Below the env vars, the destination is resolved as one atomic pair** — endpoint *and* headers from a single tier: your `telemetry.endpoint`, then the Aura tier, then the built-in Grafana stack (see [Where telemetry goes](#where-telemetry-goes)). A tier's credential never travels with another tier's endpoint. Configuring `telemetry.headers` with no endpoint anywhere is an incomplete configuration, not a request to send that credential to the built-in stack: nothing is exported.
+3. **Below the env vars, the destination is resolved as one atomic pair** — endpoint *and* headers from a single tier: your `telemetry.endpoint`, then the Aura tier, then the built-in Aura collector (see [Where telemetry goes](#where-telemetry-goes)). A tier's headers never travel with another tier's endpoint. Configuring `telemetry.headers` with no endpoint anywhere is an incomplete configuration, not a request to send that credential to the built-in collector: nothing is exported.
 4. **`telemetry.enabled: false` contributes no endpoint, headers, or signal selection** — including the built-in destination — but env-only activation still works. Setting just `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment enables export without touching settings. The `telemetry.identity.*` opt-ins are the exception: they apply to env-activated telemetry too (see above).
 5. A signal is exported when it has an endpoint (per-signal or base) **and** its `OTEL_*_EXPORTER` is not `none`. Listing `telemetry.signals` without a signal sets that variable to `none` for you.
 
@@ -162,9 +162,9 @@ Buffered telemetry is flushed every 30 seconds and again at process exit, so a l
 
 ## Privacy
 
-Aura's telemetry is **pseudonymous by default**, and by default it goes to the team's Grafana Cloud stack (see [Where telemetry goes](#where-telemetry-goes) to redirect or disable it). Nothing that identifies you or your work leaves the process unless you opt in.
+Aura's telemetry is **pseudonymous by default**, and by default it goes to Aura's own collector at `https://aura.elide.events` (see [Where telemetry goes](#where-telemetry-goes) to redirect or disable it). Nothing that identifies you or your work leaves the process unless you opt in.
 
-- **`aura.install.id`** is a random UUID minted once per install and stored at `<configRoot>/telemetry-install-id` — `~/.aura/telemetry-install-id` by default, mode `0600`. (`PI_CONFIG_DIR` renames that directory, and an active profile moves it under `profiles/<name>/`. `aura config path` prints the agent directory, whose parent is the config root.) It is random, not derived from anything about your machine, so it is strictly non-reversible. **Delete the file to rotate it.** It is deliberately separate from the general-purpose install id in [install-id.md](install-id.md), so rotating telemetry identity does not disturb unrelated install-scoped state.
+- **`aura.install.id`** is a random UUID minted once per install and stored at `<configRoot>/telemetry-install-id` — `~/.aura/telemetry-install-id` by default, mode `0600`. It is also the value of the `x-aura-install-id` header on the built-in destination, so rotating the file rotates both. (`PI_CONFIG_DIR` renames that directory, and an active profile moves it under `profiles/<name>/`. `aura config path` prints the agent directory, whose parent is the config root.) It is random, not derived from anything about your machine, so it is strictly non-reversible. **Delete the file to rotate it.** It is deliberately separate from the general-purpose install id in [install-id.md](install-id.md), so rotating telemetry identity does not disturb unrelated install-scoped state.
 - **`service.name`** defaults to `aura` and **`service.version`** to the running build's version. Those and the install id are the only resource attributes present by default.
 - **Usage-limit metrics carry `aura.account.hash` by default** — the first 12 hex characters of the SHA-256 digest of the internal account key. That is enough to keep one account's utilization series separate from another's, and not enough to recover the email or credential behind it. Setting `telemetry.identity.account: true` replaces the hash with the real `aura.account.email` and `aura.account.key`; leave it off unless the collector is yours and you need the account named.
 - **`telemetry.identity.hostname: true`** adds `host.name`; **`telemetry.identity.workspace: true`** adds `aura.workspace.path` (an absolute path, which usually names your project). Both are off by default.

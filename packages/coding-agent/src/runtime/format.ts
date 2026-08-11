@@ -224,6 +224,14 @@ export type RuntimeCallOutcome<T> =
  * worker would otherwise poison every runtime tool for the rest of the session.
  * Retiring here rather than inside each tool is the point: a tool that forgets
  * would be the one that strands the session.
+ *
+ * One tool does forget, deliberately and for now: `serve` calls
+ * `RuntimeService.spawn` directly (`tools/runtime-serve.ts:54`), so an
+ * `internal` failure there throws past this function and retires nothing —
+ * the poisoned service stays cached until some other tool's call trips the
+ * retirement above. Routing `spawn` through here is the fix; it is a
+ * behavior change (the throw becomes a failed tool result) and is queued
+ * as a follow-up rather than smuggled into a docs pass.
  */
 export async function callRuntime<T>(
 	invoke: () => Promise<T>,
