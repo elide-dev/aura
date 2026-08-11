@@ -12,7 +12,6 @@ import {
 	toRuntimeRpcError,
 } from "../protocol";
 import type { RuntimeEndpoint } from "../service";
-import { BunRuntimeEndpoint } from "./bun";
 import { EmbeddedRuntimeEndpoint, isEmbeddedRunRequest } from "./embedded";
 import { type LocalEndpointOptions, LocalRuntimeEndpoint } from "./local";
 
@@ -21,7 +20,6 @@ export interface SelectedEndpointOptions extends LocalEndpointOptions {
 	embeddedPath?: string;
 	processEndpoint?: RuntimeEndpoint;
 	embeddedEndpoint?: RuntimeEndpoint;
-	bunEndpoint?: RuntimeEndpoint;
 }
 
 interface AutoRunPreflight {
@@ -40,7 +38,6 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 	readonly #adapter: RuntimeAdapter;
 	readonly #process: RuntimeEndpoint;
 	readonly #embedded: RuntimeEndpoint;
-	readonly #bun: RuntimeEndpoint;
 	readonly #autoQueue: QueuedAutoRun[] = [];
 	#autoDrain: Promise<void> | undefined;
 	#closing = false;
@@ -57,7 +54,6 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 				env: options.env,
 				resolveRuntime: options.resolve,
 			});
-		this.#bun = options.bunEndpoint ?? new BunRuntimeEndpoint({ env: options.env });
 	}
 
 	async request(request: RuntimeRpcRequest, signal?: AbortSignal): Promise<RuntimeRpcResponse> {
@@ -69,7 +65,6 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 			try {
 				const params = request.params as RuntimeRunParams;
 				const target = resolveRunTarget(params);
-				if (target.engine === "bun") return this.#bun.request(request, signal);
 				const routedRequest: RuntimeRpcRequest =
 					target.language === "java" || target.language === "kotlin"
 						? {
@@ -125,7 +120,7 @@ export class SelectedRuntimeEndpoint implements RuntimeEndpoint {
 
 	async #closeEndpoints(): Promise<void> {
 		if (this.#autoDrain) await Promise.allSettled([this.#autoDrain]);
-		const endpoints = [...new Set([this.#process, this.#embedded, this.#bun])];
+		const endpoints = [...new Set([this.#process, this.#embedded])];
 		const results = await Promise.allSettled(endpoints.map(endpoint => endpoint.close?.() ?? Promise.resolve()));
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
