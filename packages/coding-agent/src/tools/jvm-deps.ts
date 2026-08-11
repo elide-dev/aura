@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import jvmDepsDescription from "../prompts/tools/jvm-deps.md" with { type: "text" };
@@ -42,9 +43,17 @@ export class JvmDepsTool implements AgentTool<typeof jvmDepsSchema, RuntimeJvmRe
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
 		// `output` is the only thing this tool can put on disk; without it the report
-		// exists only in the transcript, which plan mode has no quarrel with.
-		if (params.output !== undefined) {
-			enforcePlanModeWrite(this.session, params.output, { op: "create" });
+		// exists only in the transcript, which plan mode has no quarrel with. The
+		// truthiness test matches the transport's own (`params.output ? … :
+		// undefined`), so an empty string is not refused for a write that would
+		// never happen.
+		//
+		// Resolved first, for the reason spelled out in `jvm-jar.ts`: the transport
+		// resolves this field against cwd and knows no URL scheme, so guarding the
+		// raw string would let `local://deps.txt` take the sandbox exemption and
+		// still land in the working tree.
+		if (params.output) {
+			enforcePlanModeWrite(this.session, path.resolve(this.session.cwd, params.output), { op: "create" });
 		}
 		const call = await callJvm(this.session, { action: "deps", ...params, cwd: this.session.cwd }, signal);
 		if (!call.ok) return call.result;

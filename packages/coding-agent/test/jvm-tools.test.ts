@@ -257,6 +257,36 @@ describe("JVM writes under plan mode", () => {
 		expect(textOf(out)).toBe("Main.class -> java.base");
 	});
 
+	/**
+	 * The guard exempts the session's `local://` sandbox, because for `write`/`edit`
+	 * that scheme really does resolve there. The JVM transport does not know the
+	 * scheme: `resolveOutputDest` is a bare `path.resolve(cwd, output)`, so
+	 * `local://app.jar` becomes `<cwd>/local:/app.jar` — inside the working tree.
+	 * Guarding the raw string therefore let plan mode write exactly what it forbids,
+	 * and the guard's own refusal names a `local://` path, so this is the model's
+	 * natural next call rather than an exotic one. Both fields are documented
+	 * cwd-relative; the guard resolves them the way the transport will.
+	 */
+	test("jvm_jar create cannot launder a working-tree write through local://", async () => {
+		const { session, dispatched } = planningSession(ok({ action: "jar", phase: "jar", output: "/x.jar" }));
+		await expect(
+			JvmJarTool.createIf(session)!.execute(
+				"id",
+				{ action: "create", language: "java", code: "class Main {}", output: "local://app.jar" },
+				SIGNAL,
+			),
+		).rejects.toThrow(GUARD_ERROR);
+		expect(dispatched()).toBe(false);
+	});
+
+	test("jvm_deps cannot launder a working-tree write through local://", async () => {
+		const { session, dispatched } = planningSession(ok({ action: "deps", phase: "deps", output: "/deps.txt" }));
+		await expect(
+			JvmDepsTool.createIf(session)!.execute("id", { path: "out/Main.class", output: "local://deps.txt" }, SIGNAL),
+		).rejects.toThrow(GUARD_ERROR);
+		expect(dispatched()).toBe(false);
+	});
+
 	test("a session that is not planning is unaffected", async () => {
 		const { session, seen } = sessionReturning(ok({ action: "jar", phase: "jar", output: "/x.jar" }));
 		await JvmJarTool.createIf(session)!.execute(
