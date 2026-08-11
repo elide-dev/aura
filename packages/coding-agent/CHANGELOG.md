@@ -26,6 +26,7 @@
 
 - Fixed `jvm_jar` and `jvm_deps` writing to the working tree while plan mode was active. Building a JAR, and writing a `jvm_deps` report to an `output` path, now hit the same plan-mode guard `write` and `edit` do; inspecting an archive and reporting dependencies to the transcript are unaffected.
 - Fixed `serve` ignoring `launch.enabled`. It starts a supervised background job through the same broker `hub` uses, so disabling process supervision now withholds the tool instead of leaving a second way in, and `aura doctor` reports which of its two gates turned it off.
+- Fixed `bash`'s guidance still ordering services, watchers, and REPLs into `hub` when `launch.enabled` is off and `hub` would refuse them.
 - Fixed `--help` advertising tools that do not exist: the removed `run` tool is replaced by `eval` in the "Available Tools" list, and the `notebook` row is gone (notebook editing is part of `edit`/`read`).
 - Fixed transient internal runtime failures poisoning the session-wide service cache permanently. An embedded worker latches its failure and is never rebuilt, so one crash used to strand every later runtime call; the implicated service is now retired inside the shared runtime call path, meaning `insights`, `profile`, and the four `jvm_*` tools all get a fresh worker host on the next call without retrying the failed guest execution.
 - Fixed relocatable Aura bundles failing to launch when `bin/aura` is installed through a filesystem symlink.
