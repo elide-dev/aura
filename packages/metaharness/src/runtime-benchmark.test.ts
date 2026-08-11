@@ -13,6 +13,7 @@ import {
 	analyzeRuntimeComparison,
 	armRunnerArgs,
 	BASELINE_TOOLS,
+	type BenchmarkArm,
 	buildArmLaunches,
 	countToolCalls,
 	countTrialToolCalls,
@@ -266,7 +267,39 @@ describe("runtime benchmark orchestration", () => {
 				"--env=AURA_RUNTIME_EMBEDDED_LIB=/opt/omp/src/out/aura-elide-linux-x64/lib/libelide_embed.so",
 			);
 			expect(launch.args).toContain("--env=AURA_RUNTIME_ADAPTER=auto");
+			expect(launch.args).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
 		}
+	});
+
+	it("never lets an agent container fetch the runtime it is measuring", () => {
+		const runtimeBinary = path.resolve(import.meta.dir, "../../../out/aura-elide-linux-x64/bin/elide");
+		const embeddedLib = path.resolve(import.meta.dir, "../../../out/aura-elide-linux-x64/lib/libelide_embed.so");
+		const options = {
+			model: "openai-codex/gpt-5.6-sol",
+			thinking: "xhigh",
+			attempts: 1,
+			prefix: "rtbench",
+			jobsDir: "/tmp/jobs",
+			taskRoot: "/tmp/tasks",
+			gatewayUrl: "http://127.0.0.1:4000",
+			hostNetwork: true,
+			taskIds: ["python-execution"],
+			historicalBinary: "/tmp/aura-linux-x64",
+		};
+		const injected = buildArmLaunches({ ...options, runtimeBinary, embeddedLib });
+		const armArgs = (arm: BenchmarkArm) => injected.find(launch => launch.arm === arm)?.args ?? [];
+
+		// The measured arms carry the override the same way they carry every other
+		// runtime env: the two arms must differ only in their tool set.
+		expect(armArgs("runtime")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		expect(armArgs("baseline")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		// The historical control runs a frozen binary from before this override existed.
+		expect(armArgs("historical").join(" ")).not.toContain("AURA_RUNTIME_AUTO_DOWNLOAD");
+
+		// No injected artifacts means no runtime env at all — the override never
+		// appears on its own.
+		const bare = buildArmLaunches(options);
+		expect(bare.every(launch => !launch.args.join(" ").includes("AURA_RUNTIME_AUTO_DOWNLOAD"))).toBe(true);
 	});
 
 	it("skips completed arms and resumes interrupted arms on campaign resume", () => {

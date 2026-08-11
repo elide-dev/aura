@@ -130,6 +130,7 @@ import {
 	type RuntimeSettingsValues,
 	resolveRuntimeEndpointOptions,
 	runtimeAdapterFromEnvironment,
+	runtimeAutoDownloadFromEnvironment,
 } from "./runtime";
 import {
 	buildSecretObfuscator,
@@ -3925,7 +3926,7 @@ function preconnectModelHost(baseUrl: string | undefined): void {
 export function readRuntimeSettingsValues(settings: Settings): RuntimeSettingsValues {
 	return {
 		enabled: settings.get("runtime.enabled"),
-		autoDownload: settings.get("runtime.autoDownload"),
+		autoDownload: runtimeAutoDownloadFromEnvironment(settings.get("runtime.autoDownload")),
 		path: settings.get("runtime.path") ?? "",
 		version: settings.get("runtime.version") ?? "",
 		adapter: runtimeAdapterFromEnvironment(settings.get("runtime.adapter")),
