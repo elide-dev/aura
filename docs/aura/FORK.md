@@ -263,7 +263,9 @@ Wayland/WSL host. Reproduces identically before the merge. Upstream test gap.
   services are closed without masking a primary probe failure. The tool section is
   *derived*, not transcribed: each `BUILTIN_TOOLS` factory is constructed against a
   stub session and the `null` returns are the gated-off set, with the responsible
-  setting found by holding every tracked gate setting permissive except one. Nothing
+  setting found by holding every tracked gate setting permissive except one — which
+  names *both* keys for a conjunction like `serve` (`runtime.enabled` and
+  `launch.enabled`), since fixing one of them would not bring the tool back. Nothing
   here enumerates tool names, so upstream tool additions/renames need no edit. Two
   small annotations remain: `SESSION_GATED_TOOL_NAMES` (registration not decidable
   from settings) and `UNPROBED_TOOL_NAMES` (`task`, whose factory runs agent
