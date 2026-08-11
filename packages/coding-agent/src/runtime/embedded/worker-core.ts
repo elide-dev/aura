@@ -425,26 +425,23 @@ function wrapWorker<Request, Response>(worker: Worker): EmbeddedWorkerHandle<Req
 	};
 }
 
-export function spawnEmbeddedExecutionWorker(): EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse> {
+/** Re-enters the CLI host under `hostArg` when one is active, else loads `entry` under `directArg`. */
+function spawnEmbeddedWorker<Req, Res>(hostArg: string, directArg: string, entry: URL): EmbeddedWorkerHandle<Req, Res> {
 	const hostEntry = workerHostEntry();
 	const worker = hostEntry
-		? new Worker(hostEntry, { type: "module", argv: [EMBEDDED_EXECUTION_WORKER_ARG] })
-		: new Worker(new URL("./worker-entry.ts", import.meta.url).href, {
-				type: "module",
-				argv: [EMBEDDED_DIRECT_EXECUTION_WORKER_ARG],
-			});
+		? new Worker(hostEntry, { type: "module", argv: [hostArg] })
+		: new Worker(entry.href, { type: "module", argv: [directArg] });
 	return wrapWorker(worker);
 }
 
+export function spawnEmbeddedExecutionWorker(): EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse> {
+	const entry = new URL("./worker-entry.ts", import.meta.url);
+	return spawnEmbeddedWorker(EMBEDDED_EXECUTION_WORKER_ARG, EMBEDDED_DIRECT_EXECUTION_WORKER_ARG, entry);
+}
+
 export function spawnEmbeddedControlWorker(): EmbeddedWorkerHandle<ControlWorkerRequest, ControlWorkerResponse> {
-	const hostEntry = workerHostEntry();
-	const worker = hostEntry
-		? new Worker(hostEntry, { type: "module", argv: [EMBEDDED_CONTROL_WORKER_ARG] })
-		: new Worker(new URL("./control-worker-entry.ts", import.meta.url).href, {
-				type: "module",
-				argv: [EMBEDDED_DIRECT_CONTROL_WORKER_ARG],
-			});
-	return wrapWorker(worker);
+	const entry = new URL("./control-worker-entry.ts", import.meta.url);
+	return spawnEmbeddedWorker(EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_DIRECT_CONTROL_WORKER_ARG, entry);
 }
 
 export type EmbeddedCancellationOutcome = { kind: "matched" } | { kind: "late" };

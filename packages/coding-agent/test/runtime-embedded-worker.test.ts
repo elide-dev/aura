@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import * as os from "node:os";
+import { withTimeout } from "@oh-my-pi/pi-utils";
 import { consumeWorkerInbox, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { Message } from "capnp-es";
 import type { EmbeddedNativeLibrary } from "../src/runtime/embedded/abi";
@@ -12,6 +13,8 @@ import {
 	type EmbeddedWorkerHandle,
 	EmbeddedWorkerHost,
 	ExecutionWorkerCore,
+	spawnEmbeddedControlWorker,
+	spawnEmbeddedExecutionWorker,
 } from "../src/runtime/embedded/worker-core";
 import type {
 	ControlWorkerRequest,
@@ -825,6 +828,85 @@ describe("embedded dual-worker host", () => {
 		expect(execution.terminateCount).toBe(1);
 		expect(control.terminateCount).toBe(1);
 	});
+});
+
+/** Every member `EmbeddedWorkerHandle` declares; both spawn helpers must expose exactly these. */
+const EMBEDDED_WORKER_HANDLE_MEMBERS = [
+	"send",
+	"onMessage",
+	"onError",
+	"onExit",
+	"terminate",
+] as const satisfies readonly (keyof EmbeddedWorkerHandle<never, never>)[];
+
+// Compile-time companion to the runtime assertion below: a member added to
+// `EmbeddedWorkerHandle` without being listed above fails `check:ts` here rather
+// than silently escaping a member set the test still believes is exhaustive.
+type AssertNever<T extends never> = T;
+type UnlistedHandleMember = Exclude<
+	keyof EmbeddedWorkerHandle<never, never>,
+	(typeof EMBEDDED_WORKER_HANDLE_MEMBERS)[number]
+>;
+export type EmbeddedWorkerHandleMembersAreExhaustive = AssertNever<UnlistedHandleMember>;
+
+function expectEmbeddedWorkerHandleShape(handle: object): void {
+	expect(Object.keys(handle).sort()).toEqual([...EMBEDDED_WORKER_HANDLE_MEMBERS].sort());
+	for (const value of Object.values(handle)) expect(typeof value).toBe("function");
+}
+
+async function askSpawnedWorker<Request, Response>(
+	handle: EmbeddedWorkerHandle<Request, Response>,
+	request: Request,
+	label: string,
+): Promise<Response> {
+	const answered = Promise.withResolvers<Response>();
+	const unsubscribe = handle.onMessage(message => answered.resolve(message));
+	try {
+		handle.send(request);
+		return await withTimeout(answered.promise, 5_000, `${label} never answered`);
+	} finally {
+		unsubscribe();
+	}
+}
+
+describe("embedded worker spawn helpers", () => {
+	// Spawns real Workers: the spawn helpers own the `new Worker` call itself, so
+	// no injection seam reaches the argv/entry pairing a shared helper could swap.
+	test("both spawn helpers expose the exact handle member set and reach their own worker entry", async () => {
+		// Only `terminate` is needed here, so both handle types fit structurally and
+		// a spawn that throws still leaves its predecessor terminable.
+		const spawned: Pick<EmbeddedWorkerHandle<never, never>, "terminate">[] = [];
+		try {
+			const execution = spawnEmbeddedExecutionWorker();
+			spawned.push(execution);
+			const control = spawnEmbeddedControlWorker();
+			spawned.push(control);
+
+			expectEmbeddedWorkerHandleShape(execution);
+			expectEmbeddedWorkerHandleShape(control);
+
+			// Each round-trip uses a request only its own core answers this way, so a
+			// swapped entry URL or argv reaches the other protocol and fails here.
+			// `probe` cannot do this job: both cores answer it identically.
+			expect(await askSpawnedWorker(execution, { type: "unload", id: 1 }, "embedded execution worker")).toEqual({
+				type: "unloaded",
+				id: 1,
+			});
+			expect(await askSpawnedWorker(control, { type: "shutdown", id: 2 }, "embedded control worker")).toEqual({
+				type: "shutdown-complete",
+				id: 2,
+			});
+		} finally {
+			await withTimeout(
+				Promise.all(spawned.map(handle => handle.terminate())),
+				5_000,
+				"embedded worker termination stalled",
+			);
+		}
+		// The 20s bound leaves headroom over the 5s round-trip bound above so a
+		// cross-wired entry reports which worker went silent rather than tripping
+		// bun's bare "test timed out".
+	}, 20_000);
 });
 
 interface PostedMessage {
