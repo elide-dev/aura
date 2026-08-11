@@ -2,24 +2,34 @@
  * Engine parity for the Elide JS backend.
  *
  * This is the behavior contract milestone 3's real-ABI wiring must keep green by
- * swapping ONE line — the kernel factory installed in `beforeEach`. Every case
- * drives the production entry point (`executeElideJs`) over the shared eval
- * stack, so what is pinned here is the stack's behavior *through* the Elide
- * seam: session reuse, owner-scoped reset forking, disposal through the shared
- * JS context manager, signal-only cancellation, timeout-control filtering, the
- * tool bridge, and errors-as-values.
+ * swapping the kernel factory installed in `beforeEach` — one line, plus the
+ * counting decorator around it that satisfies the fake's counter surface
+ * (`opens`/`closes`/`interrupts`/`resets`/`sessions`), which ~30 assertions here
+ * read. Every case drives the production entry point (`executeElideJs`) over the
+ * shared eval stack, so what is pinned is the stack's behavior *through* the
+ * Elide seam: session reuse, owner-scoped reset forking, disposal through the
+ * shared JS context manager, signal-only cancellation, timeout-control
+ * filtering, the tool bridge, and errors-as-values.
  *
  * **Two properties of the Task-10 fake shape what can honestly be asserted, and
  * every assertion below is chosen to hold for a real kernel as well.**
  *
  * 1. *The guest shares the host realm.* The fake drives a real `WorkerCore` in
- *    inline mode, so cells execute in THIS process's global scope. Cell state
- *    published to `globalThis` (`var x = 1`, and the `globalThis.x = x` publish
- *    that `wrapCode` emits for async-wrapped cells) therefore outlives a context
- *    teardown and is visible to a second live context. Cases that must observe
- *    state NOT crossing a context boundary carry it in {@link writeState}'s
- *    per-runtime bag instead. A real Elide kernel isolates both; the bag is the
- *    intersection of the two engines' guarantees.
+ *    inline mode, so cells execute in THIS process's global scope. Two
+ *    consequences, and one rule that follows from them:
+ *    - Cell state published to `globalThis` (`var x = 1`, and the
+ *      `globalThis.x = x` publish `wrapCode` emits for async-wrapped cells)
+ *      outlives a context teardown and is visible to a second live context, so
+ *      cases that must observe state NOT crossing a context boundary carry it in
+ *      {@link writeState}'s per-runtime bag instead.
+ *    - **No cell here may touch a host object.** Reaching a host `Promise`
+ *      through `globalThis` would park a cell today and throw on a real kernel,
+ *      whose guest has its own realm — the suite would die in setup at the very
+ *      swap it exists to survive. Cells that must park do it by awaiting a HOST
+ *      TOOL ({@link createParkTool}): tool calls cross the transport in both
+ *      engines. Guest-side runtime globals the JS bootstrap installs INSIDE the
+ *      guest (`__omp_helpers__`, `__omp_emit_status__`, the prelude aliases) are
+ *      fair game — those exist on either engine.
  * 2. *`interrupt()` cannot abort an in-flight inline cell.* The host stack
  *    cancels by force-terminating the worker, so the cancellation case asserts
  *    what the kernel seam RECORDS (a released session, no interrupt ask) rather
@@ -54,39 +64,14 @@ import {
 import type { JsExecutorOptions, JsResult } from "../../../src/eval/js/executor";
 import type { JsStatusEvent } from "../../../src/eval/js/shared/types";
 import type { ToolSession } from "../../../src/tools";
-import { createFakeElideJsKernelFactory, type FakeElideJsKernelFactory } from "./fake-kernel";
+import {
+	createFakeElideJsKernelFactory,
+	type FakeElideJsKernelFactory,
+	type FakeElideJsKernelSession,
+} from "./fake-kernel";
 
 /** Bounds every real wait so a wedged kernel fails loudly, under Bun's 5s default. */
 const WAIT_TIMEOUT_MS = 4_000;
-
-/** The gate global a parked cell waits on; unique to this file. */
-const GATE_KEY = "__omp_elide_parity_gate";
-
-interface RunGate {
-	entered(): void;
-	wait: Promise<void>;
-}
-
-type GateHost = { [GATE_KEY]?: RunGate };
-
-/** A cell parked mid-run, plus the handles to observe and release it. */
-interface Gate {
-	/** Cell source that reports entry, parks, and finishes once released. */
-	code: string;
-	entered: Promise<void>;
-	release(): void;
-}
-
-function installGate(): Gate {
-	const entered = Promise.withResolvers<void>();
-	const release = Promise.withResolvers<void>();
-	(globalThis as GateHost)[GATE_KEY] = { entered: () => entered.resolve(), wait: release.promise };
-	return {
-		code: `globalThis.${GATE_KEY}.entered(); await globalThis.${GATE_KEY}.wait; return "gated-cell-finished";`,
-		entered: withTimeout(entered.promise, WAIT_TIMEOUT_MS, "gated cell never started"),
-		release: () => release.resolve(),
-	};
-}
 
 /**
  * Cell source that stores/reads one string of per-context guest state.
@@ -99,6 +84,11 @@ function installGate(): Gate {
  * afterwards, so with the inline fake a neighbouring runtime's alias can outlive
  * a context teardown and make a cold context look warm. Under a real Elide
  * kernel every carrier is per-context and this one still is.
+ *
+ * TODO(m3): once the real kernel gives the guest its own realm, revert this to
+ * the plain `var shared = 41` carrier `test/eval/kernel-owner-scoping.test.ts`
+ * uses, which then tests strictly more (it observes the whole guest global
+ * scope, not one bag inside it).
  */
 const STATE_KEY = "PARITY_STATE";
 
@@ -120,6 +110,37 @@ function createTool(
 		concurrency: "parallel",
 		execute,
 	} as unknown as AgentTool;
+}
+
+/** A cell parked inside a host tool call, plus the handles to observe and release it. */
+interface ParkedCell {
+	tool: AgentTool;
+	/** Cell source that parks in the tool and finishes once released. */
+	code: string;
+	/** Resolves with the signal the tool was handed, once the cell is parked in it. */
+	entered: Promise<AbortSignal | undefined>;
+	release(): void;
+}
+
+/**
+ * Park a cell mid-run the only way that works on BOTH engines: an outbound tool
+ * call the host never answers until the test says so. The guest is blocked in
+ * `await tool.parity_park({})` — real traffic over the worker protocol — with no
+ * host object in reach and no spinning loop the inline fake could not interrupt.
+ */
+function createParkTool(): ParkedCell {
+	const entered = Promise.withResolvers<AbortSignal | undefined>();
+	const release = Promise.withResolvers<void>();
+	return {
+		tool: createTool("parity_park", async (_toolCallId, _args, signal) => {
+			entered.resolve(signal);
+			await release.promise;
+			return { content: [{ type: "text", text: "parked-tool-returned" }] } as AgentToolResult;
+		}),
+		code: "await tool.parity_park({}); return 'parked-cell-finished';",
+		entered: withTimeout(entered.promise, WAIT_TIMEOUT_MS, "parked cell never reached the tool"),
+		release: () => release.resolve(),
+	};
 }
 
 function makeSession(cwd: string, tools: AgentTool[] = []): ToolSession {
@@ -180,7 +201,9 @@ beforeEach(() => {
 	const tracked: ElideJsKernelFactory = {
 		async open(opts) {
 			const session = await factory.open(opts);
-			const index = factory.sessions.findIndex(opened => opened === session);
+			// `session` came out of the fake, so it is one of `factory.sessions`;
+			// only `open()`'s interface return type hides that.
+			const index = factory.sessions.indexOf(session as FakeElideJsKernelSession);
 			session.onMessage(msg => {
 				if (msg.type === "result") servedBy.push(index);
 			});
@@ -194,7 +217,6 @@ afterEach(async () => {
 	await withTimeout(disposeAllVmContexts(), WAIT_TIMEOUT_MS, "VM context disposal never settled");
 	setElideJsKernelFactory(restoreFactory);
 	restoreFactory = undefined;
-	delete (globalThis as GateHost)[GATE_KEY];
 });
 
 describe("Elide engine session state", () => {
@@ -303,7 +325,10 @@ describe("Elide engine disposal", () => {
 
 	it("ships no engine-specific disposal entry point", async () => {
 		const elideDir = path.join(import.meta.dir, "../../../src/eval/elide");
-		const files = readdirSync(elideDir).filter(file => file.endsWith(".ts"));
+		// Recursive: a disposer added in a future subdirectory must not slip past.
+		const files = readdirSync(elideDir, { recursive: true }).filter(
+			(file): file is string => typeof file === "string" && file.endsWith(".ts"),
+		);
 		expect(files.length).toBeGreaterThan(0);
 
 		const exported = new Map<string, string[]>();
@@ -330,19 +355,22 @@ describe("Elide engine disposal", () => {
 describe("Elide engine cancellation", () => {
 	it("settles an aborted cell as cancelled and releases the kernel session", async () => {
 		using tempDir = TempDir.createSync("@omp-elide-parity-cancel-");
-		const session = makeSession(tempDir.path());
+		const park = createParkTool();
+		const session = makeSession(tempDir.path(), [park.tool]);
 		const run = makeRunner(session, tempDir.path(), namespaceSessionId(`parity-cancel:${crypto.randomUUID()}`));
 		const controller = new AbortController();
-		const gate = installGate();
 
-		const pending = run(gate.code, { signal: controller.signal });
+		const pending = run(park.code, { signal: controller.signal });
 		try {
-			await gate.entered;
+			await park.entered;
 			controller.abort();
 			const result = await pending;
 
 			expect(result.cancelled).toBe(true);
 			expect(result.exitCode).toBeUndefined();
+			// The cell was still parked in the tool when the abort landed: it never
+			// reached its own return, so this is a real mid-cell cancel.
+			expect(result.output).not.toContain("parked-cell-finished");
 			// A plain cancel is not a timeout: no force-kill annotation is added.
 			expect(result.output).not.toContain("Command timed out");
 			// Cancellation force-terminates the worker, and that is what releases
@@ -353,7 +381,7 @@ describe("Elide engine cancellation", () => {
 			// is the tripwire that says the contract moved.
 			expect(factory.interrupts).toBe(0);
 		} finally {
-			gate.release();
+			park.release();
 		}
 	});
 
@@ -439,20 +467,14 @@ describe("Elide engine tool bridge", () => {
 
 	it("hands the tool the raw live signal the host cancels", async () => {
 		using tempDir = TempDir.createSync("@omp-elide-parity-tool-signal-");
-		const observed = Promise.withResolvers<AbortSignal | undefined>();
-		const release = Promise.withResolvers<void>();
-		const park = createTool("parity_park", async (_toolCallId, _args, signal) => {
-			observed.resolve(signal);
-			await release.promise;
-			return { content: [{ type: "text", text: "parked-tool-returned" }] } as AgentToolResult;
-		});
-		const session = makeSession(tempDir.path(), [park]);
+		const park = createParkTool();
+		const session = makeSession(tempDir.path(), [park.tool]);
 		const run = makeRunner(session, tempDir.path(), namespaceSessionId(`parity-tool-signal:${crypto.randomUUID()}`));
 		const controller = new AbortController();
 
-		const pending = run("await tool.parity_park({}); return 'unreachable';", { signal: controller.signal });
+		const pending = run(park.code, { signal: controller.signal });
 		try {
-			const signal = await withTimeout(observed.promise, WAIT_TIMEOUT_MS, "tool never observed a signal");
+			const signal = await park.entered;
 			expect(signal).toBeInstanceOf(AbortSignal);
 			expect(signal?.aborted).toBe(false);
 
@@ -471,7 +493,7 @@ describe("Elide engine tool bridge", () => {
 			expect(result.cancelled).toBe(true);
 			expect(result.exitCode).toBeUndefined();
 		} finally {
-			release.resolve();
+			park.release();
 		}
 	});
 });
@@ -511,6 +533,10 @@ describe("Elide engine errors as values", () => {
  * `ElideJsKernelSession` documents, which the Tier 2 kernel has to honor.
  */
 describe("Elide kernel seam asks", () => {
+	// TODO(m3): a real kernel can abort an in-flight cell, so re-point this at a
+	// cell actually running (park it with `createParkTool`, interrupt, assert the
+	// cell settles and the context survives) instead of interrupting between
+	// cells. The fake cannot: its `interrupt()` only records the ask.
 	it("records an interrupt without disturbing the context", async () => {
 		using tempDir = TempDir.createSync("@omp-elide-parity-interrupt-");
 		const session = makeSession(tempDir.path());
