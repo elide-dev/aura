@@ -720,10 +720,13 @@ decisions.
    the seven new failure codes. **Read the shipped schema, not this doc, for the
    response envelope** — whether the payloads arrive as `EmbeddedResponse` arms
    or under a new root is open question 9, resolved Elide-side in item B.
-5. **`eval/js/worker-protocol.ts`** — context-*call* goes on the execution
-   worker; context-open/close/interrupt/cancel/reset/poll-output go on the
-   **control** worker. This split is what makes control ops concurrent with an
-   in-flight eval (decision 9).
+5. **`packages/coding-agent/src/runtime/embedded/worker-protocol.ts`**
+   (`ExecutionWorkerRequest:8`, `ControlWorkerRequest:16`) — context-*call* goes
+   on the execution worker; context-open/close/interrupt/cancel/reset/poll-output
+   go on the **control** worker. This split is what makes control ops concurrent
+   with an in-flight eval (decision 9). Not `src/eval/js/worker-protocol.ts` —
+   that module has no execution/control split, and it is upstream code the
+   `eval` collapse does not edit.
 6. **`embedded/worker-core.ts`** — route the new ops and add the output-pump
    loop in the control worker.
 7. **`eval/elide/kernel.ts`** — implement the factory over the embedded

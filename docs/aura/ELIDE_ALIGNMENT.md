@@ -258,7 +258,7 @@ Pinning tests (paths relative to the repo root):
 
 | Fork construct | omp equivalent | Verdict | Pinning test |
 |---|---|---|---|
-| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent + gap: the two intermediate forwarding hops are read-verified, not pinned.` Ownership resolves from the owner id alone at both ends of every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else. [B] pins the **producers** (`structured-subagent.ts`, `vibe/runtime.ts` → `ExecutorOptions`) and the **consumer** (`AgentSession` config → shared kernel + fresh owner); it does **not** pin the wire between them — `task/executor.ts`'s forward of `parentEvalSessionId` into the child `createAgentSession`, and `sdk.ts`'s forward of it into the `AgentSession` config. Nothing in the repo does. Deleting either forward leaves every pin green while subagents and vibe workers silently stop sharing the parent's kernel, so milestone 2 must review those two lines by hand | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
+| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent + gap: the two intermediate forwarding hops are read-verified, not pinned.` Ownership resolves from the owner id alone at both ends of every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else. [B] pins the **producers** (`structured-subagent.ts`, `vibe/runtime.ts` → `ExecutorOptions`) and the **consumer** (`AgentSession` config → shared kernel + fresh owner); it does **not** pin the wire between them — `task/executor.ts:3073`'s forward of `parentEvalSessionId` into the child `createAgentSession`, `sdk.ts:3490`'s forward of it into the `AgentSession` config, and `sdk.ts:1750-1751`'s `getEvalSessionId: () => session?.getEvalSessionId() ?? options.parentEvalSessionId ?? defaultEvalSessionId(...)` fallback — the middle arm of that chain is what makes a **nested** subagent (one whose own session has no eval session id yet) inherit the parent's kernel rather than mint its own. Nothing in the repo pins any of the three. Deleting any one leaves every pin green while subagents and vibe workers silently stop sharing the parent's kernel, so milestone 2 must review those three lines by hand | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
 | `acquireRuntimeServiceLease` + last-release disposal | Owner registration in `eval/js/context-manager.ts`; `RefCountedWorkerHandle` (`subprocess/worker-client.ts`) | `equivalent` — a co-owned context survives every owner but the last, which is the whole semantic the lease provides | [A] "keeps a co-owned context alive until its last owner is disposed" (real JS worker, no mocks) |
 | `runtime/index.ts` selected-service cache, atomic swap/retirement | `createKernelSessionRegistry` | `equivalent + gap: kernel lifecycles only.` The owner-keyed session registry covers per-session kernel creation/reuse/disposal. The runtime **service** cache (selecting and atomically retiring an engine) is an orthogonal concern these pins say nothing about; it is in scope at milestone 2, not here | [A] + [B] cover the kernel-lifecycle half; the service cache has **no pin yet** |
 | `runtime/embedded/{worker-core,worker-entry,control-worker-entry,worker-protocol}.ts` | `createWorkerHandle` / `createWorkerSubprocess` + the `eval/js` worker pattern | `fork-owned, stays` — the `worker_threads` embedded host is a genuine variant of the shared client, not a duplicate of it. What collapses is the duplicated plumbing around it, deleted in Tasks 6–8 | n/a — behavior change, gated by the embedded suites |
@@ -304,13 +304,16 @@ and it is what holds the backend's `isAvailable()` false
 This section exists so filling that slot is a **small, unambiguous task**: what
 changes, what must not, which seam method maps to which embedded-ABI op, and
 what is known to still be broken. Run it alongside the **Aura-side regeneration
-checklist** in `WHIPLASH_QUEUE.md:699-750` — that checklist's step 7 ("implement
+checklist** in `WHIPLASH_QUEUE.md:699-753` — that checklist's step 7 ("implement
 the factory over the embedded transport … then flip the parity suite from the
 fake factory to the real one") *is* this section. Do steps 1–6 there first — the
-ABI pin, the schema sync, the `eval/js/worker-protocol.ts` control/execution
-split, and the new-op routing plus output-pump loop in
-`src/runtime/embedded/worker-core.ts` (step 6) are prerequisites, not part of
-this seam and not counted against its four files.
+ABI pin, the schema sync, the
+`packages/coding-agent/src/runtime/embedded/worker-protocol.ts` control/execution
+split (`ExecutionWorkerRequest:8` / `ControlWorkerRequest:16` — **not**
+`src/eval/js/worker-protocol.ts`, which has no execution/control split and is
+upstream code this milestone does not edit), and the new-op routing plus
+output-pump loop in `src/runtime/embedded/worker-core.ts` (step 6) are
+prerequisites, not part of this seam and not counted against its four files.
 
 Code paths below are `packages/coding-agent`-relative unless fully qualified;
 sibling docs live in `docs/aura/`.

@@ -233,6 +233,15 @@ Run one configuration per process, and prefer absolute embedded times over
 process-relative ratios — the process baseline moves whenever `bin/elide` is
 rebuilt, which is what made the JIT-off ratios unusable above.
 
+Two preflight behaviors to expect. The runtime arm now **hard-fails** its
+preflight when the runtime artifacts are unreachable, rather than quietly
+measuring the bash fallback — pass `--allow-missing-runtime` to downgrade that
+abort to a warning, and only when bash fallback is what you meant to measure.
+The micro phase likewise requires a runtime already resolvable on the host and
+never auto-downloads one (a fetched release would report numbers for a
+different binary than the agent arms measure), so pass `--embedded-lib` to point
+it at the packaged binary under test.
+
 ## Phase 0 — Make the runtime arm measurable (prerequisite, COMPLETE)
 
 ### 0.1 Answer to "what path do I pass to `--embedded-lib`?"
