@@ -98,7 +98,7 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 			target.send(msg);
 		} catch (error) {
 			emitError(
-				new Error(`Elide JS kernel ${label} rejected a ${msg.type} message: ${asError(error).message}`, {
+				new Error(`Runtime JS kernel ${label} rejected a ${msg.type} message: ${asError(error).message}`, {
 					cause: error,
 				}),
 			);
@@ -113,7 +113,7 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 		} catch (error) {
 			openFailed = true;
 			queuedInbound.length = 0;
-			emitError(new Error(`Elide JS kernel ${label} failed to open: ${asError(error).message}`, { cause: error }));
+			emitError(new Error(`Runtime JS kernel ${label} failed to open: ${asError(error).message}`, { cause: error }));
 			return;
 		}
 		if (disposed) {
@@ -140,7 +140,7 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 			openFailed = true;
 			queuedInbound.length = 0;
 			emitError(
-				new Error(`Elide JS kernel ${label} failed to attach listeners: ${asError(error).message}`, {
+				new Error(`Runtime JS kernel ${label} failed to attach listeners: ${asError(error).message}`, {
 					cause: error,
 				}),
 			);
@@ -184,7 +184,7 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 		await withTimeout(
 			opening,
 			elideWorkerCloseTimeoutMs,
-			`Elide JS kernel ${label} was still opening at teardown`,
+			`Runtime JS kernel ${label} was still opening at teardown`,
 		).catch(() => {});
 	};
 

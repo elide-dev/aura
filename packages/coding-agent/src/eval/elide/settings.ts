@@ -19,6 +19,13 @@ import type { ToolSession } from "../../tools";
  */
 export type JsEvalEngine = "bun" | "runtime";
 
+/** The accepted engine values, named once so the two validators cannot drift. */
+const JS_EVAL_ENGINES: readonly string[] = ["bun", "runtime"];
+
+function isJsEvalEngine(value: string): value is JsEvalEngine {
+	return JS_EVAL_ENGINES.includes(value);
+}
+
 /**
  * Apply the `AURA_EVAL_JS_ENGINE` override to a configured engine. Empty or
  * whitespace-only values are ignored; an unrecognized value throws.
@@ -29,11 +36,31 @@ export function jsEvalEngineFromEnvironment(
 ): JsEvalEngine {
 	const value = env.AURA_EVAL_JS_ENGINE?.trim();
 	if (!value) return configured;
-	if (value === "bun" || value === "runtime") return value;
+	if (isJsEvalEngine(value)) return value;
 	throw new Error(`AURA_EVAL_JS_ENGINE must be bun or runtime; received ${JSON.stringify(value)}.`);
 }
 
-/** Resolve the JavaScript eval engine for a session: setting, then env override. */
+/**
+ * Validate a stored `eval.jsEngine` value. Nothing between the settings document
+ * and here checks the enum — `settings.get` hands back whatever the YAML said —
+ * so an unrecognized value would otherwise miss the `runtime` branch in
+ * `resolveBackend` and run every cell on Bun with no notice at all, silently
+ * ignoring a setting the docs promise is an error. Unset means the default.
+ */
+function jsEvalEngineFromSetting(configured: string | undefined): JsEvalEngine {
+	const value = configured?.trim();
+	if (!value) return "bun";
+	if (isJsEvalEngine(value)) return value;
+	throw new Error(`eval.jsEngine must be bun or runtime; received ${JSON.stringify(value)}.`);
+}
+
+/**
+ * Resolve the JavaScript eval engine for a session: setting, then env override.
+ * Both inputs are validated, and the stored value is validated first so a
+ * malformed setting is reported even when the override would have replaced it —
+ * the config is still wrong, and the next process without the override runs on
+ * it.
+ */
 export function resolveJsEvalEngine(session: Pick<ToolSession, "settings">): JsEvalEngine {
-	return jsEvalEngineFromEnvironment(session.settings.get("eval.jsEngine") ?? "bun");
+	return jsEvalEngineFromEnvironment(jsEvalEngineFromSetting(session.settings.get("eval.jsEngine")));
 }

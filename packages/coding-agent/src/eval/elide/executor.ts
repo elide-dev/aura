@@ -96,7 +96,8 @@ export async function executeElideJs(code: string, options: JsExecutorOptions): 
 			spawnWorker: () => {
 				const factory = getElideJsKernelFactory();
 				if (!factory) {
-					throw new Error("No Elide JS kernel is installed; cannot run this cell on the Elide engine.");
+					// Reaches the model as a cell failure, so it names "the runtime".
+					throw new Error("No runtime JS kernel is installed; cannot run this cell on the runtime engine.");
 				}
 				return spawnElideWorker(factory, { cwd, sessionId: options.sessionId });
 			},
