@@ -727,8 +727,10 @@ decisions.
 6. **`embedded/worker-core.ts`** — route the new ops and add the output-pump
    loop in the control worker.
 7. **`eval/elide/kernel.ts`** — implement the factory over the embedded
-   transport (the ≤ 4 production files scoped in T3.6), then flip the parity
-   suite from the fake factory to the real one.
+   transport, then flip the parity suite from the fake factory to the real one.
+   The ≤ 4 files this touches, the seam-method↔ABI-op map, the `open()` contract,
+   and the open design call on the install site are all enumerated in
+   `ELIDE_ALIGNMENT.md` § "Wiring checklist (when Tier 2 lands)".
 8. **Tests** — extend `runtime-embedded-{abi,codec,worker,integration}` with:
    state persistence across evals, reset, interrupt-vs-cancel, streaming order,
    and two live contexts.

@@ -304,25 +304,59 @@ and it is what holds the backend's `isAvailable()` false
 This section exists so filling that slot is a **small, unambiguous task**: what
 changes, what must not, which seam method maps to which embedded-ABI op, and
 what is known to still be broken. Run it alongside the **Aura-side regeneration
-checklist** in `WHIPLASH_QUEUE.md:699-748` — that checklist's step 7 ("implement
+checklist** in `WHIPLASH_QUEUE.md:699-750` — that checklist's step 7 ("implement
 the factory over the embedded transport … then flip the parity suite from the
-fake factory to the real one") *is* this section. Do steps 1–6 there first; the
-ABI pin, the schema sync, and the worker-protocol split are prerequisites, not
-part of this seam.
+fake factory to the real one") *is* this section. Do steps 1–6 there first — the
+ABI pin, the schema sync, the `eval/js/worker-protocol.ts` control/execution
+split, and the new-op routing plus output-pump loop in
+`src/runtime/embedded/worker-core.ts` (step 6) are prerequisites, not part of
+this seam and not counted against its four files.
 
-Paths below are relative to the repo root.
+Code paths below are `packages/coding-agent`-relative unless fully qualified;
+sibling docs live in `docs/aura/`.
 
 ### Changes — four files, three of them code
 
 | # | File | Change |
 |---|---|---|
-| 1 | `packages/coding-agent/src/eval/elide/kernel-embedded.ts` (**new**) | The real `ElideJsKernelFactory` over the embedded transport, per the method↔ask map below. This is the only file with new logic. |
-| 2 | `packages/coding-agent/src/runtime/index.ts` — `getOrCreateRuntimeService` (`:58`) | **One** `setElideJsKernelFactory(...)` call when a runtime service is constructed, and the matching `setElideJsKernelFactory(undefined)` on the retirement path (`retireRuntimeService`, `:162`) so a disposed service does not leave a dead factory installed. Import lazily — `src/eval/elide/*` is deliberately outside the `eval` barrel so a default session never loads it (`src/eval/elide/index.ts:15-17`). |
-| 3 | `packages/coding-agent/src/eval/elide/guest-entry.ts` (**new**) — the guest-side analogue of `src/eval/js/worker-entry.ts` | Evaluate the `WorkerCore` + prelude bundle **once per persistent context**, right after `contextOpen`, so the context speaks `WorkerInbound`/`WorkerOutbound` from its first cell. Same 37-line shape as `worker-entry.ts`: build a `Transport` over the ABI in place of `parentPort`, then `new WorkerCore(transport, { mode: "isolated" })`. Its `Transport` is where guest→host tool calls resolve, and there are two shapes — take the first. **(v1) HTTP-loopback tool bridge**: zero Elide work, Aura's existing `ensurePyToolBridge` pattern (`src/eval/py/tool-bridge.ts:156`), Elide's JS has `fetch` (`WHIPLASH_QUEUE.md:85`, decision 5). **(v2) in-guest host-call pump** over `hostCallPoll`/`hostCallResolve`: the ops ship in the ABI but return `unsupportedOperation` until Tier 2.2 (item L, `WHIPLASH_QUEUE.md:585`). Writing v1 behind the `Transport` keeps the v2 switch inside this one file. |
+| 1 | `src/eval/elide/kernel-embedded.ts` (**new**; name proposed) | The real `ElideJsKernelFactory` over the embedded transport, per the method↔ask map below. This and row 3 are the only new code; rows 2 and 4 are a call site and a doc line. |
+| 2 | Install site for **one** `setElideJsKernelFactory(...)` — **DESIGN CALL, unresolved; see the note below.** Candidate: `src/runtime/index.ts` `getOrCreateRuntimeService` (`:58`) | Wherever it lands, import lazily — `src/eval/elide/*` is deliberately outside the `eval` barrel so a default session never loads it (`src/eval/elide/index.ts:15-17`). |
+| 3 | `src/eval/elide/guest-entry.ts` (**new**; name proposed) — the guest-side analogue of `src/eval/js/worker-entry.ts` | Evaluate the `WorkerCore` + prelude bundle **once per persistent context**, right after `contextOpen`, so the context speaks `WorkerInbound`/`WorkerOutbound` from its first cell. Same 37-line shape as `worker-entry.ts`: build a `Transport` over the ABI in place of `parentPort`, then `new WorkerCore(transport, { mode: "isolated" })`. Its `Transport` is where guest→host tool calls resolve, and there are two shapes — take the first. **(v1) HTTP-loopback tool bridge**: zero Elide work, Aura's existing `ensurePyToolBridge` pattern (`src/eval/py/tool-bridge.ts:156`), Elide's JS has `fetch` (`WHIPLASH_QUEUE.md:85`, decision 5). **(v2) in-guest host-call pump** over `hostCallPoll`/`hostCallResolve`: the ops ship in the ABI but return `unsupportedOperation` until Tier 2.2 (item L, `WHIPLASH_QUEUE.md:585`). Writing v1 behind the `Transport` keeps the v2 switch inside this one file. |
 | 4 | `docs/settings.md:622` (doc, not code) | The `eval.jsEngine` row names `elide` as a selectable value but says nothing about whether a kernel exists to serve it — today selecting it silently falls back to Bun with a notice. When a kernel lands, record that `elide` is functional. The settings **schema** (`packages/coding-agent/src/config/settings-schema.ts:3680-3698`) already carries engine-neutral option descriptions and needs no change, which is what keeps this row's cost to one doc line. |
 
-Nothing else is in scope. If the diff reaches a fifth code file, something in the
-scaffold was wrong and should be fixed rather than worked around.
+Nothing else is in scope. Once queue steps 1–6 have landed, a diff that reaches a
+fifth code file means something in the scaffold was wrong and should be fixed
+rather than worked around.
+
+#### Row 2 is an unresolved design call, not a prescription
+
+**No test pins the install site today, and the obvious one does not typecheck as
+a semantic.** The factory slot is **process-wide** — `let kernelFactory` is a
+module-level binding in `src/eval/elide/kernel.ts:64` — while
+`getOrCreateRuntimeService` is **per-scope**: it keys its state on a `scope`
+object (`src/runtime/index.ts:58-73`), and `sdk.ts:1307` mints a fresh
+`RuntimeServiceScope` per session, handing it in at `:1767`. Installing a
+process-wide slot from a per-scope hook has three concrete failure modes:
+
+1. **Last install wins.** Two live sessions → two scopes → two services, one
+   slot. The second session's factory silently serves the first session's evals.
+2. **Any one retirement clears the shared slot.** `retireRuntimeService` fires on
+   settings change (`:71`), scope disposal (`drainRuntimeServiceScope`, `:189`),
+   and test reset (`resetRuntimeServiceForTests`, `:257`). A clear-on-retire hook
+   flips `isAvailable()` false for a *healthy sibling session* that never asked
+   for anything.
+3. **A settings rekey can clear the slot the replacement just filled.** At `:71`
+   the retire is `void`-async and runs *after* `onCreate` has already published
+   the replacement, so the retirement's clear lands on the new factory.
+
+The wiring task must therefore pick one of three, deliberately:
+
+- make the factory slot **scope-aware** (keyed the way the service cache is), or
+- **install once, process-wide, idempotently** — no clear-on-retire at all, or
+- pick a **process-lifetime install site** instead of a per-scope hook.
+
+Whichever is chosen, land a test with it: nothing in the repo constrains this
+today, which is exactly how the wrong shape would ship green.
 
 ### `open()` contract — the one thing a real kernel can get silently wrong
 
@@ -352,11 +386,12 @@ existing JS worker protocol plus three lifecycle asks. Each maps to one Tier 2 o
 
 | Seam method | Embedded-ABI op | Notes |
 |---|---|---|
-| `factory.open(opts)` | `contextOpen(EmbeddedContextSpec)` | `languages = [js, ts]`, `primaryLanguage = js`, `allowThreads = false` (rejected for JS/TS anyway — `WHIPLASH_QUEUE.md:125-127`), `streamOutput = true`, `workingDir = opts.cwd`, `label = opts.sessionId`. Fresh context per call — see the contract above. |
+| `factory.open(opts)` | `contextOpen(EmbeddedContextSpec)` | `languages = [js, ts]`, `primaryLanguage = js`, `allowThreads = false` (rejected for JS/TS anyway — `WHIPLASH_QUEUE.md:125-127`), `streamOutput = true`, `workingDir = opts.cwd`, `label = opts.sessionId`. `hostCalls = false` for v1 — it returns `unsupportedOperation` until Tier 2.2, so the loopback bridge does not depend on it. Fresh context per call — see the contract above. |
 | `send(msg)` for a `run` | `contextCall` | Execution worker. Serialized per context; a second concurrent eval returns `busy` (decision 9). |
 | `onMessage(text/display)` | `pollOutput` pump | Control worker, driven as a loop; the transport's incremental chunks become the `text`/`display` outbounds `OutputSink` already consumes. |
 | `interrupt()` | `interrupt(timeoutMillis)` | Rung 1 of the cancellation ladder: context and guest state survive. |
 | `reset()` | `reset` (close + rebuild from the same `ElideRuntime`) | Guest state gone, engine warmth kept — costs exactly one of today's per-call context builds (decision 4). |
+| *(none)* | `cancel` | No seam method. Rung 2 of the ladder (`close(true)` + rebuild) is **host policy**, and today the host escalates by terminating the worker instead — leave it unwired unless a caller appears. |
 | `close()` | `contextClose` | Must resolve only after the context is deregistered; a `pollOutput` parked at close is woken and returns `closed` (`WHIPLASH_QUEUE.md:431`). |
 | Tool calls (guest→host) | HTTP loopback (v1) / `hostCallPoll` + `hostCallResolve` (v2) | Decision 5. v2's ops return `unsupportedOperation` until Tier 2.2. |
 
