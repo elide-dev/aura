@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BUILTIN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
 
 // Every shipped built-in tool that is exposed to the model in normal sessions
 // must have a docs/tools/<name>.md root doc served by `omp://`. File names use
@@ -41,7 +41,9 @@ describe("omp:// root docs coverage", () => {
 	// `docs/tools/jvm_run.md` outlived `jvm_run`). Deleting a tool must delete
 	// its page in the same commit.
 	it("has no docs/tools page for a tool that does not exist", () => {
-		const documented = new Set<string>([...BUILTIN_TOOL_NAMES, ...CUSTOM_TOOL_NAMES]);
+		// Hidden built-ins (`yield`, `goal`) are constructible and `--tools`-addressable,
+		// so a page for one is legitimate even though the forward cases never require it.
+		const documented = new Set<string>([...BUILTIN_TOOL_NAMES, ...HIDDEN_TOOL_NAMES, ...CUSTOM_TOOL_NAMES]);
 		const orphans = fs
 			.readdirSync(docsToolsDir)
 			.filter(entry => entry.endsWith(".md"))

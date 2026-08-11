@@ -3,9 +3,8 @@
 > **HISTORICAL SNAPSHOT — do not build against the tool names in this file.**
 > Written 2026-07-27, when the fork's model surface still carried `run`,
 > `check`, and `jvm_run`. All three are gone: `jvm_run` folded into `run`, and
-> `run`/`check` were retired outright on 2026-08-11 (`0e7871de4`,
-> `3dbf7bca6`) in favor of upstream `eval` for code execution and `bash` for the
-> shell. The surviving fork tools are `insights`, `profile`, `serve`, and the
+> `run`/`check` were retired outright on 2026-08-11 (`0e7871de4`) in favor of
+> upstream `eval` for code execution and `bash` for the shell. The surviving fork tools are `insights`, `profile`, `serve`, and the
 > four `jvm_*` analysis tools. Every recommendation below that names `run` or
 > `check` — the bash-interceptor rules in §"Bash interception", the renderer
 > notes at the end — is superseded by `docs/aura/ELIDE_ALIGNMENT.md` and

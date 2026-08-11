@@ -482,7 +482,7 @@ These affect where coding-agent stores data and which process-local settings ove
 | `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | On macOS/Linux, redirect corresponding OMP paths only when the target `omp` root (or named-profile root) already exists    |
 | `PWD`                                               | Used when matching canonical current working directory in path helpers                                                     |
 
-**Pre-rebrand `.omp` directories.** Aura's config root is `.aura`; `.omp` was its name before the rename. Nothing is ever written into a `.omp` directory. Project-level `<cwd>/.omp` is still read for a narrow set of surfaces (see [Settings](./settings.md#where-settings-live) and [Context files](./context-files.md)); user-level `~/.omp` is on no read path at all — set `PI_CONFIG_DIR=.omp` to point the config root back at it.
+**Pre-rebrand `.omp` directories.** Aura's config root is `.aura`; `.omp` was its name before the rename. Nothing is ever written into a `.omp` directory. Project-level `<cwd>/.omp` is still read for a narrow set of surfaces (see [Settings](./settings.md#where-settings-live) and [Context files](./context-files.md#pre-rebrand-omp-directories)); user-level `~/.omp` is on no read path at all — set `PI_CONFIG_DIR=.omp` to point the config root back at it.
 
 ---
 

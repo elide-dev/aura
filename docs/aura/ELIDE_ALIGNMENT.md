@@ -2,9 +2,9 @@
 
 Status: proposal. Written 2026-08-10 after the post-merge runtime benchmark and
 two rounds of engine measurement. Amended 2026-08-11: `run` and `check` are
-**retired** from the model surface (`0e7871de4`, `3dbf7bca6`), so "What must
-stay fork-owned", Seam 3, and the M4 outline now describe a seven-tool fork
-surface with `eval` as the single code-execution tool.
+**retired** from the model surface (`0e7871de4`), so "What must stay
+fork-owned", Seam 3, and the M4 outline now describe a seven-tool fork surface
+with `eval` as the single code-execution tool.
 
 Companions: `ACTIONS_CONSOLIDATE.md` (the tool-surface plan),
 `WHIPLASH_ENGINE_BRIEF.md` (the Elide-side ask), `FORK.md` (fork inventory),
@@ -68,7 +68,7 @@ which is a recurring merge-conflict site (this merge hit `sdk.ts`,
 ## What must stay fork-owned
 
 **Code execution is not on this list.** `run` and `check` were retired from the
-model surface (commits `0e7871de4`, `3dbf7bca6`); upstream `eval` owns code
+model surface (`0e7871de4`); upstream `eval` owns code
 execution semantics and `bash` owns the shell. Earlier drafts of this section
 argued the opposite — that `run`'s one-shot/file/argv shape was genuinely absent
 upstream and had to stay — and that argument is superseded twice over:

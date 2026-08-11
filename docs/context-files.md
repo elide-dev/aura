@@ -15,40 +15,49 @@ Four similarly named things behave differently. Keep them straight:
 
 Authoring **skills** and **rule** files (as opposed to the sticky `RULES.md`) is covered in [Skills](./skills.md). Customizing the system prompt with `SYSTEM.md` is covered in [System prompt customization](./system-prompt-customization.md).
 
-## Native `.omp` files
+## Native `.aura` files
 
-The native provider is the recommended format for new projects. It reads from your user agent directory and from `.omp/` directories inside a project, and it has the highest discovery priority, so its files win over every other convention at the same scope.
+The native provider is the recommended format for new projects. It reads from your user agent directory and from `.aura/` directories inside a project, and it has the highest discovery priority, so its files win over every other convention at the same scope.
 
 | File                                          | Scope   | Behavior                                                                                                                                                                                                                                             |
 | --------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.omp/agent/AGENTS.md`                      | User    | User-level context for every session unless the `native` provider is disabled.                                                                                                                                                                       |
-| `<nearest-non-empty-ancestor>/.omp/AGENTS.md` | Project | Project context, but only when `AGENTS.md` exists in the **nearest non-empty `.omp/` directory** found while walking from cwd toward the repository root. OMP does not continue to a farther `.omp/` directory when the nearest one lacks this file. |
-| `~/.omp/agent/RULES.md`                       | User    | User-level sticky rule content. Loaded as an always-apply rule, not as a context file.                                                                                                                                                               |
-| `<nearest-non-empty-ancestor>/.omp/RULES.md`  | Project | Project sticky content, but only when `RULES.md` exists in the same nearest non-empty `.omp/` directory selected by the walk.                                                                                                                        |
+| `~/.aura/agent/AGENTS.md`                      | User    | User-level context for every session unless the `native` provider is disabled.                                                                                                                                                                       |
+| `<nearest-non-empty-ancestor>/.aura/AGENTS.md` | Project | Project context, but only when `AGENTS.md` exists in the **nearest non-empty `.aura/` directory** found while walking from cwd toward the repository root. Discovery does not continue to a farther `.aura/` directory when the nearest one lacks this file. |
+| `~/.aura/agent/RULES.md`                       | User    | User-level sticky rule content. Loaded as an always-apply rule, not as a context file.                                                                                                                                                               |
+| `<nearest-non-empty-ancestor>/.aura/RULES.md`  | Project | Project sticky content, but only when `RULES.md` exists in the same nearest non-empty `.aura/` directory selected by the walk.                                                                                                                        |
 
 Two details matter:
 
-- **The nearest non-empty `.omp/` directory owns native project discovery.** Discovery starts in the current working directory and climbs toward the repository root. Once it finds a non-empty `.omp/`, it stops; native `AGENTS.md` and `RULES.md` are each read from that directory only. A missing file does not make discovery continue upward.
-- **Empty directories and files contribute nothing.** An empty `.omp/` directory is skipped during the walk. In the selected non-empty directory, an empty `AGENTS.md` or `RULES.md` contributes nothing.
+- **The nearest non-empty `.aura/` directory owns native project discovery.** Discovery starts in the current working directory and climbs toward the repository root. Once it finds a non-empty `.aura/`, it stops; native `AGENTS.md` and `RULES.md` are each read from that directory only. A missing file does not make discovery continue upward.
+- **Empty directories and files contribute nothing.** An empty `.aura/` directory is skipped during the walk. In the selected non-empty directory, an empty `AGENTS.md` or `RULES.md` contributes nothing.
 
-`~/.omp/agent` is shorthand for the active native agent directory. `PI_CODING_AGENT_DIR` relocates it. A named profile (`omp --profile <name>`, `OMP_PROFILE`, or `PI_PROFILE`) uses `~/.omp/profiles/<name>/agent` by default; external-tool user bases such as `~/.claude` are not profile-scoped.
+`~/.aura/agent` is shorthand for the active native agent directory. `PI_CODING_AGENT_DIR` relocates it. A named profile (`aura --profile <name>`, or the `AURA_PROFILE` environment variable — `OMP_PROFILE` and `PI_PROFILE` are legacy aliases consulted in that order) uses `~/.aura/profiles/<name>/agent` by default; external-tool user bases such as `~/.claude` are not profile-scoped.
+
+### Pre-rebrand `.omp` directories
+
+`.aura` is the native config directory; `.omp` was its name before the rename. A pre-rebrand **project** directory is still discovered, ranked directly below the branded one so `.aura` wins every conflict. **Nothing is ever written into a `.omp` directory.**
+
+- **It contributes the same surfaces as `.aura`, not just context files.** Alongside `AGENTS.md` / `RULES.md` / `SYSTEM.md`, the native provider loads a legacy `.omp/`'s `rules/`, `prompts/`, `agents/`, `skills/`, `commands/`, `extensions/`, `mcp.json` / `.mcp.json` servers, **`tools/*` custom tools, and `hooks/pre/*` + `hooks/post/*` — which auto-fire around tool calls with no approval prompt.** "Read-only" means nothing is written there; it does **not** mean the content is inert. That is deliberate — `.omp` is your own pre-rebrand config dir, carrying the same trust as `.aura` and as the `.claude` / `.codex` / `.gemini` bases whose hooks and tools are already loaded — but it is worth knowing before you leave a stale `.omp/` in a repository you did not write.
+- **Settings documents are the one exception.** A legacy `config.yml` / `settings.json` is never loaded wholesale; see [Settings](./settings.md#where-settings-live) for the two narrow slices that are read.
+- **For `AGENTS.md` / `RULES.md` / `SYSTEM.md` the probe is per *file*, branded first then legacy, at each ancestor.** Unrelated branded content (say a `.aura/rules/` directory) therefore never masks a legacy `.omp/AGENTS.md` — the incremental-adoption case the legacy base exists for. A legacy directory may *supply* the file but never *terminates* the walk: only a non-empty `.aura/` stops it, so a stale subpackage `.omp/` cannot suppress the repository's branded file.
+- **User level: nothing.** `~/.omp/agent` is on no read path at all. Set `PI_CONFIG_DIR=.omp` if you need pre-rebrand user-level files back.
 
 ### Monorepo example
 
 ```text
 repo/
-  .omp/
+  .aura/
     AGENTS.md
     RULES.md
   packages/api/
-    .omp/
+    .aura/
       AGENTS.md
 ```
 
 Starting a session in `repo/packages/api`:
 
-- The native context file is `repo/packages/api/.omp/AGENTS.md` (the nearest one). `repo/.omp/AGENTS.md` is **not** also included.
-- Because `repo/packages/api/.omp/` is the nearest non-empty native directory, project sticky content can only come from `repo/packages/api/.omp/RULES.md`. If that file is absent, `repo/.omp/RULES.md` is **not** used.
+- The native context file is `repo/packages/api/.aura/AGENTS.md` (the nearest one). `repo/.aura/AGENTS.md` is **not** also included.
+- Because `repo/packages/api/.aura/` is the nearest non-empty native directory, project sticky content can only come from `repo/packages/api/.aura/RULES.md`. If that file is absent, `repo/.aura/RULES.md` is **not** used.
 
 Put broad, durable project background in `AGENTS.md`. Reserve `RULES.md` for short, hard requirements that must stay visible across long conversations.
 
@@ -58,7 +67,7 @@ Put broad, durable project background in `AGENTS.md`. Reserve `RULES.md` for sho
 
 | Provider id | Convention path                             | Scope          | Notes                                                                                                                                                                                                                                                                                                                                                        |
 | ----------- | ------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `native`    | `.omp/AGENTS.md`                            | User + project | Recommended OMP format. User file in the active native agent directory; project file is read only from the nearest non-empty `.omp/` directory walking toward the repo root.                                                                                                                                                                                 |
+| `native`    | `.aura/AGENTS.md`                            | User + project | Recommended Aura format. User file in the active native agent directory; project file is read only from the nearest non-empty `.aura/` directory walking toward the repo root.                                                                                                                                                                                 |
 | `claude`    | `.claude/CLAUDE.md`                         | User + project | User file `~/.claude/CLAUDE.md`; project file `<cwd>/.claude/CLAUDE.md` only (no ancestor walk-up).                                                                                                                                                                                                                                                          |
 | `codex`     | `.codex/AGENTS.md`                          | User           | User file `~/.codex/AGENTS.md` only. Project-level Codex context comes from a standalone `AGENTS.md` via the `agents-md` provider, not from `<cwd>/.codex/AGENTS.md`.                                                                                                                                                                                        |
 | `gemini`    | `.gemini/GEMINI.md`                         | User + project | User file `~/.gemini/GEMINI.md`; project file `<cwd>/.gemini/GEMINI.md` only (no ancestor walk-up).                                                                                                                                                                                                                                                          |
@@ -68,7 +77,7 @@ Put broad, durable project background in `AGENTS.md`. Reserve `RULES.md` for sho
 | `agents-md` | `AGENTS.md`                                 | Project        | Standalone (non-config-directory) `AGENTS.md` files, discovered by walking up from the current directory to the repository root (or home when no repo root is known). Files whose parent directory name starts with `.` are ignored — those belong to a config-directory provider instead.                                                                   |
 | `github`    | `.github/instructions/**/*.instructions.md` | Project rules  | GitHub Copilot / VS Code instruction files become rules. `applyTo: '*'`, `applyTo: '**'`, or `applyTo: '**/*'` is injected as always-apply content; other `applyTo` globs are listed in the rulebook with a generated description when needed and are readable as `rule://<name>`. Missing `applyTo` also produces a rulebook entry and a discovery warning. |
 
-Providers marked "(no ancestor walk-up)" only look in the current working directory's config directory. If you need ancestor walk-up behavior, prefer the native `.omp/AGENTS.md` format or a standalone `AGENTS.md` (the `agents-md` provider), or launch `omp` from the directory that holds the config directory.
+Providers marked "(no ancestor walk-up)" only look in the current working directory's config directory. If you need ancestor walk-up behavior, prefer the native `.aura/AGENTS.md` format or a standalone `AGENTS.md` (the `agents-md` provider), or launch `omp` from the directory that holds the config directory.
 
 ## Load order and shadowing
 
@@ -86,7 +95,7 @@ When two providers describe the _same_ scope, the higher-priority provider wins.
 
 Discovered files are then deduplicated by scope:
 
-- **One user context file** is kept across all providers. Because `native` has the highest priority, `~/.omp/agent/AGENTS.md` shadows every other user-level context file.
+- **One user context file** is kept across all providers. Because `native` has the highest priority, `~/.aura/agent/AGENTS.md` shadows every other user-level context file.
 - **One project context file per directory depth.** Depth is measured from the current directory: the cwd is depth 0, its parent depth 1, and so on. Config subdirectories of an ancestor (`.claude/`, `.github/`, `.gemini/`, …) count as the same depth as that ancestor.
 - **At the same depth, the higher-priority provider shadows the rest.**
 - **Across depths, multiple files survive.** In a monorepo, an ancestor `AGENTS.md` and a package-level one are different depths and both load.
@@ -109,7 +118,7 @@ Starting in `repo/packages/api`:
 - `repo/AGENTS.md` is found by `agents-md` at depth 2 and kept.
 - `repo/packages/api/AGENTS.md` (`agents-md`, priority 10) and `repo/packages/api/.github/copilot-instructions.md` (`github`, priority 30) both resolve to depth 0. GitHub's higher priority shadows the package-level standalone `AGENTS.md`, so the Copilot file wins at that depth.
 - The two kept files are ordered root-first, package-last, so `packages/api`'s file is the more prominent one.
-- If you add `repo/packages/api/.omp/AGENTS.md`, `native` (priority 100) wins depth 0 outright, shadowing both lower-priority files.
+- If you add `repo/packages/api/.aura/AGENTS.md`, `native` (priority 100) wins depth 0 outright, shadowing both lower-priority files.
 
 ## Injection behavior
 
@@ -162,7 +171,7 @@ Use a normal context file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copil
 Use a top-level **`RULES.md`** for the handful of hard requirements that must stay active even after a long conversation has pushed the opening context far up the transcript:
 
 ```markdown
-# ~/.omp/agent/RULES.md
+# ~/.aura/agent/RULES.md
 
 Never commit or push unless the user explicitly asks.
 Do not edit generated files.
@@ -170,19 +179,19 @@ Do not edit generated files.
 
 `RULES.md` is special:
 
-- It is read **only** at native locations: the active user agent directory and the nearest non-empty project `.omp/` directory selected by the cwd-to-repository-root walk. If that project directory has no `RULES.md`, OMP does not fall back to a farther `.omp/RULES.md`.
+- It is read **only** at native locations: the active user agent directory and the nearest non-empty project `.aura/` directory selected by the cwd-to-repository-root walk. If that project directory has no `RULES.md`, discovery does not fall back to a farther `.aura/RULES.md`.
 - It is loaded as an **always-apply rule**, not as a context file, so it is re-attached near the current turn and keeps its hold across long sessions.
 - It is **always sticky**: frontmatter cannot make it non-sticky. If you want conditional or opt-in behavior, write a normal rule file instead (see [Skills](./skills.md)).
-- Both top-level candidates are synthesized with the rule name `RULES`, and rule deduplication is name-based. In the usual case, a user `RULES.md` shadows the project `RULES.md`; they are not concatenated. Avoid naming a regular file under `.omp/rules/` or the user `rules/` directory `RULES.md`, because native regular rules load earlier and can shadow both sticky candidates.
+- Both top-level candidates are synthesized with the rule name `RULES`, and rule deduplication is name-based. In the usual case, a user `RULES.md` shadows the project `RULES.md`; they are not concatenated. Avoid naming a regular file under `.aura/rules/` or the user `rules/` directory `RULES.md`, because native regular rules load earlier and can shadow both sticky candidates.
 
 Keep `RULES.md` short. Long background belongs in `AGENTS.md`, where it costs context budget only once.
 
 ## Disabling discovery providers
 
-Turn a provider off with the `disabledProviders` setting in `~/.omp/agent/config.yml`, a project's `.omp/config.yml`, or a `--config` overlay:
+Turn a provider off with the `disabledProviders` setting in `~/.aura/agent/config.yml`, a project's `.aura/config.yml`, or a `--config` overlay:
 
 ```yaml
-# .omp/config.yml
+# .aura/config.yml
 disabledProviders:
   - claude
   - github
@@ -215,7 +224,7 @@ Remember that higher-precedence settings layers **replace** array settings rathe
 
 ### A file is not loaded
 
-- Native project context is read only from the nearest non-empty `.omp/` directory. That directory must contain a non-empty `AGENTS.md`; if it does not, discovery does not continue to a farther native directory.
+- Native project context is read only from the nearest non-empty `.aura/` directory. That directory must contain a non-empty `AGENTS.md`; if it does not, discovery does not continue to a farther native directory.
 - A standalone `AGENTS.md` is handled by `agents-md`, not `native`.
 - `.claude/CLAUDE.md`, `.gemini/GEMINI.md`, and `.github/copilot-instructions.md` are read only from the current working directory's config directory — not from every ancestor.
 - `~/.codex/AGENTS.md` and `~/.config/opencode/AGENTS.md` are user-level only and have no project equivalent.
@@ -224,15 +233,15 @@ Remember that higher-precedence settings layers **replace** array settings rathe
 
 ### The wrong file wins
 
-At one user scope or project depth, the higher-priority provider shadows the others (native > claude > agents/codex > gemini > opencode > github > agents-md). To force deterministic behavior, move your guidance into `.omp/AGENTS.md` (native always wins) or disable the competing discovery provider.
+At one user scope or project depth, the higher-priority provider shadows the others (native > claude > agents/codex > gemini > opencode > github > agents-md). To force deterministic behavior, move your guidance into `.aura/AGENTS.md` (native always wins) or disable the competing discovery provider.
 
 ### User context disappeared
 
-Only one user-level context file survives, and `~/.omp/agent/AGENTS.md` has the highest priority. If it exists, it shadows user-level `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`, `~/.copilot/copilot-instructions.md`, and `~/.agent`/`~/.agents` files. Consolidate user guidance into the native file or remove the native one if you prefer another tool's file.
+Only one user-level context file survives, and `~/.aura/agent/AGENTS.md` has the highest priority. If it exists, it shadows user-level `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`, `~/.copilot/copilot-instructions.md`, and `~/.agent`/`~/.agents` files. Consolidate user guidance into the native file or remove the native one if you prefer another tool's file.
 
 ### A `RULES.md` file is ignored
 
-Only native `RULES.md` locations are sticky: the active user agent directory and the nearest non-empty project `.omp/` directory selected from cwd toward the repo root. If a nearer non-empty `.omp/` directory exists, it blocks farther native directories even when it has no `RULES.md`. A `RULES.md` anywhere else is not a recognized convention.
+Only native `RULES.md` locations are sticky: the active user agent directory and the nearest non-empty project `.aura/` directory selected from cwd toward the repo root. If a nearer non-empty `.aura/` directory exists, it blocks farther native directories even when it has no `RULES.md`. A `RULES.md` anywhere else is not a recognized convention.
 
 ### An `@` import did not expand
 

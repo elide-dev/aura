@@ -7,7 +7,7 @@ anything downstream, and its findings still stand.
 > **Phase 1's DIRECTION IS SUPERSEDED (2026-08-11).** This plan consolidated the
 > code-execution surfaces **onto `run`**. The consolidation happened in the
 > opposite direction: `run` and `check` were **retired** from the model surface
-> (`0e7871de4`, `3dbf7bca6`), and upstream **`eval` is the single code-execution
+> (`0e7871de4`, plus the `3dbf7bca6` follow-up that moved poisoned-service retirement into `callRuntime`), and upstream **`eval` is the single code-execution
 > tool** with `bash` owning the shell. Read Phase 1 below as a record of the
 > alternative that was considered and rejected, not as an instruction. Its
 > *invariants* survive the reversal and are the acceptance criteria for the
