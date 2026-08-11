@@ -290,6 +290,146 @@ reading of row 1:
    as the resulting tool set (with an `["eval"]` control arm proving the absence
    is real, not an environment artifact).
 
+## Wiring checklist (when Tier 2 lands)
+
+Sequencing step 3 has landed its **scaffold** (the measurement half waits on a
+real kernel): `eval/elide/` carries the backend, the executor, the
+`WorkerHandle` adapter, the engine setting, and an EMPTY kernel-factory slot,
+with the whole surface pinned by
+`packages/coding-agent/test/eval/elide/{elide-engine-parity,elide-worker,elide-backend-dispatch}.test.ts`.
+`getElideJsKernelFactory() === undefined` is the correct production state today,
+and it is what holds the backend's `isAvailable()` false
+(`packages/coding-agent/src/eval/elide/index.ts:48-50`).
+
+This section exists so filling that slot is a **small, unambiguous task**: what
+changes, what must not, which seam method maps to which embedded-ABI op, and
+what is known to still be broken. Run it alongside the **Aura-side regeneration
+checklist** in `WHIPLASH_QUEUE.md:699-748` — that checklist's step 7 ("implement
+the factory over the embedded transport … then flip the parity suite from the
+fake factory to the real one") *is* this section. Do steps 1–6 there first; the
+ABI pin, the schema sync, and the worker-protocol split are prerequisites, not
+part of this seam.
+
+Paths below are relative to the repo root.
+
+### Changes — four files, three of them code
+
+| # | File | Change |
+|---|---|---|
+| 1 | `packages/coding-agent/src/eval/elide/kernel-embedded.ts` (**new**) | The real `ElideJsKernelFactory` over the embedded transport, per the method↔ask map below. This is the only file with new logic. |
+| 2 | `packages/coding-agent/src/runtime/index.ts` — `getOrCreateRuntimeService` (`:58`) | **One** `setElideJsKernelFactory(...)` call when a runtime service is constructed, and the matching `setElideJsKernelFactory(undefined)` on the retirement path (`retireRuntimeService`, `:162`) so a disposed service does not leave a dead factory installed. Import lazily — `src/eval/elide/*` is deliberately outside the `eval` barrel so a default session never loads it (`src/eval/elide/index.ts:15-17`). |
+| 3 | `packages/coding-agent/src/eval/elide/guest-entry.ts` (**new**) — the guest-side analogue of `src/eval/js/worker-entry.ts` | Evaluate the `WorkerCore` + prelude bundle **once per persistent context**, right after `contextOpen`, so the context speaks `WorkerInbound`/`WorkerOutbound` from its first cell. Same 37-line shape as `worker-entry.ts`: build a `Transport` over the ABI in place of `parentPort`, then `new WorkerCore(transport, { mode: "isolated" })`. Its `Transport` is where guest→host tool calls resolve, and there are two shapes — take the first. **(v1) HTTP-loopback tool bridge**: zero Elide work, Aura's existing `ensurePyToolBridge` pattern (`src/eval/py/tool-bridge.ts:156`), Elide's JS has `fetch` (`WHIPLASH_QUEUE.md:85`, decision 5). **(v2) in-guest host-call pump** over `hostCallPoll`/`hostCallResolve`: the ops ship in the ABI but return `unsupportedOperation` until Tier 2.2 (item L, `WHIPLASH_QUEUE.md:585`). Writing v1 behind the `Transport` keeps the v2 switch inside this one file. |
+| 4 | `docs/settings.md:622` (doc, not code) | The `eval.jsEngine` row names `elide` as a selectable value but says nothing about whether a kernel exists to serve it — today selecting it silently falls back to Bun with a notice. When a kernel lands, record that `elide` is functional. The settings **schema** (`packages/coding-agent/src/config/settings-schema.ts:3680-3698`) already carries engine-neutral option descriptions and needs no change, which is what keeps this row's cost to one doc line. |
+
+Nothing else is in scope. If the diff reaches a fifth code file, something in the
+scaffold was wrong and should be fixed rather than worked around.
+
+### `open()` contract — the one thing a real kernel can get silently wrong
+
+**Every `factory.open()` call must return a fresh, isolated context, even for
+byte-identical options.** `sessionId` is a diagnostic **label**, not a dedup key.
+
+Owner-scoped reset forks a second context under the *same* kernel-facing session
+id: the fork key lives in host-side bookkeeping
+(`resolveOwnerScopedSessionKey`, `packages/coding-agent/src/eval/executor-base.ts`)
+and never reaches the factory, because `spawnElideWorker` passes only
+`{cwd, sessionId}` (`packages/coding-agent/src/eval/elide/worker.ts:112`). A
+kernel that keyed its context registry by `sessionId` would therefore hand a
+subagent's forked context back to the parent and silently merge two sessions'
+guest state — a privacy bug, not a performance one.
+
+This is pinned, not merely documented: the fork-privacy case asserts both opens
+carry one `sessionId`
+(`packages/coding-agent/test/eval/elide/elide-engine-parity.test.ts:299`) while
+the surrounding state assertions require the two contexts to stay private, so a
+dedup-by-`sessionId` kernel fails the suite loudly. The contract is also stated
+at the seam itself, on `ElideJsKernelFactory.open`.
+
+### Method↔ask map
+
+`ElideJsKernelSession` (`packages/coding-agent/src/eval/elide/kernel.ts`) is the
+existing JS worker protocol plus three lifecycle asks. Each maps to one Tier 2 op:
+
+| Seam method | Embedded-ABI op | Notes |
+|---|---|---|
+| `factory.open(opts)` | `contextOpen(EmbeddedContextSpec)` | `languages = [js, ts]`, `primaryLanguage = js`, `allowThreads = false` (rejected for JS/TS anyway — `WHIPLASH_QUEUE.md:125-127`), `streamOutput = true`, `workingDir = opts.cwd`, `label = opts.sessionId`. Fresh context per call — see the contract above. |
+| `send(msg)` for a `run` | `contextCall` | Execution worker. Serialized per context; a second concurrent eval returns `busy` (decision 9). |
+| `onMessage(text/display)` | `pollOutput` pump | Control worker, driven as a loop; the transport's incremental chunks become the `text`/`display` outbounds `OutputSink` already consumes. |
+| `interrupt()` | `interrupt(timeoutMillis)` | Rung 1 of the cancellation ladder: context and guest state survive. |
+| `reset()` | `reset` (close + rebuild from the same `ElideRuntime`) | Guest state gone, engine warmth kept — costs exactly one of today's per-call context builds (decision 4). |
+| `close()` | `contextClose` | Must resolve only after the context is deregistered; a `pollOutput` parked at close is woken and returns `closed` (`WHIPLASH_QUEUE.md:431`). |
+| Tool calls (guest→host) | HTTP loopback (v1) / `hostCallPoll` + `hostCallResolve` (v2) | Decision 5. v2's ops return `unsupportedOperation` until Tier 2.2. |
+
+The three asks beyond the worker protocol (`interrupt`/`reset`/`close`) have no
+host caller today — the stack cancels by terminating the worker and resets by
+cold-starting a context. The parity suite exercises them directly against the
+documented contract instead, so they are specified before they are used.
+
+### Cost of the swap: one factory line plus a counting decorator
+
+The parity suite is the acceptance gate, and it was written to survive this. Each
+case drives the production entry point (`executeElideJs`) over the shared eval
+stack, so swapping engines means changing the factory installed in `beforeEach` —
+**one line** — plus a thin counting wrapper around the real factory that exposes
+the fake's counter surface (`opens` / `closes` / `interrupts` / `resets` /
+`sessions`), which roughly 30 assertions read. Nothing in the suite's *assertions*
+should need editing; if one does, treat it as a real behavior difference and
+resolve it deliberately rather than relaxing the assertion.
+
+Two `TODO(m3)` markers are test **strengthenings** to land with the wiring —
+neither is a bug, and both only become possible once the guest has its own realm
+and a genuinely interruptible cell:
+
+1. `elide-engine-parity.test.ts:88` — revert the per-context state carrier from
+   the `__omp_helpers__.env` bag back to a plain `var shared = 41`, matching
+   `test/eval/kernel-owner-scoping.test.ts`. That observes the whole guest global
+   scope instead of one bag inside it, so it tests strictly more.
+2. `elide-engine-parity.test.ts:536` — re-point the interrupt case at a cell that
+   is actually in flight (park it with `createParkTool`, interrupt, assert the
+   cell settles *and* the context survives) instead of interrupting between
+   cells. The inline fake cannot be interrupted mid-cell; a real kernel can.
+
+### Does not change
+
+Naming these so the wiring diff stays reviewable:
+
+- **`packages/coding-agent/src/tools/eval.ts`** — final as of the env-error
+  boundary work. A malformed `AURA_EVAL_JS_ENGINE` surfaces as a `ToolError` at
+  `resolveBackend` (`:274-284`), and an engine request with no kernel installed
+  falls back to Bun with the "Elide JS engine unavailable" notice (`:285-292`).
+  A real factory changes which branch is taken at runtime, not the code.
+- **The wire schema and eval-render** — the Elide backend's `id` is `"js"`, so
+  the tool schema, details payload, and every renderer keep saying "js"
+  whichever engine ran the cell (`src/eval/elide/index.ts:37-40`).
+- **Disposal wiring** — owner-scoped teardown is engine-agnostic;
+  `disposeVmContextsByOwner` already reaps Elide contexts with no Elide-aware
+  code in the caller, and the parity suite pins it.
+- **The Bun executor** (`src/eval/js/executor.ts`) — the default path for every
+  user, deliberately untouched.
+- **The parity suite's assertions** — see above.
+
+### Known gaps to close before the engine defaults on
+
+1. **The tool prompt promises Bun globals.**
+   `packages/coding-agent/src/prompts/tools/eval.md:7` tells the model *"JS runs
+   under **Bun**: globals (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`)
+   available"*. On Elide that is at best partly true. Either make the line
+   engine-aware (the template already branches on `{{#if js}}`, so an `engine`
+   flag is the natural shape), or get Elide to document the shim subset it
+   guarantees. Shipping the current text on an Elide default would make the model
+   write cells that cannot run.
+2. **Python is not in scope and must not be quietly added.** The blockers are
+   GraalPy-side, not ours: guest threads are refused while JavaScript shares the
+   context (see the spike above), and `os.getppid()` is unsupported on the `java`
+   POSIX backend — recorded as deliberately staying unsupported in
+   `WHIPLASH_QUEUE.md:642-647`, since in-process execution has no parent to
+   orphan. Both are tracked there; revisit Python only against spike A's answer
+   and Tier 2 numbers.
+3. **Guest→host v1 is a loopback HTTP bridge**, which means the guest needs a
+   reachable bridge URL and a shared secret per context. That is Aura-side work
+   with no Elide dependency, but it is real work — do not assume the existing
+   in-process JS tool bridge transfers unchanged.
+
 ## Why this is worth doing beyond tidiness
 
 The JVM tasks lost 1.07–1.57× on tokens while Elide's JVM execution is 5.2×

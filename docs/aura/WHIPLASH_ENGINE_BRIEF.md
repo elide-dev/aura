@@ -212,9 +212,12 @@ These are pinned by tests in `packages/coding-agent/test/runtime-*.test.ts`:
    cancellation latency (2.88×), or Java compile+run (0.19×).
 4. Aura's `runtime-*` suite stays green, including ABI/schema identity.
 
-Aura verifies 1 and 3 with a model-free adapter sweep
-(`bench-engine-matrix.ts`, 4-cell `shared`×`caching`, `--cell=<n>` for
-uncontaminated cold-open numbers), so iteration is cheap. Caveats when
-comparing: the host is noisy — prefer absolute embedded times over
-process-relative ratios, since the process baseline moves whenever `bin/elide`
-is rebuilt.
+Aura verifies 1 and 3 with a model-free adapter sweep — run
+`bun run bench:runtime --micro-only --micro-iterations 15 --prefix=<label>
+--embedded-lib=out/aura-elide-linux-x64/lib/libelide_embed.so`, one
+configuration per process — so iteration is cheap. (The older
+`bench-engine-matrix.ts` sweep harness is **dropped**: it existed to vary
+`shared`×`caching`, and those fields turned out to be unread on the embedded
+path. See `ACTIONS_CONSOLIDATE.md:223-234`.) Caveats when comparing: the host is
+noisy — prefer absolute embedded times over process-relative ratios, since the
+process baseline moves whenever `bin/elide` is rebuilt.

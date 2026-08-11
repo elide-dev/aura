@@ -14,6 +14,11 @@
  * fills the slot later. `getElideJsKernelFactory() === undefined` is therefore
  * the correct production state, and it is what keeps the Elide eval backend's
  * `isAvailable()` false until the ABI exists.
+ *
+ * Filling the slot is scoped end to end in `docs/aura/ELIDE_ALIGNMENT.md`, under
+ * **"Wiring checklist (when Tier 2 lands)"**: the ≤ 4 files that change, the map
+ * from each method here to its embedded-ABI op, what must NOT change, and the
+ * known gaps. Read it before writing the real factory.
  */
 import type { WorkerInbound, WorkerOutbound } from "../js/worker-protocol";
 
@@ -30,10 +35,29 @@ export interface ElideJsKernelSession {
 
 export interface ElideJsKernelOpenOptions {
 	cwd: string;
+	/**
+	 * Diagnostic LABEL for the context, not an identity. Two live contexts can
+	 * legitimately carry the same value — see {@link ElideJsKernelFactory.open}.
+	 */
 	sessionId: string;
 }
 
 export interface ElideJsKernelFactory {
+	/**
+	 * Open a context. **Every call must return a fresh, isolated context**, even
+	 * when two calls arrive with byte-identical options.
+	 *
+	 * `sessionId` is a label, NOT a dedup key. Owner-scoped reset forks a second
+	 * context under the *same* kernel-facing session id — the fork key is
+	 * host-side bookkeeping in `resolveOwnerScopedSessionKey` and never reaches
+	 * this method (`./worker.ts` passes only `{cwd, sessionId}`). A kernel that
+	 * keyed contexts by `sessionId` would hand a subagent's forked context back to
+	 * its parent, silently merging two sessions' guest state. The parity suite's
+	 * fork-privacy case pins this loudly:
+	 * `test/eval/elide/elide-engine-parity.test.ts:299` asserts both opens of a
+	 * fork share one `sessionId`, while the state assertions around it require the
+	 * two contexts to stay private.
+	 */
 	open(opts: ElideJsKernelOpenOptions): Promise<ElideJsKernelSession>;
 }
 

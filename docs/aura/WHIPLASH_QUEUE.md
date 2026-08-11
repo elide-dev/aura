@@ -612,9 +612,12 @@ correctly-measured no-op.
 **Ask:** mark the fields deprecated in the schema with a comment saying they are
 unread on the embedded path, so no future integrator repeats the experiment.
 
-**Aura-side consequence (no Elide work):** stop sending them — drop the
-`AURA_RUNTIME_ENGINE_*` experiment env vars and revert the working-tree
-`codec.ts` change that plumbed them.
+**Aura-side consequence (no Elide work): done.** The `AURA_RUNTIME_ENGINE_*`
+experiment env vars are gone and the working-tree `codec.ts` change that plumbed
+them was reverted; `packages/coding-agent/src/runtime/embedded/codec.ts:148-153`
+now leaves `shared`/`caching`/`flags` at their capnp defaults with the finding
+recorded at the code site (commit `a3459bc58`). Nothing further is owed here
+unless WHIPLASH starts reading the fields.
 
 ### 2.2 `ENGINE_OPTIMIZED` — document, do not wire
 
