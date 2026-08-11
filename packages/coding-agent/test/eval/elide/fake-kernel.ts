@@ -33,6 +33,8 @@ export interface FakeElideJsKernelOptions {
 	failOpen?: boolean;
 	/** Swallow the `closed` outbound so a graceful close never gets its ack. */
 	dropClosed?: boolean;
+	/** Park `open()` on this, holding the kernel mid-construction. */
+	openGate?: Promise<void>;
 }
 
 export interface FakeElideJsKernelFactory extends ElideJsKernelFactory {
@@ -126,6 +128,7 @@ export function createFakeElideJsKernelFactory(options: FakeElideJsKernelOptions
 		},
 		async open(opts) {
 			opens.push({ cwd: opts.cwd, sessionId: opts.sessionId });
+			if (options.openGate) await options.openGate;
 			if (options.failOpen) throw new Error(`fake Elide JS kernel refused to open ${opts.sessionId}`);
 			const session = openSession();
 			sessions.push(session);

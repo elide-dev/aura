@@ -9,11 +9,16 @@
  * - **Graceful close is acknowledged.** `close()` resolves `true` only after
  *   the kernel answers `{type:"close"}` with a `{type:"closed"}` outbound,
  *   and `false` when that ack does not arrive in the grace period.
- * - **`terminate()` is unconditional and idempotent** and never rejects.
+ * - **`terminate()` is unconditional and idempotent** and never rejects. It
+ *   resolves only once the kernel session was released, including one that is
+ *   still opening — callers read a resolved `terminate()` as "the worker is
+ *   gone" — bounded by the grace period so a hung open cannot wedge exit.
  * - **No execution-budget timer.** The close grace period below is the only
- *   timer in this module; cell cancellation belongs to the caller's
- *   `AbortSignal`, never to a wall clock down here.
+ *   timer in this module, and it bounds teardown handshakes only; cell
+ *   cancellation belongs to the caller's `AbortSignal`, never to a wall clock
+ *   down here.
  */
+import { withTimeout } from "@oh-my-pi/pi-utils";
 import type { WorkerInbound, WorkerOutbound } from "../js/worker-protocol";
 import type { ElideJsKernelFactory, ElideJsKernelSession } from "./kernel";
 
@@ -34,14 +39,18 @@ export interface SpawnElideWorkerOptions {
 	label?: string;
 }
 
-/** Grace period for a graceful close, mirroring the JS context manager's. */
+/**
+ * Grace period for the teardown handshakes, mirroring the JS context manager's:
+ * how long `close()` waits for its `{type:"closed"}` ack, and how long
+ * `terminate()` waits for an open that is still in flight.
+ */
 const ELIDE_WORKER_CLOSE_TIMEOUT_MS = 1_000;
 let elideWorkerCloseTimeoutMs: number = ELIDE_WORKER_CLOSE_TIMEOUT_MS;
 
 /**
  * Test-only seam mirroring `setWorkerCloseTimeoutMsForTests` in the JS context
- * manager: override the graceful-close grace period (ms) and return the
- * previous value so callers can restore it. Never call this outside tests.
+ * manager: override the teardown grace period (ms) and return the previous
+ * value so callers can restore it. Never call this outside tests.
  */
 export function setElideWorkerCloseTimeoutMsForTests(ms: number): number {
 	const previous = elideWorkerCloseTimeoutMs;
@@ -105,7 +114,8 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 		}
 	};
 
-	void (async () => {
+	/** The open handshake, kept so teardown can wait for a session that lands late. */
+	const opening: Promise<void> = (async () => {
 		let opened: ElideJsKernelSession;
 		try {
 			opened = await factory.open({ cwd: opts.cwd, sessionId: opts.sessionId });
@@ -146,12 +156,27 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 		queuedInbound.length = 0;
 		const opened = session;
 		session = undefined;
-		if (!opened) return;
-		try {
-			await opened.close();
-		} catch {
-			// Best effort: teardown never rejects.
+		if (opened) {
+			try {
+				await opened.close();
+			} catch {
+				// Best effort: teardown never rejects.
+			}
+			return;
 		}
+		// The open was still in flight. Its chain releases the session the moment
+		// it lands (the `disposed` branch above), and callers read a resolved
+		// terminate() as "the worker is gone" — `disposeAll` on the process-exit
+		// path would otherwise return while an Elide context is still under
+		// construction and leak it. So wait for that chain, bounded by the close
+		// grace period: this bounds a teardown handshake, not cell execution, and
+		// a kernel whose open never settles must not wedge process exit. Giving up
+		// on the wait does not abandon the session — the chain still closes it.
+		await withTimeout(
+			opening,
+			elideWorkerCloseTimeoutMs,
+			`Elide JS kernel ${label} was still opening at teardown`,
+		).catch(() => {});
 	};
 
 	/**

@@ -219,6 +219,45 @@ describe("spawnElideWorker", () => {
 		expect(factory.closes).toBe(1);
 	});
 
+	it("waits for a session that opens after terminate() before resolving", async () => {
+		const gate = Promise.withResolvers<void>();
+		const factory = createFakeElideJsKernelFactory({ openGate: gate.promise });
+		const handle = spawnElideWorker(factory, { cwd: process.cwd(), sessionId: "elide-terminate-during-open" });
+
+		let settled = false;
+		const terminated = handle.terminate().then(() => {
+			settled = true;
+		});
+		// The kernel is still under construction. A resolved terminate() means the
+		// worker is gone, so it must not report that while a session is still on
+		// its way — the caller (disposal, process exit) would leak it.
+		await Bun.sleep(10);
+		expect(settled).toBe(false);
+		expect(factory.sessions).toHaveLength(0);
+
+		gate.resolve();
+		await withTimeout(terminated, WAIT_TIMEOUT_MS, "terminate never settled after the open landed");
+		expect(factory.sessions).toHaveLength(1);
+		expect(factory.closes).toBe(1);
+	});
+
+	it("stops waiting for a never-settling open after the grace period", async () => {
+		restoreCloseTimeoutMs = setElideWorkerCloseTimeoutMsForTests(5);
+		const stuck = Promise.withResolvers<void>();
+		const factory = createFakeElideJsKernelFactory({ openGate: stuck.promise });
+		const handle = spawnElideWorker(factory, { cwd: process.cwd(), sessionId: "elide-terminate-hung-open" });
+
+		// A kernel whose open never lands must not wedge process-exit disposal.
+		await withTimeout(handle.terminate(), WAIT_TIMEOUT_MS, "terminate never settled on a hung open");
+		expect(factory.closes).toBe(0);
+
+		// Giving up on the wait is not abandoning the session: the open chain still
+		// releases it whenever it finally lands.
+		stuck.resolve();
+		await Bun.sleep(10);
+		expect(factory.closes).toBe(1);
+	});
+
 	it("drops sends issued after close instead of throwing", async () => {
 		const factory = createFakeElideJsKernelFactory();
 		const sessionId = "elide-send-after-close";
