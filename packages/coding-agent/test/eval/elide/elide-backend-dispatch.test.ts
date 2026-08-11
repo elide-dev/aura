@@ -22,8 +22,12 @@ import { createFakeElideJsKernelFactory } from "./fake-kernel";
 /** Bounds every real await so a wedged kernel fails loudly, under Bun's 5s default. */
 const WAIT_TIMEOUT_MS = 4_000;
 
-/** The exact fallback wording surfaced when `elide` is asked for but unavailable. */
-const FALLBACK_NOTICE = "Elide JS engine unavailable; ran on the Bun engine.";
+/**
+ * The exact fallback wording surfaced when `runtime` is asked for but
+ * unavailable. It reaches the model, so by the fork's naming rule it says "the
+ * runtime" and never the product name.
+ */
+const FALLBACK_NOTICE = "The runtime JS engine is unavailable; ran on the Bun engine.";
 
 type EnvName = "PI_JS" | "AURA_EVAL_JS_ENGINE";
 
@@ -103,12 +107,12 @@ describe("EvalTool JS engine dispatch", () => {
 		expect(result.details?.language).toBe("js");
 	});
 
-	it("falls back to the Bun engine with a notice when elide is selected but no kernel exists", async () => {
+	it("falls back to the Bun engine with a notice when the runtime engine is selected but has no kernel", async () => {
 		const jsExecute = vi.spyOn(evalIndex.jsBackend, "execute").mockResolvedValue(mockResult);
 		const elideExecute = vi.spyOn(elideBackend, "execute");
 		const elideAvailable = vi.spyOn(elideBackend, "isAvailable");
 
-		const tool = new EvalTool(makeSession(Settings.isolated({ "eval.jsEngine": "elide" })));
+		const tool = new EvalTool(makeSession(Settings.isolated({ "eval.jsEngine": "runtime" })));
 		const result = await withTimeout(
 			tool.execute("call-elide-no-kernel", { language: "js", code: "const x = 1;" }),
 			WAIT_TIMEOUT_MS,
@@ -133,7 +137,7 @@ describe("EvalTool JS engine dispatch", () => {
 		// proves the Elide executor drives the worker protocol end to end.
 		const elideExecute = vi.spyOn(elideBackend, "execute");
 
-		const tool = new EvalTool(makeSession(Settings.isolated({ "eval.jsEngine": "elide" })));
+		const tool = new EvalTool(makeSession(Settings.isolated({ "eval.jsEngine": "runtime" })));
 		const result = await withTimeout(
 			tool.execute("call-elide-kernel", { language: "js", code: "console.log('elide-cell-ran');" }),
 			WAIT_TIMEOUT_MS,
@@ -160,7 +164,7 @@ describe("EvalTool JS engine dispatch", () => {
 		const elideExecute = vi.spyOn(elideBackend, "execute");
 		const jsExecute = vi.spyOn(evalIndex.jsBackend, "execute");
 
-		for (const engine of ["bun", "elide"] as const) {
+		for (const engine of ["bun", "runtime"] as const) {
 			const tool = new EvalTool(makeSession(Settings.isolated({ "eval.js": false, "eval.jsEngine": engine })));
 			await expect(
 				tool.execute(`call-js-disabled-${engine}`, { language: "js", code: "const x = 1;" }),
@@ -188,7 +192,7 @@ describe("EvalTool JS engine dispatch", () => {
 		// next to it — so it travels the same ToolError channel, message intact,
 		// instead of escaping as an unexpected internal failure.
 		expect(error).toBeInstanceOf(ToolError);
-		expect((error as Error).message).toContain("AURA_EVAL_JS_ENGINE must be bun or elide");
+		expect((error as Error).message).toContain("AURA_EVAL_JS_ENGINE must be bun or runtime");
 		expect(jsExecute).not.toHaveBeenCalled();
 	});
 });

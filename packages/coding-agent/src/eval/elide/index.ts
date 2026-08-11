@@ -3,7 +3,8 @@
  *
  * `id` is `"js"`, so the tool schema, the description, the details payload, and
  * every renderer keep saying "js" whichever engine ran the cell. Only `label`
- * distinguishes it, for UI that names the runtime.
+ * distinguishes it, for UI that names the runtime — and it says "the runtime",
+ * not the product, because it is displayed.
  *
  * The `"js-elide:"` session prefix is load-bearing rather than cosmetic. The JS
  * context manager reuses a live context by session key ALONE — it has no notion
@@ -36,17 +37,17 @@ export function namespaceSessionId(sessionId: string): string {
 
 export default {
 	id: "js",
-	label: "JavaScript (Elide)",
+	label: "JavaScript (Runtime)",
 	highlightLang: "javascript",
 
 	/**
-	 * Both halves matter: the session must ask for the Elide engine, and a kernel
-	 * must actually exist to serve it. The factory slot is empty in production
-	 * this milestone, so this is `false` for every real session today and the
-	 * eval tool falls back to Bun with a notice.
+	 * Both halves matter: the session must ask for the `runtime` engine, and a
+	 * kernel must actually exist to serve it. The factory slot is empty in
+	 * production this milestone, so this is `false` for every real session today
+	 * and the eval tool falls back to Bun with a notice.
 	 */
 	async isAvailable(session: ToolSession): Promise<boolean> {
-		return resolveJsEvalEngine(session) === "elide" && getElideJsKernelFactory() !== undefined;
+		return resolveJsEvalEngine(session) === "runtime" && getElideJsKernelFactory() !== undefined;
 	},
 
 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {

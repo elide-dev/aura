@@ -282,14 +282,15 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 		// it verbatim.
 		throw new ToolError(error instanceof Error ? error.message : String(error), { cause: error });
 	}
-	if (engine !== "elide") return { backend: jsBackend };
+	if (engine !== "runtime") return { backend: jsBackend };
 	// Lazy on purpose: a default session must never load the Elide executor,
 	// worker adapter, or kernel seam, so the shipped module graph is unchanged.
 	const { default: elideBackend } = await import("../eval/elide");
 	if (await elideBackend.isAvailable(session)) return { backend: elideBackend };
 	// No kernel to serve the request. Running the cell on Bun is better than
-	// failing it, but the caller asked for a different engine — say so.
-	return { backend: jsBackend, notice: "Elide JS engine unavailable; ran on the Bun engine." };
+	// failing it, but the caller asked for a different engine — say so. The notice
+	// reaches the model, so it names "the runtime", never the product behind it.
+	return { backend: jsBackend, notice: "The runtime JS engine is unavailable; ran on the Bun engine." };
 }
 function formatEvalInputLanguage(value: string): string {
 	if (value === "py" || value === "python") return "python";
