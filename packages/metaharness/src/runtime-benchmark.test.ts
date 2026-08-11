@@ -22,7 +22,13 @@ import {
 	validateAdapterOutput,
 	writeRuntimeBenchmarkManifest,
 } from "./runtime-benchmark";
-import { RUNTIME_TASKS } from "./runtime-benchmark-suite";
+import {
+	BENCHMARK_BUN_CONTAINER_PATH,
+	type DockerRunResult,
+	RUNTIME_ARM_PROBE_SENTINEL,
+	RUNTIME_TASKS,
+	smokeRuntimeArmExecution,
+} from "./runtime-benchmark-suite";
 
 const cleanups: string[] = [];
 
@@ -744,5 +750,159 @@ describe("runtime benchmark orchestration", () => {
 			),
 		).rejects.toThrow("measurement failed");
 		expect(closed).toEqual(["process", "embedded"]);
+	});
+});
+
+// ── runtime arm preflight ────────────────────────────────────────────────────
+// Decision logic only: `runDocker` is always injected, so no test here ever
+// contacts the docker daemon. The probe language must stay non-JS — TypeScript
+// executes through the Bun adapter even with the packaged runtime absent, which
+// is how a whole campaign once measured bash fallback and reported 100% pass.
+
+const PROBE_REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+const PROBE_RUNTIME_BINARY = path.join(PROBE_REPO_ROOT, "out", "aura-elide-linux-x64", "bin", "elide");
+const PROBE_EMBEDDED_LIB = path.join(PROBE_REPO_ROOT, "out", "aura-elide-linux-x64", "lib", "libelide_embed.so");
+const PROBE_BINARY_CONTAINER_PATH = "/opt/omp/src/out/aura-elide-linux-x64/bin/elide";
+const PROBE_LIBRARY_CONTAINER_PATH = "/opt/omp/src/out/aura-elide-linux-x64/lib/libelide_embed.so";
+
+function dockerStub(overrides: { build?: Partial<DockerRunResult>; run?: Partial<DockerRunResult> } = {}): {
+	calls: string[][];
+	runDocker: (args: string[]) => Promise<DockerRunResult>;
+} {
+	const calls: string[][] = [];
+	return {
+		calls,
+		runDocker: async (args: string[]) => {
+			calls.push(args);
+			if (args[0] === "build") {
+				return { exitCode: 0, stdout: "sha256:probe-image\n", stderr: "", ...overrides.build };
+			}
+			if (args[0] === "run") {
+				return { exitCode: 0, stdout: `${RUNTIME_ARM_PROBE_SENTINEL}\n`, stderr: "", ...overrides.run };
+			}
+			return { exitCode: 0, stdout: "", stderr: "" };
+		},
+	};
+}
+
+function probeScript(calls: string[][]): string {
+	const run = calls.find(args => args[0] === "run");
+	if (!run) throw new Error("the preflight never issued a docker run");
+	return run.at(-1) ?? "";
+}
+
+describe("runtime arm preflight", () => {
+	it("skips the probe entirely when no runtime artifacts are injected", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({ taskRoot: "/tmp/tasks", runDocker: docker.runDocker });
+
+		expect(docker.calls).toEqual([]);
+	});
+
+	it("executes the injected artifacts inside the existing task image when a runtime is supplied", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		});
+
+		expect(docker.calls[0]).toEqual(["build", "--quiet", path.join("/tmp/tasks", "python-execution", "environment")]);
+		const run = docker.calls.find(args => args[0] === "run");
+		expect(run).toBeDefined();
+		expect(run).toContain(`${PROBE_REPO_ROOT}:/opt/omp/src:ro`);
+		expect(run).toContain("sha256:probe-image");
+		// The probe must prove the *injected* artifacts run, so it cannot reach the
+		// network to acquire a runtime, and it needs a writable HOME to be believed.
+		expect(run?.join(" ")).toContain("--network none");
+		expect(run?.join(" ")).toContain("--env HOME=/tmp");
+		expect(probeScript(docker.calls)).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(probeScript(docker.calls)).toContain(PROBE_LIBRARY_CONTAINER_PATH);
+		// An absent artifact must say which one, not just fail an anonymous `test`.
+		expect(probeScript(docker.calls)).toContain(
+			`missing or non-executable process binary: ${PROBE_BINARY_CONTAINER_PATH}`,
+		);
+		expect(probeScript(docker.calls)).toContain(
+			`missing or unreadable embedded library: ${PROBE_LIBRARY_CONTAINER_PATH}`,
+		);
+		expect(docker.calls.at(-1)).toEqual(["image", "rm", "--force", "sha256:probe-image"]);
+	});
+
+	it("fails the campaign naming the artifact path when the probe exits non-zero", async () => {
+		const docker = dockerStub({ run: { exitCode: 1, stderr: "bash: elide: No such file or directory" } });
+
+		const failure = await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		}).then(
+			() => null,
+			(error: unknown) => error as Error,
+		);
+
+		expect(failure).not.toBeNull();
+		expect(failure?.message).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(failure?.message).toContain(PROBE_LIBRARY_CONTAINER_PATH);
+		expect(failure?.message).toContain("bash: elide: No such file or directory");
+	});
+
+	it("fails the campaign when the probe prints something other than the sentinel", async () => {
+		const docker = dockerStub({ run: { exitCode: 0, stdout: "hello from bash fallback\n" } });
+
+		const failure = await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		}).then(
+			() => null,
+			(error: unknown) => error as Error,
+		);
+
+		expect(failure).not.toBeNull();
+		expect(failure?.message).toContain(RUNTIME_ARM_PROBE_SENTINEL);
+		expect(failure?.message).toContain("hello from bash fallback");
+		expect(failure?.message).toContain(PROBE_BINARY_CONTAINER_PATH);
+	});
+
+	it("downgrades the failure to a warning under --allow-missing-runtime", async () => {
+		const docker = dockerStub({ run: { exitCode: 1, stderr: "no such file" } });
+		const warnings: string[] = [];
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+			allowMissingRuntime: true,
+			warn: message => warnings.push(message),
+		});
+
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(parseRuntimeBenchmarkCli([]).allowMissingRuntime).toBe(false);
+		expect(parseRuntimeBenchmarkCli(["--allow-missing-runtime"]).allowMissingRuntime).toBe(true);
+	});
+
+	it("probes a non-JavaScript language so the Bun adapter cannot mask a missing runtime", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		});
+
+		const script = probeScript(docker.calls);
+		expect(script).toContain("-l python");
+		expect(script).toContain(".py");
+		expect(script).not.toContain(BENCHMARK_BUN_CONTAINER_PATH);
+		expect(script).not.toContain(".ts");
+		expect(script).not.toMatch(/\b(ts|typescript|javascript|bun|node)\b/i);
 	});
 });

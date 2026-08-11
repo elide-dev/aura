@@ -11,13 +11,16 @@ import {
 	RuntimeService,
 } from "../../coding-agent/src/runtime";
 import { isRegularFile as isRuntimeRegularFile, runtimeBinaryNames } from "../../coding-agent/src/runtime/resolve";
-import { type JobInfo, readJobResult, readTrials, SOURCE_SRC_MOUNT, type TrialStatus } from "./runner";
+import { type JobInfo, readJobResult, readTrials, type TrialStatus } from "./runner";
 import {
 	BENCHMARK_BUN_VERSION,
 	materializeRuntimeTasks,
 	RUNTIME_TASKS,
 	type RuntimeCapabilityGroup,
+	smokeRuntimeArmExecution,
 	smokeTypeScriptTaskVerifier,
+	sourceMountedRuntimePath,
+	spawnDocker,
 } from "./runtime-benchmark-suite";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
@@ -197,14 +200,8 @@ export interface RuntimeBenchmarkCliOptions {
 	historicalRevision: string | undefined;
 	historicalBinary: string | undefined;
 	resume: boolean;
-}
-
-function sourceMountedRuntimePath(hostPath: string): string {
-	const relative = path.relative(REPO_ROOT, path.resolve(hostPath));
-	if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-		throw new Error(`Runtime benchmark artifact must be inside the source-mounted repository: ${hostPath}`);
-	}
-	return path.posix.join(SOURCE_SRC_MOUNT, ...relative.split(path.sep));
+	/** Report an unreachable runtime arm instead of aborting the campaign. */
+	allowMissingRuntime: boolean;
 }
 
 export function runtimeToolsForTask(taskId: string): string[] {
@@ -1401,6 +1398,7 @@ export function parseRuntimeBenchmarkCli(
 		historicalRevision: undefined,
 		historicalBinary: undefined,
 		resume: false,
+		allowMissingRuntime: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const [flag, inline] = argv[i].split("=", 2);
@@ -1451,6 +1449,11 @@ export function parseRuntimeBenchmarkCli(
 			case "--resume":
 				opts.resume = true;
 				break;
+			// Turns the runtime-arm preflight into a warning. Only for runs that
+			// deliberately measure the fallback: the numbers are not runtime numbers.
+			case "--allow-missing-runtime":
+				opts.allowMissingRuntime = true;
+				break;
 			case "--agent-only":
 				opts.mode = "agent";
 				break;
@@ -1489,9 +1492,22 @@ async function main(): Promise<void> {
 		process.stdout.write("Verifying generated TypeScript task image...\n");
 		await smokeTypeScriptTaskVerifier(taskRoot);
 		process.stdout.write("TypeScript task verifier smoke: passed\n");
+		const runtimeBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
+		if (runtimeBinary || opts.embeddedLib) {
+			process.stdout.write("Probing the injected runtime arm (Python) inside a task container...\n");
+			await smokeRuntimeArmExecution({
+				taskRoot,
+				runtimeBinary,
+				embeddedLib: opts.embeddedLib,
+				runDocker: spawnDocker,
+				allowMissingRuntime: opts.allowMissingRuntime,
+			});
+			process.stdout.write("Runtime arm preflight: complete\n");
+		} else {
+			process.stdout.write("Runtime arm preflight: skipped (no runtime artifacts injected)\n");
+		}
 		if (!opts.resume || !fs.existsSync(manifestPath)) await writeRuntimeBenchmarkManifest(opts, startedAt);
 		process.stdout.write(`Runtime benchmark manifest: ${manifestPath}\n`);
-		const runtimeBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
 		const launches = buildArmLaunches({ ...opts, taskRoot, runtimeBinary });
 		for (const [index, launch] of launches.entries()) {
 			const runnerArgs = armRunnerArgs(launch, opts.jobsDir, opts.resume);
