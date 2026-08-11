@@ -5,6 +5,9 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { jsBackend, juliaBackend, pythonBackend, rubyBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
+// Engine selection only — a leaf module with no runtime imports, so consulting it
+// here keeps the Elide backend itself out of the default graph (see below).
+import { type JsEvalEngine, resolveJsEvalEngine } from "../eval/elide/settings";
 import { IdleTimeout } from "../eval/idle-timeout";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
@@ -268,7 +271,25 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 		return { backend: juliaBackend };
 	}
 	if (!allowJs) throw new ToolError("JavaScript backend is disabled (PI_JS=0 or eval.js = false).");
-	return { backend: jsBackend };
+	let engine: JsEvalEngine;
+	try {
+		engine = resolveJsEvalEngine(session);
+	} catch (error) {
+		// A malformed AURA_EVAL_JS_ENGINE is host misconfiguration the caller can
+		// fix, exactly like the disabled-backend cases above, so it belongs on the
+		// same ToolError channel rather than escaping as an internal failure. The
+		// thrown message already names the variable and its accepted values; keep
+		// it verbatim.
+		throw new ToolError(error instanceof Error ? error.message : String(error), { cause: error });
+	}
+	if (engine !== "elide") return { backend: jsBackend };
+	// Lazy on purpose: a default session must never load the Elide executor,
+	// worker adapter, or kernel seam, so the shipped module graph is unchanged.
+	const { default: elideBackend } = await import("../eval/elide");
+	if (await elideBackend.isAvailable(session)) return { backend: elideBackend };
+	// No kernel to serve the request. Running the cell on Bun is better than
+	// failing it, but the caller asked for a different engine — say so.
+	return { backend: jsBackend, notice: "Elide JS engine unavailable; ran on the Bun engine." };
 }
 function formatEvalInputLanguage(value: string): string {
 	if (value === "py" || value === "python") return "python";
