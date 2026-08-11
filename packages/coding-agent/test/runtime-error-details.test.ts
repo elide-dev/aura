@@ -126,13 +126,18 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 		expect(textOf(result)).toContain("No runtime binary is available.");
 	});
 
-	// `onRpcError` runs inside `callRuntime`, before the projection is built, so a
-	// caller can retire the cached service it just proved suspect and still return
-	// the diagnostic. No shipped tool passes the hook today (it left with `run`);
-	// this pins the contract a caller would depend on.
-	test("callRuntime runs onRpcError before returning, so a caller can retire the cached service", async () => {
+	/**
+	 * An `internal` failure implicates the cached service itself, and with the
+	 * embedded adapter that damage is permanent: the worker host latches its
+	 * failure, the endpoint memoizes the host, and the service cache keys only on
+	 * settings. So the retirement is not a nicety — without it one crashed worker
+	 * strands every runtime tool for the rest of the session. These drive the real
+	 * tools rather than `callRuntime` directly, because a tool that forgets to ask
+	 * for the retirement is exactly the regression worth catching.
+	 */
+	describe("an internal failure retires the cached service", () => {
 		const options = { adapter: "process" as const, autoDownload: false, explicitPath: "/runtime-fixture" };
-		const scope: RuntimeServiceScope = {
+		const makeScope = (): RuntimeServiceScope => ({
 			readSettings: () => ({
 				enabled: true,
 				autoDownload: false,
@@ -141,37 +146,103 @@ describe("runtime RPC failures reach the model as detailed tool results", () => 
 				adapter: "process",
 				embeddedPath: "",
 			}),
-		};
-		const release = acquireRuntimeServiceLease(scope);
-		try {
-			const first = getOrCreateRuntimeService(options, undefined, scope);
-			const close = vi.spyOn(first, "close").mockResolvedValue();
-			vi.spyOn(first, "run").mockRejectedValue(
-				new RuntimeRpcError("internal", "Embedded runtime execution worker failed.", {
-					stderr: "worker exited with signal SIGSEGV",
-				}),
-			);
-
-			const call = await callRuntime(() => first.run({ code: "print('first')", language: "python" }), {
-				root: PROJECT_ROOT,
-				onRpcError: async error => {
-					if (error.code === "internal") await disposeCachedRuntimeService(first, scope);
+		});
+		const sessionOn = (scope: RuntimeServiceScope): ToolSession =>
+			({
+				cwd: PROJECT_ROOT,
+				settings: {
+					get: (key: string) => key === "runtime.enabled" || key === "python.enabled" || key === "python.embedded",
 				},
-			});
+				runtimeServiceScope: scope,
+				getRuntimeService: () => getOrCreateRuntimeService(options, undefined, scope),
+			}) as unknown as ToolSession;
 
-			// Retirement happened during callRuntime, so it is already observable here.
-			expect(close).toHaveBeenCalledTimes(1);
+		test.each([
+			[
+				"insights",
+				"insights" as const,
+				(session: ToolSession) =>
+					RuntimeInsightsTool.createIf(session)!.execute("id", {
+						code: "print('first')",
+						insight: "// hook",
+					} as never),
+			],
+			[
+				"profile",
+				"profile" as const,
+				(session: ToolSession) =>
+					RuntimeProfileTool.createIf(session)!.execute("id", {
+						mode: "cpusampling",
+						code: "print('first')",
+					} as never),
+			],
+			[
+				"jvm_jar",
+				"jvm" as const,
+				(session: ToolSession) =>
+					JvmJarTool.createIf(session)!.execute("id", { action: "inspect", jar: "app.jar" } as never),
+			],
+		])("%s retires it and still returns the diagnostic", async (_name, method, run) => {
+			const scope = makeScope();
+			const release = acquireRuntimeServiceLease(scope);
+			try {
+				const first = getOrCreateRuntimeService(options, undefined, scope);
+				const close = vi.spyOn(first, "close").mockResolvedValue();
+				vi.spyOn(first, method).mockRejectedValue(
+					new RuntimeRpcError("internal", "Embedded runtime execution worker failed.", {
+						stderr: "worker exited with signal SIGSEGV",
+					}),
+				);
+
+				const result = await run(sessionOn(scope));
+
+				// Retirement happened during execute, so it is already observable here.
+				expect(close).toHaveBeenCalledTimes(1);
+				expect(result.isError).toBe(true);
+				expect(textOf(result)).toContain("Embedded runtime execution worker failed.");
+				expect(result.details).toMatchObject({ code: "internal", stderr: "worker exited with signal SIGSEGV" });
+				// The whole point: the next call gets a fresh service, not the poisoned one.
+				const replacement = getOrCreateRuntimeService(options, undefined, scope);
+				expect(replacement).not.toBe(first);
+				await disposeCachedRuntimeService(replacement, scope);
+			} finally {
+				await release();
+			}
+		});
+
+		test("a failure that is not `internal` keeps the service — a timeout does not mean it is broken", async () => {
+			const scope = makeScope();
+			const release = acquireRuntimeServiceLease(scope);
+			try {
+				const first = getOrCreateRuntimeService(options, undefined, scope);
+				const close = vi.spyOn(first, "close").mockResolvedValue();
+				vi.spyOn(first, "insights").mockRejectedValue(
+					new RuntimeRpcError("timeout", "The runtime call timed out.", { timeoutMs: 5000 }),
+				);
+
+				const result = await RuntimeInsightsTool.createIf(sessionOn(scope))!.execute("id", {
+					code: "print('first')",
+					insight: "// hook",
+				} as never);
+
+				expect(result.isError).toBe(true);
+				expect(close).not.toHaveBeenCalled();
+				expect(getOrCreateRuntimeService(options, undefined, scope)).toBe(first);
+			} finally {
+				await release();
+			}
+		});
+
+		test("callRuntime without a service or scope still returns the projection", async () => {
+			// Callers outside a session-owned cache (the CLI, tests) have nothing to
+			// retire; the diagnostic must still come back rather than throw.
+			const call = await callRuntime(() => Promise.reject(new RuntimeRpcError("internal", "The runtime aborted.")), {
+				root: PROJECT_ROOT,
+			});
 			expect(call.ok).toBe(false);
 			if (call.ok) throw new Error("expected the RPC failure to settle as a tool result");
-			expect(call.result.isError).toBe(true);
-			expect(textOf(call.result)).toContain("Embedded runtime execution worker failed.");
-			expect(call.result.details).toMatchObject({ code: "internal", stderr: "worker exited with signal SIGSEGV" });
-			const replacement = getOrCreateRuntimeService(options, undefined, scope);
-			expect(replacement).not.toBe(first);
-			await disposeCachedRuntimeService(replacement, scope);
-		} finally {
-			await release();
-		}
+			expect(textOf(call.result)).toContain("The runtime aborted.");
+		});
 	});
 
 	test("a failure that is not a RuntimeRpcError still propagates as a throw", async () => {

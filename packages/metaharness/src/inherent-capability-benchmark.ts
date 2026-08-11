@@ -2,7 +2,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { type ArmSummary, type RuntimeTaskMeasurement, runtimeToolsForTask, summarizeArm } from "./runtime-benchmark";
+import {
+	type ArmSummary,
+	measuresRuntimeAdoption,
+	type RuntimeTaskMeasurement,
+	runtimeToolsForTask,
+	summarizeArm,
+} from "./runtime-benchmark";
 import { materializeRuntimeTasks, smokeTypeScriptTaskVerifier } from "./runtime-benchmark-suite";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
@@ -74,8 +80,20 @@ export interface InherentBenchmarkLaunch {
 	args: string[];
 }
 
+/**
+ * The capability tools the transcript scanner recognizes.
+ *
+ * This set and `expectedFirstTool` in {@link analyzeInherentBenchmark} move
+ * together: the scanner may only detect names the expectation can name back.
+ * `eval` is detected but not yet expected — execution tasks currently mount no
+ * runtime-backed execution tool, so `bash` is the honest expectation until an
+ * eval backend restores one, at which point the expectation flips to `eval`
+ * without touching the scanner.
+ */
+export type InherentCapabilityTool = "jvm_deps" | "eval" | "bash";
+
 export interface InherentTranscriptFacts {
-	firstCapabilityTool: "jvm_deps" | "eval" | "bash" | undefined;
+	firstCapabilityTool: InherentCapabilityTool | undefined;
 	coreSkillLoads: number;
 }
 
@@ -247,7 +265,9 @@ export function analyzeInherentBenchmark(
 	// retired, the arm carries no execution tool of its own, so `bash` is the only
 	// capability the transcript can show; the gate stays structural until the eval
 	// backend gives execution tasks a runtime-backed surface to select again.
-	const expectedFirstTool: Readonly<Record<InherentBenchmarkTaskId, "bash" | "jvm_deps">> = {
+	// Paired with {@link InherentCapabilityTool} — a name added there is only
+	// meaningful once it appears here.
+	const expectedFirstTool: Readonly<Record<InherentBenchmarkTaskId, InherentCapabilityTool>> = {
 		"typescript-execution": "bash",
 		"jvm-dependencies": "jvm_deps",
 	};
@@ -271,8 +291,15 @@ export function analyzeInherentBenchmark(
 	if (inherent.trials === 0 || inherent.completedTrials !== inherent.trials)
 		reasons.push("inherent arm has missing or incomplete trials");
 	if (inherentPassRate !== 1) reasons.push("inherent arm did not pass every trial");
-	if (inherent.runtimeTrials !== inherent.trials)
-		reasons.push("inherent arm did not use a runtime tool in every trial");
+	// Only the tasks whose arm mounts a runtime tool can show adoption. Of this
+	// benchmark's two, `typescript-execution` no longer mounts one, so comparing
+	// against every trial would fail the gate on every campaign — see
+	// `measuresRuntimeAdoption`.
+	const adoptionTrials = inherent.taskMeasurements
+		.filter(task => measuresRuntimeAdoption(task.taskId))
+		.flatMap(task => task.trials);
+	if (adoptionTrials.some(trial => !trial.runtimeUsed))
+		reasons.push("inherent arm did not use a runtime tool in every trial that mounts one");
 	if (inherentTranscripts.length !== inherent.trials) reasons.push("inherent arm is missing transcript evidence");
 	if (firstExecutionSelectionRate !== 1)
 		reasons.push("inherent arm did not select the task-specific capability tool first in every trial");

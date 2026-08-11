@@ -10,25 +10,44 @@ import {
 } from "./inherent-capability-benchmark";
 import type { ArmSummary, RuntimeTaskMeasurement } from "./runtime-benchmark";
 
+/**
+ * `runtimeUsed` is per task, not blanket-true for the arm: `typescript-execution`
+ * mounts no runtime tool since `run` retired, so a fixture that claimed adoption
+ * on its trials would hide the very gap the adoption gate has to tolerate.
+ */
+const MOUNTS_RUNTIME_TOOL: Readonly<Record<string, boolean>> = {
+	"typescript-execution": false,
+	"jvm-dependencies": true,
+};
+
 function summary(
 	arm: "baseline" | "runtime",
-	options: { pass?: number; toolCalls?: number[]; inputTokens?: number[] } = {},
+	options: {
+		pass?: number;
+		toolCalls?: number[];
+		inputTokens?: number[];
+		runtimeUsed?: (taskId: string) => boolean;
+	} = {},
 ): ArmSummary {
 	const toolCalls = options.toolCalls ?? [4, 4, 5, 5, 6, 6];
 	const inputTokens = options.inputTokens ?? [100, 100, 110, 110, 120, 120];
-	const trials = toolCalls.map((calls, index) => ({
-		taskId: INHERENT_BENCHMARK_TASK_IDS[index % INHERENT_BENCHMARK_TASK_IDS.length],
-		trialName: `trial-${index}`,
-		status: "pass" as const,
-		detail: "",
-		durationMs: 100,
-		tokIn: inputTokens[index],
-		tokOut: 10,
-		tokCache: 0,
-		costUsd: 0,
-		toolCalls: calls,
-		runtimeUsed: arm === "runtime",
-	}));
+	const runtimeUsed = options.runtimeUsed ?? ((taskId: string) => MOUNTS_RUNTIME_TOOL[taskId] === true);
+	const trials = toolCalls.map((calls, index) => {
+		const taskId = INHERENT_BENCHMARK_TASK_IDS[index % INHERENT_BENCHMARK_TASK_IDS.length];
+		return {
+			taskId,
+			trialName: `trial-${index}`,
+			status: "pass" as const,
+			detail: "",
+			durationMs: 100,
+			tokIn: inputTokens[index],
+			tokOut: 10,
+			tokCache: 0,
+			costUsd: 0,
+			toolCalls: calls,
+			runtimeUsed: arm === "runtime" && runtimeUsed(taskId),
+		};
+	});
 	const taskMeasurements = INHERENT_BENCHMARK_TASK_IDS.map(taskId => ({
 		taskId,
 		group: taskId === "typescript-execution" ? ("execution" as const) : ("jvm" as const),
@@ -51,8 +70,8 @@ function summary(
 		elapsedMs: trials.length * 100,
 		medianDurationMs: 100,
 		toolCalls: toolCalls.reduce((sum, value) => sum + value, 0),
-		runtimeTasks: arm === "runtime" ? INHERENT_BENCHMARK_TASK_IDS.length : 0,
-		runtimeTrials: arm === "runtime" ? trials.length : 0,
+		runtimeTasks: taskMeasurements.filter(task => task.trials.some(trial => trial.runtimeUsed)).length,
+		runtimeTrials: trials.filter(trial => trial.runtimeUsed).length,
 		taskMeasurements,
 	};
 }
@@ -150,16 +169,36 @@ describe("inherent capability benchmark", () => {
 		]);
 	});
 
-	it("fails when any inherent trial lacks runtime adoption", () => {
-		const inherent = summary("runtime");
-		inherent.runtimeTrials -= 1;
-		const traces = Array.from({ length: 3 }, () => [
+	const passingTraces = () =>
+		Array.from({ length: 3 }, () => [
 			{ taskId: "typescript-execution", facts: { firstCapabilityTool: "bash" as const, coreSkillLoads: 0 } },
 			{ taskId: "jvm-dependencies", facts: { firstCapabilityTool: "jvm_deps" as const, coreSkillLoads: 0 } },
 		]).flat();
-		const analysis = analyzeInherentBenchmark(undefined, inherent, traces);
+
+	it("fails when a trial that mounts a runtime tool does not use one", () => {
+		const inherent = summary("runtime");
+		// Drop adoption on a `jvm-dependencies` trial — the task that mounts `jvm_deps`.
+		const jvm = inherent.taskMeasurements.find(task => task.taskId === "jvm-dependencies");
+		if (!jvm) throw new Error("expected a jvm-dependencies measurement");
+		jvm.trials[0] = { ...jvm.trials[0], runtimeUsed: false };
+
+		const analysis = analyzeInherentBenchmark(undefined, inherent, passingTraces());
+
 		expect(analysis.verdict).toBe("fail");
-		expect(analysis.reasons).toContain("inherent arm did not use a runtime tool in every trial");
+		expect(analysis.reasons).toContain("inherent arm did not use a runtime tool in every trial that mounts one");
+	});
+
+	it("does not demand adoption from a task whose arm mounts no runtime tool", () => {
+		// `typescript-execution` mounts none since `run` retired, so its trials carry
+		// `runtimeUsed: false` in the fixture. Counting them would fail this gate on
+		// every campaign — a verdict about the tool inventory, not the runtime.
+		const inherent = summary("runtime");
+		expect(inherent.runtimeTrials).toBeLessThan(inherent.trials);
+
+		const analysis = analyzeInherentBenchmark(undefined, inherent, passingTraces());
+
+		expect(analysis.reasons).not.toContain("inherent arm did not use a runtime tool in every trial that mounts one");
+		expect(analysis.verdict).toBe("pass");
 	});
 
 	it("preflights bounded success and failure runtime telemetry", async () => {

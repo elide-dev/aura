@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { logger } from "@oh-my-pi/pi-utils";
+import { disposeCachedRuntimeService, type RuntimeServiceScope } from ".";
 import { type RuntimeErrorCode, type RuntimeExecResult, RuntimeRpcError } from "./protocol";
+import type { RuntimeService } from "./service";
 
 /** Whether an execution result represents a failed, timed out, or cancelled tool call. */
 export function execResultFailed(result: RuntimeExecResult): boolean {
@@ -213,24 +216,39 @@ export type RuntimeCallOutcome<T> =
  * service, a bug in the tool — still throws: those are not runtime diagnostics
  * and the loop's own error path is the right place for them.
  *
- * `onRpcError` runs before the result is built, so a tool that must react to a
- * failure (retiring a poisoned service, say) still does so on the way out. No
- * shipped tool passes it right now: `run` was its only caller and retired with
- * the fork's execution surface, so an `internal` failure currently leaves the
- * cached service in place for `insights`/`profile`/`jvm_*`. The hook keeps its
- * contract test — closing that gap means giving this helper the service and
- * scope so every runtime tool inherits the retirement, not re-adding a private
- * method to each one.
+ * Pass `service` and `scope` to make the call self-healing. An `internal`
+ * failure implicates the service itself, and with the embedded adapter that
+ * damage is permanent: `EmbeddedWorkerHost` latches its failure and rejects
+ * every later send, `EmbeddedRuntimeEndpoint` memoizes the host and never
+ * rebuilds it, and the service cache keys only on settings — so one crashed
+ * worker would otherwise poison every runtime tool for the rest of the session.
+ * Retiring here rather than inside each tool is the point: a tool that forgets
+ * would be the one that strands the session.
  */
 export async function callRuntime<T>(
 	invoke: () => Promise<T>,
-	options: { root?: string; onRpcError?: (error: RuntimeRpcError) => Promise<void> | void } = {},
+	options: { root?: string; service?: RuntimeService; scope?: RuntimeServiceScope } = {},
 ): Promise<RuntimeCallOutcome<T>> {
 	try {
 		return { ok: true, value: await invoke() };
 	} catch (error) {
 		if (!(error instanceof RuntimeRpcError)) throw error;
-		await options.onRpcError?.(error);
+		if (error.code === "internal") await retireFailedRuntimeService(options.service, options.scope);
 		return { ok: false, result: runtimeRpcErrorResult(error, options.root) };
+	}
+}
+
+/**
+ * Evict the service an `internal` failure just implicated so the next call
+ * builds a fresh one. Disposal is idempotent (a retirement already in flight is
+ * awaited rather than repeated), and a disposal failure must never replace the
+ * runtime's own diagnostic — that projection is what the caller is waiting for.
+ */
+async function retireFailedRuntimeService(service?: RuntimeService, scope?: RuntimeServiceScope): Promise<void> {
+	if (!service || !scope) return;
+	try {
+		await disposeCachedRuntimeService(service, scope);
+	} catch (error) {
+		logger.warn("Failed to retire internally failed runtime service", { error: String(error) });
 	}
 }

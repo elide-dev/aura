@@ -525,27 +525,49 @@ describe("runtime benchmark orchestration", () => {
 	});
 
 	it("returns inconclusive below overall runtime adoption threshold", () => {
-		const usedTasks = new Set(RUNTIME_TASKS.slice(0, 9).map(task => task.id));
-		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => usedTasks.has(taskId) });
+		// Skipping one profiling and one jvm task lands adoption at 4/6 = 66.7%
+		// while keeping every group at or above 50%, so only the overall gate fires.
+		const skipped = new Set(["call-tracing", "jvm-dependencies"]);
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => !skipped.has(taskId) });
 
 		const result = analyzeRuntimeComparison(baseline, runtime);
 
-		expect(result.adoptionOverall).toBe(0.75);
+		expect(result.adoptionOverall).toBeCloseTo(4 / 6, 10);
 		expect(result.verdict).toBe("inconclusive");
-		expect(result.reasons).toContain("runtime adoption 75.0% is below 80%");
+		expect(result.reasons).toContain("runtime adoption 66.7% is below 80%");
+		expect(result.reasons.join(" ")).not.toContain("below 50%");
 	});
 
 	it("returns inconclusive when one capability group is below adoption threshold", () => {
-		const { baseline, runtime } = comparisonSummaries({
-			runtimeUsed: taskId => RUNTIME_TASKS.find(task => task.id === taskId)?.group !== "profiling",
-		});
+		// `instrumentation` is the debugging group's only adoption-measurable task,
+		// so skipping just it isolates the per-group gate from the overall one.
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => taskId !== "instrumentation" });
 
 		const result = analyzeRuntimeComparison(baseline, runtime);
 
 		expect(result.adoptionOverall).toBeGreaterThanOrEqual(0.8);
-		expect(result.adoptionByGroup.profiling).toBe(0);
+		expect(result.adoptionByGroup.debugging).toBe(0);
 		expect(result.verdict).toBe("inconclusive");
-		expect(result.reasons).toContain("runtime adoption is below 50% for: profiling");
+		expect(result.reasons).toContain("runtime adoption is below 50% for: debugging");
+	});
+
+	it("scores adoption only over tasks whose runtime arm mounts a runtime tool", () => {
+		// The regression this guards: `run`/`check` retired, so six of twelve tasks
+		// mount no runtime tool. Counting their trials would peg execution and
+		// project at 0% and cap overall at 50%, tripping both gates on every
+		// campaign regardless of what the runtime arm actually did.
+		const mountless = RUNTIME_TASKS.filter(task => task.runtimeTools.length === 0).map(task => task.id);
+		expect(mountless.length).toBeGreaterThan(0);
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => !mountless.includes(taskId) });
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.adoptionOverall).toBe(1);
+		expect(result.adoptionMeasuredTrials).toBe(RUNTIME_TASKS.length - mountless.length);
+		// Groups made up entirely of mountless tasks report nothing rather than zero.
+		expect(result.adoptionByGroup.execution).toBeUndefined();
+		expect(result.adoptionByGroup.project).toBeUndefined();
+		expect(result.reasons.join(" ")).not.toContain("adoption");
 	});
 
 	it("formats the primary success, efficiency, and tool-use deltas", () => {

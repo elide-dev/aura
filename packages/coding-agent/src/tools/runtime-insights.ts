@@ -84,7 +84,7 @@ export class RuntimeInsightsTool
 					signal,
 					this.session.getSessionId?.() ?? undefined,
 				),
-			{ root: this.session.cwd },
+			{ root: this.session.cwd, service, scope: this.session.runtimeServiceScope },
 		);
 		if (!call.ok) return call.result;
 		const result = call.value;

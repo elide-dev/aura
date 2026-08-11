@@ -28,8 +28,11 @@ export function callJvm(
 	params: RuntimeJvmParams,
 	signal?: AbortSignal,
 ): Promise<RuntimeCallOutcome<RuntimeJvmResult>> {
-	return callRuntime(() => requireRuntimeService(session).jvm(params, signal, session.getSessionId?.() ?? undefined), {
+	const service = requireRuntimeService(session);
+	return callRuntime(() => service.jvm(params, signal, session.getSessionId?.() ?? undefined), {
 		root: session.cwd,
+		service,
+		scope: session.runtimeServiceScope,
 	});
 }
 

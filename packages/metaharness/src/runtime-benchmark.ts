@@ -115,7 +115,10 @@ export interface RuntimeComparisonAnalysis {
 	durationRatio: ConfidenceInterval;
 	tokenRatio: ConfidenceInterval;
 	adoptionOverall: number;
-	adoptionByGroup: Record<RuntimeCapabilityGroup, number>;
+	/** Only the groups with at least one adoption-measurable task — see {@link measuresRuntimeAdoption}. */
+	adoptionByGroup: Partial<Record<RuntimeCapabilityGroup, number>>;
+	/** Trials the adoption rates are computed over. Zero means the campaign says nothing about adoption. */
+	adoptionMeasuredTrials: number;
 	verdict: "pass" | "fail" | "inconclusive";
 	reasons: string[];
 }
@@ -569,28 +572,44 @@ function bootstrapComparisons(comparisons: readonly TaskComparison[]): {
 	};
 }
 
+/**
+ * Whether a task can produce adoption evidence at all — i.e. whether its runtime
+ * arm mounts a runtime tool for the agent to adopt.
+ *
+ * With `run`/`check` retired, six of the twelve tasks mount none: their runtime
+ * arm is the baseline tool set. Counting those trials would peg the execution
+ * and project groups at 0% and cap overall adoption at 50%, so both gates would
+ * fire on every campaign no matter what the runtime arm did — a permanently
+ * "inconclusive" verdict that measures the tool inventory, not the runtime. A
+ * task with no runtime tool to adopt is absence of evidence, so it is excluded
+ * from the denominators rather than scored zero.
+ */
+export function measuresRuntimeAdoption(taskId: string): boolean {
+	return (RUNTIME_TASKS.find(candidate => candidate.id === taskId)?.runtimeTools.length ?? 0) > 0;
+}
+
 function runtimeAdoption(runtime: ArmSummary): {
 	overall: number;
-	byGroup: Record<RuntimeCapabilityGroup, number>;
+	byGroup: Partial<Record<RuntimeCapabilityGroup, number>>;
+	measuredTrials: number;
 } {
-	const counts: Record<RuntimeCapabilityGroup, { completed: number; used: number }> = {
-		execution: { completed: 0, used: 0 },
-		project: { completed: 0, used: 0 },
-		debugging: { completed: 0, used: 0 },
-		profiling: { completed: 0, used: 0 },
-		jvm: { completed: 0, used: 0 },
-	};
+	const counts = new Map<RuntimeCapabilityGroup, { completed: number; used: number }>();
+	let completed = 0;
+	let used = 0;
 	for (const task of runtime.taskMeasurements) {
-		counts[task.group].completed += task.trials.length;
-		counts[task.group].used += task.trials.filter(trial => trial.runtimeUsed).length;
+		if (!measuresRuntimeAdoption(task.taskId)) continue;
+		const count = counts.get(task.group) ?? { completed: 0, used: 0 };
+		const taskUsed = task.trials.filter(trial => trial.runtimeUsed).length;
+		count.completed += task.trials.length;
+		count.used += taskUsed;
+		counts.set(task.group, count);
+		completed += task.trials.length;
+		used += taskUsed;
 	}
 	const byGroup = Object.fromEntries(
-		Object.entries(counts).map(([group, count]) => [group, count.completed === 0 ? 0 : count.used / count.completed]),
-	) as Record<RuntimeCapabilityGroup, number>;
-	return {
-		overall: runtime.completedTrials === 0 ? 0 : runtime.runtimeTrials / runtime.completedTrials,
-		byGroup,
-	};
+		[...counts].map(([group, count]) => [group, count.completed === 0 ? 0 : count.used / count.completed]),
+	) as Partial<Record<RuntimeCapabilityGroup, number>>;
+	return { overall: completed === 0 ? 0 : used / completed, byGroup, measuredTrials: completed };
 }
 
 function newSystematicErrors(baseline: ArmSummary, runtime: ArmSummary): string[] {
@@ -652,7 +671,9 @@ export function analyzeRuntimeComparison(baseline: ArmSummary, runtime: ArmSumma
 		reasons.push(`new systematic runtime errors: ${systematicErrors.join(", ")}`);
 		establishedFailure = true;
 	}
-	if (adoption.overall < MIN_OVERALL_ADOPTION) {
+	// No adoption-measurable task in the campaign means no adoption claim either
+	// way; scoring that as 0% would report a failure the run never tested for.
+	if (adoption.measuredTrials > 0 && adoption.overall < MIN_OVERALL_ADOPTION) {
 		reasons.push(`runtime adoption ${(adoption.overall * 100).toFixed(1)}% is below 80%`);
 		unresolved = true;
 	}
@@ -669,6 +690,7 @@ export function analyzeRuntimeComparison(baseline: ArmSummary, runtime: ArmSumma
 		tokenRatio: bootstrapped.tokens,
 		adoptionOverall: adoption.overall,
 		adoptionByGroup: adoption.byGroup,
+		adoptionMeasuredTrials: adoption.measuredTrials,
 		verdict: establishedFailure ? "fail" : unresolved ? "inconclusive" : "pass",
 		reasons,
 	};
@@ -755,7 +777,7 @@ export function formatComparison(
 		`| Runtime/Bash duration | ${formatConfidenceInterval(analysis.durationRatio, "×")} |`,
 		`| Runtime/Bash tokens | ${formatConfidenceInterval(analysis.tokenRatio, "×")} |`,
 		"",
-		`Runtime adoption: ${(analysis.adoptionOverall * 100).toFixed(1)}% overall.`,
+		`Runtime adoption: ${(analysis.adoptionOverall * 100).toFixed(1)}% overall, over ${analysis.adoptionMeasuredTrials} trial(s) of tasks that mount a runtime tool.`,
 		"",
 		...Object.entries(analysis.adoptionByGroup).map(([group, rate]) => `- ${group}: ${(rate * 100).toFixed(1)}%`),
 		"",

@@ -4,29 +4,26 @@
 
 ### Breaking Changes
 
-- Removed the `run` and `check` tools from the model surface; `eval` and `bash` are the execution surface, and the local `$`/`$$` action now runs in the same shared CPython kernel as `eval`'s Python backend instead of a one-shot managed runtime. `insights`, `profile`, `serve`, and the four `jvm_*` tools are unaffected; JVM and project-validation one-shots have no direct tool until the runtime eval backends land.
-- Removed the public `jvm_run` tool; execute Java and Kotlin through the unified `run` tool with `language`, optional `mainClass`, and the existing args/stdin/cwd controls.
+- Removed the `run` and `check` tools; `eval` and `bash` are the execution surface, and the local `$`/`$$` action now runs in the same shared CPython kernel as `eval`'s Python backend, so a `$` cell and an `eval` Python cell see the same names. `insights`, `profile`, `serve`, and the four `jvm_*` tools are unaffected. One-shot Java/Kotlin execution and managed project validation have no direct tool until the runtime eval backends land.
+- Removed the public `jvm_run` tool; `jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps` cover the JVM flows that remain.
 - Removed the `runtime_debug` tool and CDP/DAP launch protocol; use Aura's interactive `debug` tool until runtime-backed debugging is integrated there.
 
 ### Added
 
 - Added a repeatable Linux x64/glibc relocatable bundle builder that packages standalone Aura with the complete Elide process and embedded runtimes, verifies the staged and extracted layouts, and emits a tarball plus SHA-256.
-- Added explicit `engine` selection and resolved engine/language result metadata to `run`, with JavaScript, TypeScript, Python, Java, and Kotlin supported through one contract.
 
 ### Changed
 
 - Changed the default Auto-QA grievance collector to the Elide-operated `qa.elide.dev` endpoint while preserving explicit endpoint overrides.
 - Changed Aura's compact prompt and terminal-title brand mark from `π` to `☉`, with `o` retained for explicit ASCII-only symbol mode.
-- Clarified that managed `check` validates supported runtime project builds but does not replace project-declared TypeScript static typechecking.
-- Changed JavaScript and TypeScript `run` calls to use an isolated Bun child by default while keeping the embedded engine selectable; Python, Java, and Kotlin use the embedded engine.
 - Reduced persistent system and runtime tool prompt text while preserving tool-selection and safety contracts.
-- Promoted managed runtime selection and core Superpowers workflows into inherent system policy; removed their implicit skill/UI surface; kept only `run` and `check` essential; moved insights, profiling, serving, and four JVM operations behind discovery; removed redundant runtime build/advice/Javadoc tools; and added bounded per-call telemetry plus a two-task adoption/prompt-efficiency benchmark.
+- Promoted managed runtime selection and core Superpowers workflows into inherent system policy; removed their implicit skill/UI surface; moved insights, profiling, serving, and four JVM operations behind discovery; removed redundant runtime build/advice/Javadoc tools; and added bounded per-call telemetry plus a two-task adoption/prompt-efficiency benchmark.
 - Clarified that `insights` instrumentation is a plain JavaScript script using the injected `insight.on(...)` API, and added compact TypeScript reference types for its events, contexts, filters, and handlers.
-- Split Python capability controls into a semantic hierarchy: `python.enabled` gates every Python surface, `python.embedded` gates Python in managed runtime tools, and default-off `python.shell` gates the local `$`/`$$` snake action, routes it through `run`, and controls its user-facing guidance.
+- Split Python capability controls into a semantic hierarchy: `python.enabled` gates every Python surface, `python.embedded` gates Python in the managed `insights` and `profile` tools, and `python.shell` additionally offers the local `$`/`$$` snake action on hosts without the embedded runtime. Either child key offers the action and both run it in the shared CPython kernel; only `python.enabled` withdraws it, and the guidance in welcome and hotkeys follows.
 
 ### Fixed
 
-- Fixed transient internal runtime failures poisoning the session-wide service cache permanently; the failed service is now retired so the next explicit run gets a fresh embedded worker host without retrying the failed guest execution.
+- Fixed transient internal runtime failures poisoning the session-wide service cache permanently. An embedded worker latches its failure and is never rebuilt, so one crash used to strand every later runtime call; the implicated service is now retired inside the shared runtime call path, meaning `insights`, `profile`, and the four `jvm_*` tools all get a fresh worker host on the next call without retrying the failed guest execution.
 - Fixed relocatable Aura bundles failing to launch when `bin/aura` is installed through a filesystem symlink.
 - Fixed Kotlin runtime execution missing the bundled standard library, and made Auto runtime selection try Java/Kotlin in-process before falling back when the embedded library does not support them yet.
 - Fixed Python path execution through process and embedded runtime adapters omitting `__file__`, script argv identity, and sibling import roots.
