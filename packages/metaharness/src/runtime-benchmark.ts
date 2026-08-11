@@ -1358,6 +1358,10 @@ export async function writeRuntimeBenchmarkManifest(
 				microIterations: opts.microIterations,
 				mode: opts.mode,
 				embeddedLib: opts.embeddedLib,
+				// Provenance for the runtime-arm gate: a campaign that bypassed it must not
+				// read as one that passed it. The flag, not an outcome — this function also
+				// runs for `--micro-only`, where no probe happens at all.
+				allowMissingRuntime: opts.allowMissingRuntime,
 				runtimeEnvironment,
 				bunVersion: Bun.version,
 				verifierBun: {

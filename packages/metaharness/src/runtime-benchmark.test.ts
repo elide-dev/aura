@@ -3,6 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	EMBEDDED_RUNTIME_ABI_VERSION,
+	EMBEDDED_RUNTIME_SCHEMA_SHA256,
+} from "../../coding-agent/src/runtime/embedded/schema";
+import {
 	type AdapterBenchmarkRuntime,
 	type ArmLaunch,
 	type ArmSummary,
@@ -676,11 +680,27 @@ describe("runtime benchmark orchestration", () => {
 				},
 				historical: BASELINE_TOOLS,
 			},
+			// A campaign that bypassed the runtime-arm gate must not be indistinguishable
+			// from one that passed it.
+			allowMissingRuntime: false,
 		});
 		expect(manifest.taskHashes["python-execution"]).toMatch(/^[a-f0-9]{64}$/);
 		expect(manifest.verifierBun).toMatchObject({ version: Bun.version });
 		expect(manifest.verifierBun.sha256).toMatch(/^[a-f0-9]{64}$/);
 		expect(manifest.logicalCpuCount).toBeGreaterThan(0);
+
+		const bypassed = await Bun.file(
+			await writeRuntimeBenchmarkManifest(
+				parseRuntimeBenchmarkCli([
+					`--jobs-dir=${jobsDir}`,
+					"--prefix=manifest-bypassed",
+					"--task=python-execution",
+					"--allow-missing-runtime",
+				]),
+				"2026-07-29T00:00:00.000Z",
+			),
+		).json();
+		expect(bypassed.allowMissingRuntime).toBe(true);
 	});
 
 	it("labels the historical control separately from the causal decision", () => {
@@ -867,6 +887,48 @@ describe("runtime arm preflight", () => {
 		expect(failure?.message).toContain(RUNTIME_ARM_PROBE_SENTINEL);
 		expect(failure?.message).toContain("hello from bash fallback");
 		expect(failure?.message).toContain(PROBE_BINARY_CONTAINER_PATH);
+	});
+
+	// `test -r` is not enough. Under `AURA_RUNTIME_ADAPTER=auto` a present-but-incompatible
+	// library is still routed to the embedded endpoint (`selected.ts` picks embedded whenever
+	// `embeddedLibraryPath` is set, and `embedded.ts` sets it in the broken branch too), so an
+	// ABI or schema mismatch fails every runtime call and drops the agent onto bash.
+	it("rejects a present but unloadable embedded library", async () => {
+		const docker = dockerStub({
+			run: { exitCode: 1, stderr: "AssertionError: abi 2" },
+		});
+
+		const failure = await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		}).then(
+			() => null,
+			(error: unknown) => error as Error,
+		);
+
+		expect(probeScript(docker.calls)).toContain(`ctypes.CDLL('${PROBE_LIBRARY_CONTAINER_PATH}')`);
+		expect(probeScript(docker.calls)).toContain(`== ${EMBEDDED_RUNTIME_ABI_VERSION}`);
+		expect(probeScript(docker.calls)).toContain(EMBEDDED_RUNTIME_SCHEMA_SHA256);
+		expect(failure).not.toBeNull();
+		expect(failure?.message).toContain(PROBE_LIBRARY_CONTAINER_PATH);
+		expect(failure?.message).toContain("AssertionError: abi 2");
+	});
+
+	it("omits the library-load step when only a process binary is injected", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			runDocker: docker.runDocker,
+		});
+
+		const script = probeScript(docker.calls);
+		expect(script).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(script).not.toContain("ctypes");
+		expect(script).not.toContain(PROBE_LIBRARY_CONTAINER_PATH);
 	});
 
 	it("downgrades the failure to a warning under --allow-missing-runtime", async () => {

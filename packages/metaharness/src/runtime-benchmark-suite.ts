@@ -1,6 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+	EMBEDDED_RUNTIME_ABI_VERSION,
+	EMBEDDED_RUNTIME_SCHEMA_SHA256,
+} from "../../coding-agent/src/runtime/embedded/schema";
 import { SOURCE_SRC_MOUNT } from "./runner";
 
 export type RuntimeCapabilityGroup = "execution" | "project" | "debugging" | "profiling" | "jvm";
@@ -399,11 +403,40 @@ function probeGuard(check: "-x" | "-r", artifactPath: string, missing: string): 
 	return `test ${check} '${artifactPath}' || { echo "${missing}: ${artifactPath}" >&2; exit 1; }`;
 }
 
+/**
+ * dlopen the embedded library and check the fingerprints the FFI bindings check
+ * (`packages/coding-agent/src/runtime/embedded/abi.ts:176-182` and `:358-366`).
+ *
+ * Readability is not enough. The runtime arm launches with
+ * `AURA_RUNTIME_ADAPTER=auto`, and under auto a *present but incompatible* library
+ * is still routed to the embedded endpoint: `transport/selected.ts` picks embedded
+ * whenever `embeddedLibraryPath` is set, and `transport/embedded.ts` sets it in the
+ * broken branch too (`available: false`). So an ABI or schema-hash mismatch would
+ * fail every runtime call and drop the agent onto bash with `test -r` still green —
+ * the exact failure class this gate exists to prevent.
+ *
+ * CPython is only the dlopen harness here (the task image already installs it);
+ * guest execution is still proved by Elide itself in the step below.
+ */
+function probeEmbeddedLoad(libraryPath: string): string {
+	const load = [
+		"import ctypes",
+		`lib = ctypes.CDLL('${libraryPath}')`,
+		"lib.elide_embed_abi_version.restype = ctypes.c_uint32",
+		"lib.elide_embed_schema_hash.restype = ctypes.c_char_p",
+		`assert lib.elide_embed_abi_version() == ${EMBEDDED_RUNTIME_ABI_VERSION}, 'abi ' + str(lib.elide_embed_abi_version())`,
+		`assert lib.elide_embed_schema_hash().decode() == '${EMBEDDED_RUNTIME_SCHEMA_SHA256}', 'schema ' + lib.elide_embed_schema_hash().decode()`,
+	].join("; ");
+	const missing = `embedded library did not load as ABI v${EMBEDDED_RUNTIME_ABI_VERSION} with the expected request schema`;
+	return `python3 -c "${load}" || { echo "${missing}: ${libraryPath}" >&2; exit 1; }`;
+}
+
 /** The command the probe runs inside the task container. Mirrors the process adapter's own run argv. */
 function runtimeArmProbeScript(binaryPath: string, libraryPath: string | undefined): string {
 	const guards = [probeGuard("-x", binaryPath, "missing or non-executable process binary")];
 	if (libraryPath !== undefined) {
 		guards.push(probeGuard("-r", libraryPath, "missing or unreadable embedded library"));
+		guards.push(probeEmbeddedLoad(libraryPath));
 	}
 	return [
 		"set -eu",
@@ -463,8 +496,8 @@ export async function smokeRuntimeArmExecution(opts: RuntimeArmProbeOptions): Pr
 			"none",
 			"--user",
 			`${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
-			// That uid has no passwd entry in the image, so give the runtime a
-			// writable home rather than letting a missing HOME fail the gate.
+			// That uid has no passwd entry in the image, so name a writable home
+			// rather than leaving HOME unset for whatever the runtime caches.
 			"--env",
 			"HOME=/tmp",
 			"--volume",
@@ -480,8 +513,10 @@ export async function smokeRuntimeArmExecution(opts: RuntimeArmProbeOptions): Pr
 			);
 			return;
 		}
+		// `includes`, not equality: a runtime banner on stdout must not fail a working
+		// runtime, and nothing in the fallback path can produce the sentinel at all.
 		const printed = probe.stdout.trim();
-		if (printed !== RUNTIME_ARM_PROBE_SENTINEL) {
+		if (!printed.includes(RUNTIME_ARM_PROBE_SENTINEL)) {
 			fail(
 				`the Python probe printed ${JSON.stringify(printed)} instead of ${JSON.stringify(RUNTIME_ARM_PROBE_SENTINEL)}`,
 			);
