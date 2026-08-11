@@ -19,7 +19,7 @@ import {
 	getOrCreateRuntimeService,
 	type RuntimeServiceScope,
 } from "../src/runtime";
-import { formatRuntimeRpcError } from "../src/runtime/format";
+import { formatRuntimeRpcError, isRuntimeExecResult } from "../src/runtime/format";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 import type { ToolSession } from "../src/tools";
 import { JvmJarTool } from "../src/tools/jvm-jar";
@@ -264,6 +264,24 @@ describe("runtime RPC detail redaction", () => {
 
 		expect(details.code).toBe("cancelled");
 		expect(details.message).toBe("Runtime execution was cancelled.");
+		expect(details.argv).toBe("elide run main.ts");
+	});
+
+	test("a data field cannot forge an exitCode and pass as an execution result", () => {
+		// `exitCode` is `isRuntimeExecResult`'s discriminator: a numeric one on an
+		// error projection would make a call that never reached the runtime read as
+		// a completed execution to the non-model callers that narrow on it.
+		const { text, details } = formatRuntimeRpcError(
+			new RuntimeRpcError("runtime-missing", "No runtime binary is available.", {
+				exitCode: 0,
+				argv: ["elide", "run", "main.ts"],
+			}),
+			PROJECT_ROOT,
+		);
+
+		expect(details.exitCode).toBeUndefined();
+		expect(isRuntimeExecResult(details)).toBe(false);
+		expect(text).not.toContain("exitCode");
 		expect(details.argv).toBe("elide run main.ts");
 	});
 

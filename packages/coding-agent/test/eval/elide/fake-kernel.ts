@@ -33,6 +33,11 @@ export interface FakeElideJsKernelOptions {
 	failOpen?: boolean;
 	/** Swallow the `closed` outbound so a graceful close never gets its ack. */
 	dropClosed?: boolean;
+	/**
+	 * `onError()` registration throws. Models a kernel that opens and then refuses
+	 * to be subscribed to — the post-open half of the adapter's open handshake.
+	 */
+	failListenerRegistration?: boolean;
 	/** Park `open()` on this, holding the kernel mid-construction. */
 	openGate?: Promise<void>;
 }
@@ -86,6 +91,8 @@ export function createFakeElideJsKernelFactory(options: FakeElideJsKernelOptions
 				return () => hostListeners.delete(handler);
 			},
 			onError: handler => {
+				if (options.failListenerRegistration)
+					throw new Error("fake Elide JS kernel refused an onError registration");
 				errorListeners.add(handler);
 				return () => errorListeners.delete(handler);
 			},

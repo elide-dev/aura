@@ -142,8 +142,9 @@ function capTail(text: string): string {
  * anything past the {@link DATA_TAIL_LIMIT} tail cap, and every nested object —
  * dropping those wholesale is the second guard on environment snapshots, and a
  * nested structure has no honest one-line rendering anyway. The message is
- * redacted on the same terms as the data, and `data` fields named `code` or
- * `message` are skipped so they cannot shadow this projection's own contract.
+ * redacted on the same terms as the data, and `data` fields named `code`,
+ * `message`, or `exitCode` are skipped so they cannot shadow this projection's
+ * own contract or {@link isRuntimeExecResult}'s discriminator.
  *
  * @param root Project root paths are judged against; defaults to the process cwd.
  */
@@ -165,8 +166,11 @@ export function formatRuntimeRpcError(
 		if (ENV_KEY.test(key)) continue;
 		// `code` and `message` are this projection's own contract — callers narrow on
 		// them (the `$` Python shell reads `code === "cancelled"`). A same-named data
-		// field must not shadow them.
-		if (key === "code" || key === "message") continue;
+		// field must not shadow them. `exitCode` is reserved for the same reason one
+		// step further out: it is `isRuntimeExecResult`'s discriminator, so a numeric
+		// `exitCode` in an error payload would make a failed call read as a completed
+		// execution. No producer supplies one today; this keeps it that way.
+		if (key === "code" || key === "message" || key === "exitCode") continue;
 		if (typeof raw === "number" || typeof raw === "boolean") {
 			details[key] = raw;
 			fields.push(`${key}: ${raw}`);

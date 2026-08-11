@@ -127,7 +127,25 @@ export function spawnElideWorker(factory: ElideJsKernelFactory, opts: SpawnElide
 			return;
 		}
 		session = opened;
-		subscriptions.push(opened.onMessage(emitMessage), opened.onError(emitError));
+		try {
+			// Pushed one at a time so a throw on the second registration still leaves
+			// the first unsubscribe recorded for teardown.
+			subscriptions.push(opened.onMessage(emitMessage));
+			subscriptions.push(opened.onError(emitError));
+		} catch (error) {
+			// Nothing awaits this chain except teardown, so a throw here would surface
+			// as an unhandled rejection. A kernel nobody can subscribe to is a kernel
+			// nobody can hear from: fault it through the error fan-out on the same
+			// terms as a failed open, and leave `session` set so dispose() closes it.
+			openFailed = true;
+			queuedInbound.length = 0;
+			emitError(
+				new Error(`Elide JS kernel ${label} failed to attach listeners: ${asError(error).message}`, {
+					cause: error,
+				}),
+			);
+			return;
+		}
 		for (const msg of queuedInbound.splice(0)) deliver(opened, msg);
 	})();
 

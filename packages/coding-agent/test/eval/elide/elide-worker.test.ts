@@ -154,6 +154,27 @@ describe("spawnElideWorker", () => {
 		expect(await withTimeout(handle.close(), 1_000, "close never settled after a failed open")).toBe(false);
 	});
 
+	it("faults a kernel whose listener registration throws instead of leaking an unhandled rejection", async () => {
+		const factory = createFakeElideJsKernelFactory({ failListenerRegistration: true });
+		const sessionId = "elide-listener-registration-failure";
+		const handle = spawnElideWorker(factory, { cwd: process.cwd(), sessionId });
+		teardowns.push(() => handle.terminate());
+
+		// The registration runs in the open chain, which nothing awaits but teardown:
+		// a throw there has to reach the error fan-out, not the rejection handler.
+		const fault = nextFault(handle, "listener registration failure");
+		expect(() => handle.send({ type: "init", snapshot: snapshotFor(sessionId) })).not.toThrow();
+		const error = await fault;
+		expect(error.message).toContain("failed to attach listeners");
+		expect(error.message).toContain(sessionId);
+
+		// Unlike a failed open, this session exists, so teardown still has to
+		// release it.
+		expect(factory.sessions).toHaveLength(1);
+		await handle.terminate();
+		expect(factory.closes).toBe(1);
+	});
+
 	it("fans out a kernel fault raised mid-run", async () => {
 		const factory = createFakeElideJsKernelFactory();
 		const sessionId = "elide-midrun-fault";

@@ -3692,7 +3692,8 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "elide",
 					label: "Elide",
-					description: "Execute JavaScript cells on the Elide runtime.",
+					description:
+						"Execute JavaScript cells on the Elide runtime (no kernel ships yet; falls back to Bun with a notice).",
 				},
 			],
 		},
