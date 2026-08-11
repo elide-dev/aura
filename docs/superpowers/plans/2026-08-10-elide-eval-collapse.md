@@ -450,3 +450,30 @@ bun run bench:runtime --micro-only --micro-iterations 15 --prefix=m1-post \
 ```
 
 No task touches `src/runtime/embedded/generated/**` or `schema.ts` — any diff there is a review stop.
+
+---
+
+# Addendum (2026-08-11, Sam's directive): retire `run` and `check` immediately
+
+Direction: **prefer OMP's semantics.** The model-facing execution surface is upstream's `eval` (py/js cells) + `bash`. The fork's `run` and `check` tools are retired NOW — not kept as slim tools, not deferred to M4. The runtime service/transport layer STAYS (it backs `insights`, `profile`, `jvm_*`, `serve`, the CLI, and the benchmarks); only the two model-facing tools and their wiring die. Consequence accepted by Sam: JVM compile+run leaves the model surface until a java/kotlin ExecutorBackend lands (M3/M4).
+
+### Task 18: Retire the `run` and `check` tools from the model surface
+
+**Files (locate precisely by symbol; expected set):**
+- Delete: `packages/coding-agent/src/tools/runtime-run.ts`, `src/tools/runtime-check.ts`, their entries in `src/tools/index.ts` registration, `src/tools/builtin-names.ts`, `src/tools/essential-tools.ts`, the run/check renderer specs in `src/tools/runtime-renderer.ts` (+ `renderers.ts` spread if per-tool), run/check gallery fixtures, `docs/tools/run.md` + `docs/tools/check.md` (and the docs-coverage test list `test/internal-urls/docs-tool-coverage.test.ts` follows BUILTIN_TOOL_NAMES automatically — verify), any prompt text advertising them.
+- Modify: `src/session/agent-session.ts` `executePythonShell` (~:7290-7343) — the `$`/`$$` shell must STOP depending on `getToolByName("run")`. Revert to upstream semantics: route through the upstream CPython kernel path (`#eval`/`executePython`-style, as the non-embedded branch already does). Delete the run-tool executor branch and the `RuntimeRunTool` import; simplify `modes/controllers/{input,command}-controller.ts` gating if the embedded branch's absence makes `isEmbeddedPythonEnabled` checks dead THERE (do not delete the settings keys themselves — `insights`/`profile` still read them; settings collapse is M2/M4).
+- Modify: `packages/metaharness` — `ESSENTIAL_RUNTIME_TOOLS` loses `run`/`check` (execution tasks' runtime arm now differentiates on the surviving discoverable tools; the benchmark MEANING shifts — that is intended and gets re-baselined later); update arm-construction tests pinning tool lists. The Task 15 preflight and Task 16 autoDownload work are tool-agnostic — untouched.
+- Tests: delete `test/runtime-run-tool.test.ts`, `test/runtime-check-tool.test.ts`; prune run/check cases from `test/runtime-tool-registry.test.ts`, `test/runtime-tool-renderers.test.ts`, `test/runtime-workdir.test.ts`, `test/runtime-error-details.test.ts` (KEEP the formatter/callRuntime coverage — surviving tools use them; re-point the tool-boundary cases at `insights` or `check`→`jvm_*`), re-point `test/agent-session-user-shortcut-hooks.test.ts`'s `$`-python cases at the upstream kernel path, and re-point/drop the run-TOOL-specific cases in `test/runtime-integration.test.ts` (service/endpoint-level cases stay — the 26-test artifact gate must still pass, possibly with a lower count; document the new count).
+- MUST NOT change: `src/runtime/{service,protocol}.ts` (service.run stays — benchmarks and insights/profile call it), `src/runtime/transport/**`, `src/runtime/embedded/**`, `packages/agent/**`, `src/eval/**` beyond nothing at all.
+
+**Steps:** locate all references (`grep -rn '"run"' '"check"' RuntimeRunTool RuntimeCheckTool` across src/test/docs/prompts/metaharness); write the failing re-pointed tests first where behavior changes ($-python via upstream kernel); delete/retire; run the full gate: the pruned suites + `bun test packages/coding-agent/test/eval/` + artifact-gated integration (document new count) + `bun --cwd=packages/metaharness test` + `bun run check:ts`. Commit (one or two logical commits, conventional, trailer).
+
+**Acceptance:** `grep -rn '\"run\"\|\"check\"' packages/coding-agent/src/tools/builtin-names.ts packages/coding-agent/src/tools/essential-tools.ts` → no hits; no tool named run/check registered (registry test proves); `$ python` cells execute via the upstream CPython kernel (test proves); all gates green; `git diff --stat -- packages/agent packages/coding-agent/src/eval` empty (except nothing).
+
+### Task 19: Truth-up the handoff docs (retirement + parked residuals)
+
+**Files:** `docs/aura/ELIDE_ALIGNMENT.md`, `docs/aura/ACTIONS_CONSOLIDATE.md`, `docs/aura/FORK.md`, `docs/aura/WHIPLASH_QUEUE.md` (one line), `docs/tools/` index if any.
+
+**Changes:** (1) ELIDE_ALIGNMENT "What must stay fork-owned": remove `run` and `check`; state OMP's eval owns execution semantics; note JVM one-shots return via a java/kotlin ExecutorBackend (M3/M4) and that Tier 2's file+args+stdin+mainScript carrier is the path for file execution through eval; fix Seam 3 text accordingly. (2) Apply the four PARKED residuals from the final review (ledger: wiring-checklist row 4 falsified by the fallback clause — rewrite the row to include deleting the clause when a kernel lands; matrix cell hop-3 mechanism gloss corrected to the pre-construction-window rationale, nested inheritance flows through hop 2; :3490→:3491; lede "two"→"three"). (3) ACTIONS_CONSOLIDATE: mark Phase 1's `run`-consolidation direction SUPERSEDED by the retirement (eval is the single code surface as of this commit; note what remains for M4: settings collapse, rb/jl, Python engine, JVM eval backend). (4) FORK.md: drop/shrink the rows for runtime-run/runtime-check/essential-tools/$-shell embedded routing; keep transport/service rows. (5) WHIPLASH_QUEUE: raise task J's priority note (mainScript now load-bearing for eval file execution). 
+
+**Acceptance:** no doc instructs using or building against the `run`/`check` tools; the four parked findings are closed (cite each fix); check:ts clean; commit with trailer.
