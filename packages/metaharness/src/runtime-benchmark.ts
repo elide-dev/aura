@@ -231,6 +231,13 @@ export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
 				"--agent-arg=--tools",
 				`--agent-arg=${tools.join(",")}`,
 			];
+			// Categorical, artifacts or not: a benchmark never reaches for the network
+			// to acquire its own subject. A download that succeeds silently swaps the
+			// subject; one that fails (no `xz` in the task image) turns every runtime
+			// call into an error — 163 of them on one task. Without artifacts the arm
+			// then reports runtime-missing immediately instead of burning the campaign
+			// on a fetch that cannot work.
+			args.push("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
 			if (opts.runtimeBinary || opts.embeddedLib) {
 				if (!opts.runtimeBinary || !opts.embeddedLib) {
 					throw new Error("Runtime benchmark agent launches require both process and embedded runtime artifacts.");
@@ -239,11 +246,6 @@ export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
 					`--env=AURA_RUNTIME_BIN=${sourceMountedRuntimePath(opts.runtimeBinary)}`,
 					`--env=AURA_RUNTIME_EMBEDDED_LIB=${sourceMountedRuntimePath(opts.embeddedLib)}`,
 					"--env=AURA_RUNTIME_ADAPTER=auto",
-					// The campaign measures the artifacts mounted above, so a container
-					// must never fetch a runtime of its own: a download that succeeds
-					// silently swaps the subject, and one that fails (no `xz` in the task
-					// image) turns every runtime call into an error.
-					"--env=AURA_RUNTIME_AUTO_DOWNLOAD=false",
 				);
 			}
 			if (opts.hostNetwork) args.push("--host-network");

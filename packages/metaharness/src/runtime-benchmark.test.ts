@@ -287,19 +287,30 @@ describe("runtime benchmark orchestration", () => {
 			historicalBinary: "/tmp/aura-linux-x64",
 		};
 		const injected = buildArmLaunches({ ...options, runtimeBinary, embeddedLib });
-		const armArgs = (arm: BenchmarkArm) => injected.find(launch => launch.arm === arm)?.args ?? [];
+		const bare = buildArmLaunches(options);
+		const armArgs = (launches: ArmLaunch[], arm: BenchmarkArm) =>
+			launches.find(launch => launch.arm === arm)?.args ?? [];
 
 		// The measured arms carry the override the same way they carry every other
 		// runtime env: the two arms must differ only in their tool set.
-		expect(armArgs("runtime")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
-		expect(armArgs("baseline")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
-		// The historical control runs a frozen binary from before this override existed.
-		expect(armArgs("historical").join(" ")).not.toContain("AURA_RUNTIME_AUTO_DOWNLOAD");
+		expect(armArgs(injected, "runtime")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		expect(armArgs(injected, "baseline")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
 
-		// No injected artifacts means no runtime env at all — the override never
-		// appears on its own.
-		const bare = buildArmLaunches(options);
-		expect(bare.every(launch => !launch.args.join(" ").includes("AURA_RUNTIME_AUTO_DOWNLOAD"))).toBe(true);
+		// An artifact-less campaign is the shape that produced the original failure:
+		// a runtime arm with `run`/`check` mounted, no runtime present, and nothing
+		// stopping the container from fetching one. The override is unconditional.
+		expect(armArgs(bare, "runtime")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		expect(armArgs(bare, "baseline")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		// Only the override is unconditional: the artifact paths still require artifacts.
+		expect(armArgs(bare, "runtime").join(" ")).not.toContain("AURA_RUNTIME_BIN");
+		expect(armArgs(bare, "runtime").join(" ")).not.toContain("AURA_RUNTIME_EMBEDDED_LIB");
+		expect(armArgs(bare, "runtime").join(" ")).not.toContain("AURA_RUNTIME_ADAPTER");
+
+		// The historical control runs a frozen binary from before this override
+		// existed, with baseline tools and no runtime env of any kind.
+		for (const launches of [injected, bare]) {
+			expect(armArgs(launches, "historical").join(" ")).not.toContain("AURA_RUNTIME");
+		}
 	});
 
 	it("skips completed arms and resumes interrupted arms on campaign resume", () => {
