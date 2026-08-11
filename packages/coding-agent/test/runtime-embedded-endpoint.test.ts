@@ -287,7 +287,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "process JavaScript",
 				adapter: "process",
 				embeddedStatus: validEmbeddedStatus,
-				params: { code: "1", language: "js", engine: "elide" },
+				params: { code: "1", language: "js" },
 				expected: "process",
 			},
 			{
@@ -301,7 +301,21 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "embedded TypeScript",
 				adapter: "embedded",
 				embeddedStatus: validEmbeddedStatus,
-				params: { code: "1", language: "ts", engine: "elide" },
+				params: { code: "1", language: "ts" },
+				expected: "embedded",
+			},
+			{
+				name: "embedded default-language inline source",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { code: "1" },
+				expected: "embedded",
+			},
+			{
+				name: "embedded inferred TypeScript file",
+				adapter: "embedded",
+				embeddedStatus: validEmbeddedStatus,
+				params: { path: "task.mts" },
 				expected: "embedded",
 			},
 			{
@@ -322,14 +336,14 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "auto without library",
 				adapter: "auto",
 				embeddedStatus: noEmbeddedStatus,
-				params: { code: "1", language: "js", engine: "elide" },
+				params: { code: "1", language: "js" },
 				expected: "process",
 			},
 			{
 				name: "auto valid library",
 				adapter: "auto",
 				embeddedStatus: validEmbeddedStatus,
-				params: { code: "1", language: "js", engine: "elide" },
+				params: { code: "1", language: "js" },
 				expected: "embedded",
 			},
 			{
@@ -364,7 +378,7 @@ describe("SelectedRuntimeEndpoint routing", () => {
 				name: "explicit embedded language overrides JVM-looking path",
 				adapter: "embedded",
 				embeddedStatus: validEmbeddedStatus,
-				params: { path: "Main.java", language: "js", engine: "elide" },
+				params: { path: "Main.java", language: "js" },
 				expected: "embedded",
 			},
 			{
@@ -384,36 +398,39 @@ describe("SelectedRuntimeEndpoint routing", () => {
 		}
 	});
 
-	test("routes default JavaScript and TypeScript to Bun before adapter selection", async () => {
+	// Default JS/TS used to short-circuit to a Bun endpoint before adapter
+	// selection. That arm is gone: they now take the same adapter path as every
+	// other language, and the reported engine is Elide.
+	test("routes default JavaScript and TypeScript through adapter selection", async () => {
 		for (const language of ["js", "ts"] as const) {
 			const processEndpoint = new StubEndpoint("process", processStatus);
-			const embeddedEndpoint = new StubEndpoint("embedded", noEmbeddedStatus);
-			const bunEndpoint = new StubEndpoint("bun", processStatus);
+			const embeddedEndpoint = new StubEndpoint("embedded", validEmbeddedStatus);
 			const endpoint = new SelectedRuntimeEndpoint({
 				adapter: "embedded",
 				processEndpoint,
 				embeddedEndpoint,
-				bunEndpoint,
 			});
 			const response = await endpoint.request(rpcRequest(17, "runtime/run", { code: "1", language }));
-			expect(unwrapResponse<{ stdout: string }>(response).stdout).toBe("bun");
+			expect(unwrapResponse<{ stdout: string; engine: string; language: string }>(response)).toMatchObject({
+				stdout: "embedded",
+				engine: "elide",
+				language,
+			});
 			expect(processEndpoint.requests).toHaveLength(0);
-			expect(embeddedEndpoint.requests).toHaveLength(0);
+			expect(embeddedEndpoint.requests.filter(request => request.method === "runtime/run")).toHaveLength(1);
 		}
 	});
 
-	test("rejects an invalid engine pair before calling any endpoint", async () => {
+	test("rejects a retired Bun engine request before calling any endpoint", async () => {
 		const processEndpoint = new StubEndpoint("process", processStatus);
 		const embeddedEndpoint = new StubEndpoint("embedded", validEmbeddedStatus);
-		const bunEndpoint = new StubEndpoint("bun", processStatus);
-		const endpoint = new SelectedRuntimeEndpoint({ processEndpoint, embeddedEndpoint, bunEndpoint });
+		const endpoint = new SelectedRuntimeEndpoint({ processEndpoint, embeddedEndpoint });
 		const response = await endpoint.request(
 			rpcRequest(17, "runtime/run", { code: "print(1)", language: "python", engine: "bun" }),
 		);
 		expect(responseError(response).error).toMatchObject({ code: "invalid-params" });
 		expect(processEndpoint.requests).toHaveLength(0);
 		expect(embeddedEndpoint.requests).toHaveLength(0);
-		expect(bunEndpoint.requests).toHaveLength(0);
 	});
 	test("auto falls back to the process endpoint when embedded execution rejects a language", async () => {
 		const processEndpoint = new StubEndpoint("process", processStatus);

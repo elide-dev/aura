@@ -151,7 +151,6 @@ describe("runtime/jvm — argv per action", () => {
 			adapter: "process",
 			processEndpoint: local,
 			embeddedEndpoint: local,
-			bunEndpoint: local,
 		});
 		const result = unwrapResponse<RuntimeRunResult & RuntimeJvmResult>(
 			await selected.request(

@@ -28,7 +28,14 @@ export type RuntimeMethod =
 
 export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
 
-export type RunEngine = "bun" | "elide";
+/**
+ * Engines `runtime/run` can target. Elide is the only one: the Bun one-shot arm
+ * was retired with the `run` tool, and isolated JavaScript/TypeScript one-shots
+ * belong to the eval JS worker. The field survives the collapse because
+ * `engine` crosses the JSON-RPC seam, where params arrive unvalidated — a stale
+ * `"bun"` request must be refused rather than silently executed on Elide.
+ */
+export type RunEngine = "elide";
 
 /** The two compiled guest languages, also used by the specialized JVM flows. */
 export type JvmLanguage = "java" | "kotlin";
@@ -40,7 +47,7 @@ export interface RuntimeRunParams {
 	path?: string;
 	/** Language for inline code (default "ts"); inferred from the extension in path mode. */
 	language?: RuntimeLanguage;
-	/** Execution engine. Defaults to Bun for JavaScript/TypeScript and Elide otherwise. */
+	/** Execution engine. Elide for every language; defaulted when omitted. */
 	engine?: RunEngine;
 	args?: string[];
 	stdin?: string;
@@ -63,8 +70,8 @@ export interface ResolvedRunTarget {
 }
 
 const RUN_ENGINES: Record<RuntimeLanguage, readonly RunEngine[]> = {
-	js: ["bun", "elide"],
-	ts: ["bun", "elide"],
+	js: ["elide"],
+	ts: ["elide"],
 	python: ["elide"],
 	java: ["elide"],
 	kotlin: ["elide"],
@@ -82,7 +89,7 @@ export function resolveRunTarget(params: RuntimeRunParams): ResolvedRunTarget {
 	if (!Object.hasOwn(RUN_ENGINES, language)) {
 		throw new RuntimeRpcError("invalid-params", `Unsupported runtime language "${language}".`);
 	}
-	const engine = params.engine ?? (language === "js" || language === "ts" ? "bun" : "elide");
+	const engine = params.engine ?? "elide";
 	if (!RUN_ENGINES[language].includes(engine)) {
 		throw new RuntimeRpcError("invalid-params", `Engine "${engine}" does not support language "${language}".`);
 	}

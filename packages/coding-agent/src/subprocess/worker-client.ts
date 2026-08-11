@@ -6,8 +6,8 @@ import { stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils/path";
 import { workerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
 import type { Subprocess } from "bun";
 
-// Subpath imports, NOT the @oh-my-pi/pi-utils package barrel: this module sits
-// on the CLI entry graph (cli.ts -> runtime/transport/bun), and the barrel
+// Subpath imports, NOT the @oh-my-pi/pi-utils package barrel: this module is
+// pulled in by worker clients and daemon entries during startup, and the barrel
 // eagerly re-exports env.ts (whose import applies profile-scoped .env files —
 // forbidden before profile bootstrap) and ptree (whose import loads the
 // pi_natives addon). The env.ts symbols this module does need are pulled in

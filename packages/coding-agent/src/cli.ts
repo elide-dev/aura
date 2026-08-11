@@ -34,9 +34,7 @@ import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbou
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 import { TERMINAL_OUTPUT_WORKER_ARG } from "./launch/terminal-output-worker-protocol";
 import { LSP_MUX_WORKER_ARG } from "./lsp/mux/protocol";
-import { BUN_RUN_WORKER_ARG, runBunGuest } from "./runtime/bun-run-entry";
 import { EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_EXECUTION_WORKER_ARG } from "./runtime/embedded/worker-protocol";
-import { smokeTestBunRunWorker } from "./runtime/transport/bun";
 import { COMPUTER_WORKER_ARG } from "./tools/computer/protocol";
 import { smokeTestComputerWorker } from "./tools/computer/supervisor";
 
@@ -115,7 +113,6 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestTinyTitleWorker();
 	await smokeTestSttWorker();
 	await smokeTestJsEvalWorker();
-	await smokeTestBunRunWorker();
 	await smokeTestComputerWorker();
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();
@@ -136,7 +133,7 @@ const STT_WORKER_ARG = "__omp_worker_stt";
 const TTS_WORKER_ARG = "__omp_worker_tts";
 const MNEMOPI_EMBED_WORKER_ARG = "__omp_worker_mnemopi_embed";
 
-async function runWorkerEntrypoint(arg: string | undefined, args: string[]): Promise<boolean> {
+async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === TINY_WORKER_ARG) {
 		await runTinyWorker();
 		return true;
@@ -209,10 +206,6 @@ async function runWorkerEntrypoint(arg: string | undefined, args: string[]): Pro
 			transport => startJsEvalProcess(transport, interceptUnhandledRejections),
 			{ rethrowConnectedSendErrors: true },
 		);
-		return true;
-	}
-	if (arg === BUN_RUN_WORKER_ARG) {
-		await runBunGuest(args);
 		return true;
 	}
 	if (arg === STT_WORKER_ARG) {
@@ -399,7 +392,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	// worker's parked initial messages as soon as the entry module's
 	// top-level evaluation finishes.
 	if (isWorkerHostSelector(resolvedArgv[0])) {
-		const dispatched = await runWorkerEntrypoint(resolvedArgv[0], resolvedArgv.slice(1));
+		const dispatched = await runWorkerEntrypoint(resolvedArgv[0]);
 		if (!dispatched) {
 			process.stderr.write(`Error: unknown worker selector: ${resolvedArgv[0]}\n`);
 			process.exitCode = 1;

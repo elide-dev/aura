@@ -5,6 +5,7 @@ import {
 	okResponse,
 	RUNTIME_PROTOCOL_VERSION,
 	RuntimeRpcError,
+	type RuntimeRunParams,
 	resolveRunTarget,
 	unwrapResponse,
 } from "../src/runtime/protocol";
@@ -44,11 +45,11 @@ describe("runtime protocol", () => {
 		test.each([
 			[
 				{ code: "console.log(1)", language: "js" },
-				{ language: "js", engine: "bun" },
+				{ language: "js", engine: "elide" },
 			],
 			[
 				{ code: "console.log(1)", language: "ts" },
-				{ language: "ts", engine: "bun" },
+				{ language: "ts", engine: "elide" },
 			],
 			[
 				{ code: "print(1)", language: "python" },
@@ -62,7 +63,7 @@ describe("runtime protocol", () => {
 				{ code: "fun main() {}", language: "kotlin" },
 				{ language: "kotlin", engine: "elide" },
 			],
-			[{ path: "src/task.mts" }, { language: "ts", engine: "bun" }],
+			[{ path: "src/task.mts" }, { language: "ts", engine: "elide" }],
 			[{ path: "src/task.py" }, { language: "python", engine: "elide" }],
 			[{ path: "src/Main.java" }, { language: "java", engine: "elide" }],
 			[{ path: "src/main.kt" }, { language: "kotlin", engine: "elide" }],
@@ -78,14 +79,19 @@ describe("runtime protocol", () => {
 			expect(resolveRunTarget(params)).toEqual(expected);
 		});
 
-		test.each(["python", "java", "kotlin"] as const)("rejects Bun for %s", language => {
-			expect(() => resolveRunTarget({ code: "", language, engine: "bun" })).toThrow(
-				`Engine "bun" does not support language "${language}".`,
-			);
-		});
+		// `runtime/run` params arrive over JSON-RPC as `unknown`, so the retired
+		// Bun engine is only unreachable in the type system. A stale caller that
+		// still asks for it must be refused, not quietly run on Elide.
+		test.each(["js", "ts", "python", "java", "kotlin"] as const)(
+			"rejects the retired Bun engine for %s",
+			language => {
+				const params = { code: "", language, engine: "bun" } as unknown as RuntimeRunParams;
+				expect(() => resolveRunTarget(params)).toThrow(`Engine "bun" does not support language "${language}".`);
+			},
+		);
 
-		test("defaults inline source to TypeScript with Bun", () => {
-			expect(resolveRunTarget({ code: "const answer = 42" })).toEqual({ language: "ts", engine: "bun" });
+		test("defaults inline source to TypeScript on Elide", () => {
+			expect(resolveRunTarget({ code: "const answer = 42" })).toEqual({ language: "ts", engine: "elide" });
 		});
 
 		test("rejects mainClass outside Java and Kotlin", () => {
