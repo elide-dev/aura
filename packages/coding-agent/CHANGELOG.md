@@ -34,6 +34,7 @@
 ### Removed
 
 - Removed runtime-binary shell interception and its `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` escape hatches; direct runtime commands now follow the ordinary `bashInterceptor.enabled` policy.
+- Removed the Bun one-shot execution arm behind `runtime/run`, orphaned when the `run` tool was retired: the `engine: "bun"` endpoint, its CLI worker-host re-entry, and the routing that sent default JavaScript/TypeScript to Bun ahead of adapter selection. Every language now resolves to the Elide engine and takes the ordinary process/embedded path; isolated one-shot JS/TS belongs to `eval`. A `runtime/run` request that still names `engine: "bun"` is refused with `invalid-params` rather than silently run elsewhere.
 ## [17.2.12] - 2026-08-08
 
 ### Fixed
