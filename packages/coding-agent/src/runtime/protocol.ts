@@ -31,9 +31,12 @@ export type RuntimeLanguage = "js" | "ts" | "python" | "java" | "kotlin";
 /**
  * Engines `runtime/run` can target. Elide is the only one: the Bun one-shot arm
  * was retired with the `run` tool, and isolated JavaScript/TypeScript one-shots
- * belong to the eval JS worker. The field survives the collapse because
- * `engine` crosses the JSON-RPC seam, where params arrive unvalidated — a stale
- * `"bun"` request must be refused rather than silently executed on Elide.
+ * belong to the eval JS worker. The field survives the collapse to keep
+ * `RUN_ENGINES` refusing a stale `engine: "bun"` instead of silently running it
+ * on Elide. No in-tree caller can produce one today — `RuntimeService.run` has
+ * no callers left and is the only thing that builds a `runtime/run` request —
+ * so the guard exists for direct `RuntimeService` calls from the SDK surface or
+ * a future in-tree caller, not for live wire traffic.
  */
 export type RunEngine = "elide";
 

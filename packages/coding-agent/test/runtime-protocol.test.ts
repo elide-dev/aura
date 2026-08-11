@@ -79,9 +79,9 @@ describe("runtime protocol", () => {
 			expect(resolveRunTarget(params)).toEqual(expected);
 		});
 
-		// `runtime/run` params arrive over JSON-RPC as `unknown`, so the retired
-		// Bun engine is only unreachable in the type system. A stale caller that
-		// still asks for it must be refused, not quietly run on Elide.
+		// The retired Bun engine is unreachable in the type system but not at
+		// runtime: a direct `RuntimeService` call from the SDK surface can still
+		// pass one. It must be refused, not quietly run on Elide.
 		test.each(["js", "ts", "python", "java", "kotlin"] as const)(
 			"rejects the retired Bun engine for %s",
 			language => {
