@@ -37,6 +37,10 @@ describe("runtime settings", () => {
 
 	test("AURA_RUNTIME_AUTO_DOWNLOAD from a container environment reaches the resolved endpoint", async () => {
 		const settings = await Settings.init({ cwd: projectDir, agentDir });
+		// An ambient export in the developer's shell must not decide this test;
+		// restoreSettingsTestState puts the original environment back afterwards.
+		delete process.env.AURA_RUNTIME_AUTO_DOWNLOAD;
+
 		expect(readRuntimeSettingsValues(settings).autoDownload).toBe(true);
 
 		// The benchmark runner forwards this into the agent container so a campaign

@@ -19,6 +19,7 @@ import {
 	countTrialToolCalls,
 	formatComparison,
 	measureAdapterCase,
+	microRuntimeEndpointOptions,
 	packagedRuntimeBinaryForLibrary,
 	parseRuntimeBenchmarkCli,
 	runAdapterMicrobenchmarks,
@@ -604,6 +605,17 @@ describe("runtime benchmark orchestration", () => {
 
 		await expect(measured).rejects.toThrow('expected stdout "ok\\n", received "wrong\\n"');
 		expect(calls).toEqual(["process", "embedded", "process"]);
+	});
+
+	it("measures the packaged binary in the host micro suite and never downloads one", () => {
+		// The deterministic micro suite runs on the host, outside every container
+		// guard, so it needs the same policy in its own right: no fetch, and the
+		// binary under test rather than whatever PATH resolution turns up.
+		expect(microRuntimeEndpointOptions()).toEqual({ autoDownload: false });
+		expect(microRuntimeEndpointOptions("/repo/out/aura-elide-linux-x64/bin/elide")).toEqual({
+			autoDownload: false,
+			explicitPath: "/repo/out/aura-elide-linux-x64/bin/elide",
+		});
 	});
 
 	it("computes p50, p95, and process-over-embedded speedups", () => {

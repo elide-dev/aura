@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	EmbeddedRuntimeEndpoint,
+	type LocalEndpointOptions,
 	LocalRuntimeEndpoint,
 	type RuntimeExecResult,
 	RuntimeRpcError,
@@ -950,9 +951,21 @@ async function runProcess(command: string[], cwd?: string): Promise<void> {
 		throw new Error(`${command.join(" ")} exited ${exitCode}: ${await new Response(proc.stderr).text()}`);
 }
 
-export async function runMicrobenchmarks(iterations: number): Promise<MicroResult[]> {
+/**
+ * Endpoint options for the host-side micro suite. It runs outside every
+ * container guard, so it carries the same policy in its own right: never fetch
+ * the subject (a downloaded release would report numbers for a *different*
+ * binary than the agent arms measure), and prefer the packaged binary under
+ * test over whatever PATH resolution turns up. Mirrors the adapter suite's
+ * process endpoint (`DEFAULT_ADAPTER_DEPENDENCIES`).
+ */
+export function microRuntimeEndpointOptions(processBinaryPath?: string): LocalEndpointOptions {
+	return { autoDownload: false, ...(processBinaryPath === undefined ? {} : { explicitPath: processBinaryPath }) };
+}
+
+export async function runMicrobenchmarks(iterations: number, processBinaryPath?: string): Promise<MicroResult[]> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-runtime-micro-"));
-	const service = new RuntimeService(new LocalRuntimeEndpoint({ autoDownload: true }));
+	const service = new RuntimeService(new LocalRuntimeEndpoint(microRuntimeEndpointOptions(processBinaryPath)));
 	try {
 		const python = Bun.which("python3");
 		const bun = Bun.which("bun");
@@ -1544,7 +1557,12 @@ async function main(): Promise<void> {
 		const manifestPath = await writeRuntimeBenchmarkManifest(opts, startedAt);
 		process.stdout.write(`Runtime benchmark manifest: ${manifestPath}\n`);
 	}
-	if (opts.mode !== "agent") micro = await runMicrobenchmarks(opts.microIterations);
+	if (opts.mode !== "agent") {
+		// Same derivation the adapter suite below uses, so both micro suites and the
+		// agent arms all measure the one binary the campaign is about.
+		const microBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
+		micro = await runMicrobenchmarks(opts.microIterations, microBinary);
+	}
 	let adapter: AdapterMicrobenchmarkOutcome = { kind: "skipped", message: ADAPTER_MICROBENCHMARK_SKIPPED };
 	if (opts.embeddedLib && opts.mode === "agent") {
 		adapter = { kind: "skipped", message: "Adapter comparison skipped: --agent-only disables microbenchmarks." };
