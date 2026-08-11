@@ -51,6 +51,7 @@ and after every upstream merge.
 | `packages/coding-agent/src/main.ts` | `discoverPrependSystemPromptFile` (`PREPEND_SYSTEM.md`, project then global, mirroring `discoverAppendSystemPromptFile`), resolved in `buildSessionOptions` and applied through a fourth `applyResolvedSystemPromptInputs` parameter; `--prepend-system-prompt` also joins the fork-cache-shape check; the `--version` launch-flag path prints `RUNTIME_PROTOCOL_LINE` under `VERSION`, matching the top-level interception in `cli.ts`; `--runtime <path>` applied as an ephemeral `Settings.override("runtime.path", …)` alongside the other CLI-flag overrides, so every `settings.get("runtime.path")` site (innate-tool endpoint resolution included) observes it |
 | `packages/coding-agent/src/commands/launch.ts` | `prepend-system-prompt: Flags.string(...)` and `runtime: Flags.string(...)` declared for oclif's generated `--help`; the real parse lives in `cli/args.ts` (same pattern as `--auto-approve` / `--approval-mode`) |
 | `packages/coding-agent/src/cli-commands.ts` | register runtime and doctor commands |
+| `packages/coding-agent/src/cli/setup-cli.ts`, `src/commands/setup.ts` | third setup component, `runtime`, beside upstream's `python`/`speech`: `--check`/`--json` delegate to `runRuntimeCommand` so they are `aura runtime status` byte-for-byte (probe, renderer, exit code), and the bare form installs through `ensureRuntimeInstalled` → `LocalRuntimeEndpoint.ensureBinary`, then re-probes. The component list, the oclif `Args.string({ options })`, and `printSetupHelp` are the three places upstream's `SetupComponent` union surfaces |
 | `packages/coding-agent/src/sdk.ts` | `CreateAgentSessionOptions.prependSystemPrompt`, forwarded to `buildSystemPrompt` as `resolvedPrependSystemPrompt` and included in the fork-cache-shape check; wires selected/composite runtime settings onto the lazy `toolSession.getRuntimeService` accessor; creates a root-owned runtime cache/config scope, exposes the canonical settings snapshot reader for private top-level session factories, and propagates that scope into every descendant; every top-level session sharing that scope acquires an idempotent lease while subagents never acquire or release one; startup failure releases the lease; last release asynchronously evicts/closes only that scope |
 | `packages/coding-agent/src/prompts/system/system-prompt.md`, `src/discovery/claude-plugins.ts` | promotes runtime selection and the universal engineering method into the inherent system layer; routes standalone Java/Kotlin through runtime/JVM tools and project builds through declared project commands; canonical Superpowers workflow skills are filtered only within the canonical plugin provider, while domain skills and same-named user/project skills remain discoverable |
 | `packages/coding-agent/src/export/share.ts` | **no default share server.** Dropped the `DEFAULT_SHARE_URL` re-export from `@oh-my-pi/pi-wire`; an empty `share.serverUrl` now means "unconfigured", not "use the public relay", and `/share` refuses with `SHARE_SERVER_UNCONFIGURED` rather than uploading a sealed session somewhere the user never named. Applies to the gist store too — a gist blob is unreadable without a viewer base for the `#key` link. Mirrors `/collab`'s no-relay refusal and the empty `dev.autoqaPush.endpoint` default |
@@ -251,11 +252,21 @@ Wayland/WSL host. Reproduces identically before the merge. Upstream test gap.
 - `packages/coding-agent/src/cli/runtime-cli.ts`, `src/commands/runtime.ts` — runtime
   status command routed through the selected/composite endpoint and explicitly closed
   after probing, including exact JSON selection/ABI/schema fields and sanitized,
-  home-shortened, single-line adapter/library paths in plain output
+  home-shortened, single-line adapter/library paths in plain output. It also owns
+  `ensureRuntimeInstalled`, the on-demand install that `aura setup runtime` drives:
+  it delegates to `LocalRuntimeEndpoint.ensureBinary` so the download preconditions
+  (`runtime.autoDownload`, an explicit `runtime.path`, an off-pin `runtime.version`)
+  and every refusal message stay owned by the endpoint
 - `packages/coding-agent/src/cli/doctor-cli.ts`, `src/commands/doctor.ts` — aggregate
   diagnostics, including requested/effective adapter and embedded runtime library
   selection with sanitized, home-shortened, single-line paths; status-only runtime
-  services are closed without masking a primary probe failure
+  services are closed without masking a primary probe failure. The tool section is
+  *derived*, not transcribed: each `BUILTIN_TOOLS` factory is constructed against a
+  stub session and the `null` returns are the gated-off set, with the responsible
+  setting found by holding every tracked gate setting permissive except one. Nothing
+  here enumerates tool names, so upstream tool additions/renames need no edit;
+  `SESSION_GATED_TOOL_NAMES` is the sole remaining annotation and
+  `test/doctor-tool-gate-drift.test.ts` holds it (and the permissive vector) honest
 - `packages/coding-agent/src/cli/version-identity.ts` — `--version` identity line
   (`<app>/<version>` + runtime protocol version)
 - `scripts/build-relocatable-runtime-bundle.ts`,
@@ -293,7 +304,7 @@ Wayland/WSL host. Reproduces identically before the merge. Upstream test gap.
   prompt mark across Unicode, Nerd, ASCII, and bundled Poimandres symbol presets
 - `packages/coding-agent/test/runtime-*.test.ts`, `test/doctor-cli.test.ts`,
   `test/doctor-command-registration.test.ts`, `test/doctor-tool-gate-drift.test.ts`,
-  `test/aura-bin.test.ts`,
+  `test/setup-runtime-component.test.ts`, `test/aura-bin.test.ts`,
   `test/aura-theme.test.ts`, `test/aura-light-theme.test.ts`,
   `test/runtime-tool-renderers.test.ts`, `test/cli-help-tool-list.test.ts`,
   `test/bash-launch-guidance.test.ts`,
@@ -302,7 +313,9 @@ Wayland/WSL host. Reproduces identically before the merge. Upstream test gap.
   ownership, dual-Worker protocol/death/ordered-shutdown and native-close-failure
   behavior, real-library source-tool execution and process-parity/reuse/cancellation/
   timeout/FIFO isolation coverage, runtime cache/session ownership and status-only
-  disposal, runtime status/doctor selection diagnostics, and LF/tab path row-forging
+  disposal, runtime status/doctor selection diagnostics, `aura setup runtime`'s
+  report/install split and its delegation of every download precondition to the
+  endpoint, and LF/tab path row-forging
   regressions; safe to keep verbatim through any upstream merge
 - `packages/coding-agent/test/discovery/legacy-omp-project-base.test.ts`,
   `test/legacy-omp-compat-paths.test.ts`, `test/cli-help-profile-env.test.ts` —

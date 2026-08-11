@@ -12,6 +12,7 @@
 
 - Added a repeatable Linux x64/glibc relocatable bundle builder that packages standalone Aura with the complete Elide process and embedded runtimes, verifies the staged and extracted layouts, and emits a tarball plus SHA-256.
 - Added the `eval.jsEngine` setting, choosing which engine runs `eval`'s JavaScript cells: `bun` (default, in-process) or `runtime` (the managed runtime). No runtime JS kernel ships yet, so `runtime` currently falls back to Bun and says so in the result. `AURA_EVAL_JS_ENGINE` overrides it for one process; an unrecognized value is an error.
+- Added `aura setup runtime`, so the managed runtime can be installed on purpose instead of only downloading implicitly inside the first tool call that needs it. `--check`/`--json` are `aura runtime status` exactly — the same read-only probe, renderer, and exit code, including adapter, ABI, and schema — while the bare command installs the pinned runtime when it is missing and then re-probes to report the result. The install honors `runtime.autoDownload`, `runtime.path`, and an off-pin `runtime.version` identically to first use, because it drives the same endpoint, and it prints that endpoint's own guidance when it declines.
 
 ### Changed
 
@@ -35,6 +36,7 @@
 - Fixed isolated and containerized Aura launches ignoring the requested runtime adapter by adding the validated `AURA_RUNTIME_ADAPTER` process override.
 - Fixed duplicated/leftover scrollback rows under Windows Terminal and WSL by defaulting `tui.scrollbackRebuild` on for ConPTY hosts (native Windows and WSL); a scrolled-off live preview otherwise remained in history with the final block appended below. An explicit setting still overrides the per-host default.
 - Fixed the `Tip:` line and other italicized UI (thinking traces, blockquotes, markdown emphasis) rendering as reverse-video highlight blocks under tmux/screen inside Windows Terminal. `theme.italic` now emits plain text when the terminal lacks `sitm` (screen-family terminfo, where the multiplexer substitutes standout for SGR 3), keeping the theme colors readable instead of painting solid inverse bars.
+- Fixed `aura doctor` reporting tool availability from a hand-maintained copy of each tool's registration gate, which drifted silently whenever a tool was added, renamed, or retired. The report now asks the tool registry itself and names the setting actually responsible for each tool it lists as gated off.
 
 ### Removed
 
