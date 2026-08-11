@@ -33,8 +33,8 @@ export interface VmRunState {
 	onDisplay?: (output: JsDisplayOutput) => void;
 }
 
-interface WorkerHandle {
-	mode: "process" | "worker" | "inline";
+export interface WorkerHandle {
+	mode: "process" | "worker" | "inline" | "elide";
 	send(msg: WorkerInbound): void;
 	onMessage(handler: (msg: WorkerOutbound) => void): () => void;
 	onError(handler: (error: Error) => void): () => void;
@@ -137,6 +137,8 @@ export async function executeInVmContext(options: {
 	filename: string;
 	timeoutMs?: number;
 	runState: VmRunState;
+	/** Worker factory override (an Elide kernel handle today); it must honor the close/terminate contract. */
+	spawnWorker?: () => WorkerHandle;
 }): Promise<{ value: unknown }> {
 	const sessionKey = resolveOwnerScopedSessionKey({
 		baseKey: options.sessionKey,
@@ -174,6 +176,7 @@ export async function executeInVmContext(options: {
 		{ cwd: options.cwd, sessionId: options.sessionId, localRoots: options.localRoots },
 		options.timeoutMs,
 		options.ownerId,
+		options.spawnWorker,
 	);
 	return await runOnce(session, options);
 }
@@ -341,6 +344,7 @@ async function acquireSession(
 	snapshot: SessionSnapshot,
 	timeoutMs?: number,
 	ownerId?: string,
+	spawnWorker?: () => WorkerHandle,
 ): Promise<JsSession> {
 	const existing = sessions.get(sessionKey);
 	if (existing && existing.state === "alive") {
@@ -359,7 +363,7 @@ async function acquireSession(
 	const startup = (async (): Promise<JsSession> => {
 		// Attach the message listener before sending init. Both Bun Worker messages
 		// and subprocess IPC can arrive immediately after the evaluator loads.
-		const worker = spawnJsWorker();
+		const worker = (spawnWorker ?? spawnJsWorker)();
 		const session: JsSession = {
 			sessionKey,
 			sessionId: snapshot.sessionId,
@@ -383,6 +387,10 @@ async function acquireSession(
 				// Preserve the full process -> Worker -> inline ladder for those failures.
 				const failed = session.worker;
 				await failed.terminate().catch(() => undefined);
+				// An injected factory owns its own engine — engines separate by sessionKey
+				// prefix, not by this ladder — so retrying here would silently move the
+				// session's cells onto Bun. Falling back across engines is the caller's call.
+				if (spawnWorker) throw error;
 				if (failed.mode === "inline") throw error;
 				if (failed.mode === "process") {
 					logger.warn("JS eval subprocess init failed; retrying with a Bun Worker", {

@@ -19,18 +19,9 @@
  *   down here.
  */
 import { withTimeout } from "@oh-my-pi/pi-utils";
+import type { WorkerHandle } from "../js/context-manager";
 import type { WorkerInbound, WorkerOutbound } from "../js/worker-protocol";
 import type { ElideJsKernelFactory, ElideJsKernelSession } from "./kernel";
-
-// TODO(Task 11): import from ../js/context-manager
-interface WorkerHandle {
-	mode: "process" | "worker" | "inline" | "elide";
-	send(msg: WorkerInbound): void;
-	onMessage(handler: (msg: WorkerOutbound) => void): () => void;
-	onError(handler: (error: Error) => void): () => void;
-	close(): Promise<boolean>;
-	terminate(): Promise<void>;
-}
 
 export interface SpawnElideWorkerOptions {
 	cwd: string;
