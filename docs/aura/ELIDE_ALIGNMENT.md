@@ -237,6 +237,57 @@ signalling as *Elide* features — omp already implements both host-side.
 Gate every step on `bun run check:ts` + the TS suite (the fork's merge gate),
 and re-run the model-free adapter sweep for 2–3.
 
+### Equivalence matrix (verified 2026-08-10)
+
+Step 1's output. Every verdict below is backed by a pinning test that fails when
+the claim stops being true — not by reading the code. Verdicts:
+
+- **`equivalent`** — the omp construct demonstrably does the fork construct's job
+  on every path the fork threads its own object through.
+- **`equivalent + gap: …`** — equivalent for the named scope, with the residue
+  spelled out.
+- **`fork-owned, stays`** — nothing upstream to collapse onto.
+- **`deferred`** — out of scope for step 1; no pin yet, so no verdict claimed.
+
+Pinning tests (paths relative to the repo root):
+
+- **[A]** `packages/coding-agent/test/eval/kernel-owner-disposal-coverage.test.ts`
+- **[B]** `packages/coding-agent/test/eval/kernel-owner-session-paths.test.ts`
+
+| Fork construct | omp equivalent | Verdict | Pinning test |
+|---|---|---|---|
+| `runtimeServiceScope` threaded through `sdk.ts`, `session/agent-session*.ts`, `task/*`, `modes/**`, `commit/agentic/*`, `vibe/runtime.ts` | `session.getEvalKernelOwnerId()` + owner-scoped disposal; the framework carries `kernelOwnerId` | `equivalent` — ownership resolves from the owner id alone on every threading path: an inherited `parentEvalSessionId` shares one kernel session while each session mints its own `agent-session:<snowflake>` owner (one kernel, N owners), and every disposer is called with exactly that owner and nothing else | [B] (identity across child sessions, structured subagents, vibe workers, the commit agent) + [A] (`EvalRunner.disposeKernels` fan-out, exact arity, no global sweeps) |
+| `acquireRuntimeServiceLease` + last-release disposal | Owner registration in `eval/js/context-manager.ts`; `RefCountedWorkerHandle` (`subprocess/worker-client.ts`) | `equivalent` — a co-owned context survives every owner but the last, which is the whole semantic the lease provides | [A] "keeps a co-owned context alive until its last owner is disposed" (real JS worker, no mocks) |
+| `runtime/index.ts` selected-service cache, atomic swap/retirement | `createKernelSessionRegistry` | `equivalent + gap: kernel lifecycles only.` The owner-keyed session registry covers per-session kernel creation/reuse/disposal. The runtime **service** cache (selecting and atomically retiring an engine) is an orthogonal concern these pins say nothing about; it is in scope at milestone 2, not here | [A] + [B] cover the kernel-lifecycle half; the service cache has **no pin yet** |
+| `runtime/embedded/{worker-core,worker-entry,control-worker-entry,worker-protocol}.ts` | `createWorkerHandle` / `createWorkerSubprocess` + the `eval/js` worker pattern | `fork-owned, stays` — the `worker_threads` embedded host is a genuine variant of the shared client, not a duplicate of it. What collapses is the duplicated plumbing around it, deleted in Tasks 6–8 | n/a — behavior change, gated by the embedded suites |
+| `runtime.*` and `python.{enabled,embedded,shell}` settings tree | `eval.*` gates plus one engine-selection key | `deferred` to milestone 2/4 — a settings collapse is a user-visible migration, sequenced after the backend lands | none |
+| Fork runtime telemetry publishers | omp's eval telemetry path | `fork-owned, stays` | n/a |
+| `tools/eval-backends.ts` fork gate helpers | fold into the single `eval.*` hierarchy | `fork-owned, stays` — the fork edit stays until the settings collapse above happens | n/a |
+
+Two findings of record from the pinning work, both narrower than the obvious
+reading of row 1:
+
+1. **The startup-failure disposer set is a *superset* of `EvalRunner`'s fan-out,
+   not the same set.** `createAgentSession`'s startup-failure cleanup also calls
+   `releaseComputerSessionsForOwner(evalKernelOwnerId)`, which
+   `EvalRunner.disposeKernels()` does not — normal teardown reaps computer
+   sessions through `AgentSession`'s `#releaseOwnedComputerSessions` instead.
+   [A] pins **containment** in the direction the deletion needs (every
+   `disposeKernels` backend is also registered on the startup-failure path), not
+   set equality. Milestone 2 must not assume the two lists are interchangeable.
+2. **The commit agent's owner id is inert.** It builds its session with
+   `toolNames: ["__none__"]` and custom tools only, so no built-in `eval` tool is
+   ever constructed and the `agent-session:*` owner it mints never owns a kernel
+   — owner-scoped disposal is a no-op for it. (`eval` is not among the built-ins
+   `createTools` force-includes into an explicit whitelist, so this holds under
+   any settings; under default settings the whitelist yields no built-ins at
+   all, but `autolearn.enabled` would add `manage_skill` — never `eval`.) It
+   appears in the `runtimeServiceScope` threading list only because the fork's
+   scope object is also the runtime-service handle; on the `kernelOwnerId` side
+   there is nothing to carry. Pinned in [B] both as the constructed config and
+   as the resulting tool set (with an `["eval"]` control arm proving the absence
+   is real, not an environment artifact).
+
 ## Why this is worth doing beyond tidiness
 
 The JVM tasks lost 1.07–1.57× on tokens while Elide's JVM execution is 5.2×
