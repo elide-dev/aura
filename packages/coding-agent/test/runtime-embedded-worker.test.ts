@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import * as os from "node:os";
+import { consumeWorkerInbox, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { Message } from "capnp-es";
 import type { EmbeddedNativeLibrary } from "../src/runtime/embedded/abi";
 import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
@@ -19,6 +20,7 @@ import type {
 	ExecutionWorkerRequest,
 	ExecutionWorkerResponse,
 } from "../src/runtime/embedded/worker-protocol";
+import { createParentPortWorkerTransport } from "../src/runtime/embedded/worker-transport";
 import { RuntimeRpcError } from "../src/runtime/protocol";
 
 interface SentMessage<Message> {
@@ -822,5 +824,170 @@ describe("embedded dual-worker host", () => {
 		});
 		expect(execution.terminateCount).toBe(1);
 		expect(control.terminateCount).toBe(1);
+	});
+});
+
+interface PostedMessage {
+	message: unknown;
+	transfer: readonly unknown[] | undefined;
+}
+
+class FakePort {
+	readonly posted: PostedMessage[] = [];
+	closeCount = 0;
+	readonly #listeners = new Set<(message: unknown) => void>();
+
+	get listenerCount(): number {
+		return this.#listeners.size;
+	}
+
+	postMessage(message: unknown, transfer?: readonly unknown[]): void {
+		this.posted.push({ message, transfer });
+	}
+
+	on(event: "message", listener: (message: unknown) => void): void {
+		if (event !== "message") throw new Error(`unexpected port event ${event}`);
+		this.#listeners.add(listener);
+	}
+
+	off(event: "message", listener: (message: unknown) => void): void {
+		if (event !== "message") throw new Error(`unexpected port event ${event}`);
+		this.#listeners.delete(listener);
+	}
+
+	close(): void {
+		this.closeCount += 1;
+	}
+
+	emit(message: unknown): void {
+		for (const listener of [...this.#listeners]) listener(message);
+	}
+}
+
+describe("createParentPortWorkerTransport", () => {
+	// `installWorkerInbox` stashes a process-wide pending inbox; drop any leftover
+	// so the direct-listener cases below never inherit another test's inbox.
+	beforeEach(() => {
+		consumeWorkerInbox();
+	});
+
+	test("replays host-buffered inbox messages to the first subscriber before new port messages", () => {
+		const port = new FakePort();
+		installWorkerInbox(port);
+		port.emit({ type: "probe", id: 1 });
+		port.emit({ type: "load", id: 2, libraryPath: "/runtime.so" });
+		const transport = createParentPortWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>(
+			port,
+			"embedded-runtime-execution-worker",
+		);
+
+		const received: ExecutionWorkerRequest[] = [];
+		transport.onMessage(message => received.push(message));
+		expect(received).toEqual([
+			{ type: "probe", id: 1 },
+			{ type: "load", id: 2, libraryPath: "/runtime.so" },
+		]);
+
+		port.emit({ type: "unload", id: 3 });
+		expect(received).toEqual([
+			{ type: "probe", id: 1 },
+			{ type: "load", id: 2, libraryPath: "/runtime.so" },
+			{ type: "unload", id: 3 },
+		]);
+		// The inbox listener is the only one: binding must not double-subscribe.
+		expect(port.listenerCount).toBe(1);
+	});
+
+	test("delivers port messages through its own listener when no inbox was installed", () => {
+		const port = new FakePort();
+		const transport = createParentPortWorkerTransport<ControlWorkerRequest, ControlWorkerResponse>(
+			port,
+			"embedded-runtime-control-worker",
+		);
+
+		const received: ControlWorkerRequest[] = [];
+		transport.onMessage(message => received.push(message));
+		expect(port.listenerCount).toBe(1);
+		port.emit({ type: "probe", id: 1 });
+		port.emit({ type: "shutdown", id: 2 });
+		expect(received).toEqual([
+			{ type: "probe", id: 1 },
+			{ type: "shutdown", id: 2 },
+		]);
+	});
+
+	test("unsubscribing stops delivery on both the inbox and direct listener paths", () => {
+		const inboxPort = new FakePort();
+		installWorkerInbox(inboxPort);
+		const inboxTransport = createParentPortWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>(
+			inboxPort,
+			"embedded-runtime-execution-worker",
+		);
+		const fromInbox: ExecutionWorkerRequest[] = [];
+		const unsubscribeInbox = inboxTransport.onMessage(message => fromInbox.push(message));
+		inboxPort.emit({ type: "probe", id: 1 });
+		unsubscribeInbox();
+		inboxPort.emit({ type: "probe", id: 2 });
+		expect(fromInbox).toEqual([{ type: "probe", id: 1 }]);
+
+		const directPort = new FakePort();
+		const directTransport = createParentPortWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>(
+			directPort,
+			"embedded-runtime-execution-worker",
+		);
+		const fromPort: ExecutionWorkerRequest[] = [];
+		const unsubscribeDirect = directTransport.onMessage(message => fromPort.push(message));
+		directPort.emit({ type: "probe", id: 1 });
+		unsubscribeDirect();
+		expect(directPort.listenerCount).toBe(0);
+		directPort.emit({ type: "probe", id: 2 });
+		expect(fromPort).toEqual([{ type: "probe", id: 1 }]);
+	});
+
+	test("forwards the transfer list verbatim and defaults to an empty list", () => {
+		const port = new FakePort();
+		const transport = createParentPortWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>(
+			port,
+			"embedded-runtime-execution-worker",
+		);
+		const response = new Uint8Array([7, 8]);
+		const transfer: Bun.Transferable[] = [ownedTransferBuffer(response)];
+
+		transport.send({ type: "called", id: 1, response }, transfer);
+		transport.send({ type: "probed", id: 2 });
+
+		expect(port.posted.map(entry => entry.message)).toEqual([
+			{ type: "called", id: 1, response },
+			{ type: "probed", id: 2 },
+		]);
+		expect(port.posted[0]?.transfer).toBe(transfer);
+		expect(port.posted[1]?.transfer).toEqual([]);
+
+		// Sends are inbox-independent: an inbox-bound transport posts identically.
+		const inboxPort = new FakePort();
+		installWorkerInbox(inboxPort);
+		createParentPortWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>(
+			inboxPort,
+			"embedded-runtime-execution-worker",
+		).send({ type: "called", id: 3, response }, transfer);
+		expect(inboxPort.posted).toEqual([{ message: { type: "called", id: 3, response }, transfer }]);
+		expect(inboxPort.posted[0]?.transfer).toBe(transfer);
+	});
+
+	test("closes the underlying port and rejects a missing parent port with its worker label", () => {
+		const port = new FakePort();
+		const transport = createParentPortWorkerTransport<ControlWorkerRequest, ControlWorkerResponse>(
+			port,
+			"embedded-runtime-control-worker",
+		);
+
+		transport.close();
+		expect(port.closeCount).toBe(1);
+		expect(() =>
+			createParentPortWorkerTransport<ControlWorkerRequest, ControlWorkerResponse>(
+				null,
+				"embedded-runtime-control-worker",
+			),
+		).toThrow("embedded-runtime-control-worker: missing parentPort");
 	});
 });
