@@ -1,10 +1,10 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import jvmJarDescription from "../prompts/tools/jvm-jar.md" with { type: "text" };
-import { execResultFailed, formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult, type RuntimeErrorDetails } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
-import { jvmLanguage, requireRuntimeService } from "./jvm-common";
+import { callJvm, jvmLanguage } from "./jvm-common";
 
 const jvmJarSchema = type({
 	action: type("'create' | 'inspect'").describe("create or inspect"),
@@ -19,7 +19,7 @@ const jvmJarSchema = type({
 
 export type JvmJarToolParams = typeof jvmJarSchema.infer;
 
-export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResult> {
+export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResult | RuntimeErrorDetails> {
 	readonly name = "jvm_jar";
 	readonly approval = "exec" as const;
 	readonly label = "JVM Jar";
@@ -40,14 +40,12 @@ export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResu
 		_toolCallId: string,
 		params: JvmJarToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeJvmResult>> {
+	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
 		const { action, ...rest } = params;
 		// The protocol's `action` is the flow selector (`jar`); create/inspect is its `mode`.
-		const result = await requireRuntimeService(this.session).jvm(
-			{ action: "jar", mode: action, ...rest, cwd: this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
-		);
+		const call = await callJvm(this.session, { action: "jar", mode: action, ...rest, cwd: this.session.cwd }, signal);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		if (result.exitCode !== 0 || result.killed) {
 			return {
 				content: [{ type: "text", text: formatExecResult(result) }],

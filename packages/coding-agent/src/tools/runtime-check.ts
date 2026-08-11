@@ -1,7 +1,7 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import runtimeCheckDescription from "../prompts/tools/runtime-check.md" with { type: "text" };
-import { execResultFailed, formatExecResult } from "../runtime/format";
+import { callRuntime, execResultFailed, formatExecResult, type RuntimeErrorDetails } from "../runtime/format";
 import type { RuntimeExecResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
@@ -12,7 +12,7 @@ const runtimeCheckSchema = type({
 
 export type RuntimeCheckToolParams = typeof runtimeCheckSchema.infer;
 
-export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, RuntimeExecResult> {
+export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, RuntimeExecResult | RuntimeErrorDetails> {
 	readonly name = "check";
 	readonly approval = "exec" as const;
 	readonly label = "Check";
@@ -33,17 +33,23 @@ export class RuntimeCheckTool implements AgentTool<typeof runtimeCheckSchema, Ru
 		_toolCallId: string,
 		params: RuntimeCheckToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeExecResult>> {
+	): Promise<AgentToolResult<RuntimeExecResult | RuntimeErrorDetails>> {
 		const service = this.session.getRuntimeService?.();
 		if (!service)
 			throw new Error(
 				"The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).",
 			);
-		const result = await service.check(
-			{ ...params, cwd: params.cwd ?? this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
+		const call = await callRuntime(
+			() =>
+				service.check(
+					{ ...params, cwd: params.cwd ?? this.session.cwd },
+					signal,
+					this.session.getSessionId?.() ?? undefined,
+				),
+			{ root: this.session.cwd },
 		);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,

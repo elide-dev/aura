@@ -1,4 +1,6 @@
-import type { RuntimeExecResult } from "./protocol";
+import path from "node:path";
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { type RuntimeErrorCode, type RuntimeExecResult, RuntimeRpcError } from "./protocol";
 
 /** Whether an execution result represents a failed, timed out, or cancelled tool call. */
 export function execResultFailed(result: RuntimeExecResult): boolean {
@@ -37,4 +39,162 @@ export function formatExecResult(result: RuntimeExecResult): string {
 	if (result.exitCode !== 0) parts.push(`(exit code ${result.exitCode})`);
 	if (parts.length === 0) parts.push(`(no output, exit code ${result.exitCode})`);
 	return parts.join("\n");
+}
+
+// ── protocol failures ────────────────────────────────────────────────────────
+// A `RuntimeRpcError` is the only place a failed *dispatch* explains itself: the
+// argv that was invoked, the stderr the toolchain printed, the URL that would
+// not answer. Thrown out of a tool that detail is destroyed — the agent loop
+// flattens a thrown tool error to `{ content: message, details: {} }`, which is
+// how a model ends up staring at "Runtime archive extraction failed." with no
+// way to act on it. So runtime tools convert protocol failures into a failed
+// tool *result* built here, and the projection below decides what may travel.
+
+/** Details attached to a runtime tool result that failed at the protocol level. */
+export type RuntimeErrorDetails = {
+	code: RuntimeErrorCode;
+	message: string;
+	/** Redacted projection of `RuntimeRpcError.data`; see {@link formatRuntimeRpcError}. */
+	[field: string]: unknown;
+};
+
+/**
+ * Whether a settled runtime tool's details are an execution result rather than
+ * a {@link RuntimeErrorDetails} projection — i.e. whether the call reached the
+ * runtime at all. Non-model callers that drive these tools directly (the local
+ * `$` Python shell) need the distinction the model reads off the text.
+ */
+export function isRuntimeExecResult(details: RuntimeExecResult | RuntimeErrorDetails): details is RuntimeExecResult {
+	return typeof (details as RuntimeExecResult).exitCode === "number";
+}
+
+/**
+ * Tail cap for projected `data` strings. Error payloads are stream-shaped
+ * (stderr, a compiler log), and for those the *end* is the diagnosis — the
+ * head is the part that scrolled by while things were still fine.
+ */
+const DATA_TAIL_LIMIT = 2048; // characters — 2 KiB of ASCII, which is what these payloads are
+
+const REDACTED_PATH = "[path outside the project]";
+
+/**
+ * Keys whose value is the process environment under any spelling. Environment
+ * variables carry tokens and are never a diagnostic the model needs, so the key
+ * is dropped outright rather than filtered value-by-value.
+ */
+const ENV_KEY = /env/i;
+
+/**
+ * An absolute path in free text. The leading lookbehind keeps this off URL
+ * authorities (`https://host/p`) and relative fragments (`a/b`): only a path
+ * that genuinely starts a token is a candidate. The trailing class stops at the
+ * punctuation diagnostics wrap paths in (`tar: /x/y.tar: Cannot open`).
+ */
+const ABSOLUTE_PATH = /(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\/)[^\s'"`:,;)\]}]+/g;
+
+/** Whether `candidate` is `root` itself or lives under it. */
+function isInsideRoot(root: string, candidate: string): boolean {
+	const resolved = path.resolve(candidate);
+	return resolved === root || resolved.startsWith(root + path.sep);
+}
+
+/**
+ * Replace absolute paths that fall outside the project root. Runtime
+ * diagnostics routinely name cache, staging, and temp locations, which map the
+ * host's filesystem (and its username) into the transcript for no diagnostic
+ * gain. Paths *inside* the project survive — those are what a fix acts on.
+ *
+ * Replacing rather than deleting is deliberate: the reader still sees that an
+ * argument was a path and where it sat in the command line, without learning
+ * where it pointed.
+ */
+function redactPaths(text: string, root: string): string {
+	return text.replace(ABSOLUTE_PATH, match => (isInsideRoot(root, match) ? match : REDACTED_PATH));
+}
+
+/** Keep the last {@link DATA_TAIL_LIMIT} characters of an oversized value. */
+function capTail(text: string): string {
+	return text.length <= DATA_TAIL_LIMIT ? text : text.slice(text.length - DATA_TAIL_LIMIT);
+}
+
+/**
+ * Render a protocol failure for the model, with a redacted projection of its
+ * `data` payload.
+ *
+ * What travels: `code`, `message`, scalars, and string arrays — `argv` joined
+ * with spaces, the way it would be typed. What does not: environment variables
+ * (see {@link ENV_KEY}), absolute paths outside `root` (see {@link redactPaths}),
+ * anything past the {@link DATA_TAIL_LIMIT} tail cap, and every nested object —
+ * dropping those wholesale is the second guard on environment snapshots, and a
+ * nested structure has no honest one-line rendering anyway.
+ *
+ * @param root Project root paths are judged against; defaults to the process cwd.
+ */
+export function formatRuntimeRpcError(
+	error: RuntimeRpcError,
+	root?: string,
+): { text: string; details: RuntimeErrorDetails } {
+	const base = path.resolve(root ?? process.cwd());
+	const details: RuntimeErrorDetails = { code: error.code, message: error.message };
+	const fields: string[] = [];
+	const blocks: string[] = [];
+
+	for (const [key, raw] of Object.entries(error.data ?? {})) {
+		if (ENV_KEY.test(key)) continue;
+		if (typeof raw === "number" || typeof raw === "boolean") {
+			details[key] = raw;
+			fields.push(`${key}: ${raw}`);
+			continue;
+		}
+		const text =
+			typeof raw === "string"
+				? raw
+				: Array.isArray(raw) && raw.every(entry => typeof entry === "string")
+					? raw.join(" ")
+					: undefined;
+		if (text === undefined) continue;
+		const redacted = redactPaths(text, base);
+		const value = capTail(redacted);
+		details[key] = value;
+		const elided = value.length < redacted.length ? ` (last ${value.length} of ${redacted.length} chars)` : "";
+		// Stream-shaped values get their own block; a one-line value reads better inline.
+		if (elided || value.includes("\n")) blocks.push(`--- ${key}${elided} ---\n${value}`);
+		else fields.push(`${key}: ${value}`);
+	}
+
+	const header = `The runtime call failed (${error.code}): ${error.message}`;
+	return { text: [header, ...fields, ...blocks].join("\n"), details };
+}
+
+/** A protocol failure as a failed tool result, carrying the detail the throw would have lost. */
+export function runtimeRpcErrorResult(error: RuntimeRpcError, root?: string): AgentToolResult<RuntimeErrorDetails> {
+	const { text, details } = formatRuntimeRpcError(error, root);
+	return { content: [{ type: "text", text }], details, isError: true };
+}
+
+/** Outcome of {@link callRuntime}: the service's value, or the result to return in its place. */
+export type RuntimeCallOutcome<T> =
+	| { ok: true; value: T }
+	| { ok: false; result: AgentToolResult<RuntimeErrorDetails> };
+
+/**
+ * Run one runtime RPC on behalf of a tool, converting protocol failures into a
+ * failed tool result. Anything that is not a `RuntimeRpcError` — a missing
+ * service, a bug in the tool — still throws: those are not runtime diagnostics
+ * and the loop's own error path is the right place for them.
+ *
+ * `onRpcError` runs before the result is built, so a tool that must react to a
+ * failure (retiring a poisoned service, say) still does so on the way out.
+ */
+export async function callRuntime<T>(
+	invoke: () => Promise<T>,
+	options: { root?: string; onRpcError?: (error: RuntimeRpcError) => Promise<void> | void } = {},
+): Promise<RuntimeCallOutcome<T>> {
+	try {
+		return { ok: true, value: await invoke() };
+	} catch (error) {
+		if (!(error instanceof RuntimeRpcError)) throw error;
+		await options.onRpcError?.(error);
+		return { ok: false, result: runtimeRpcErrorResult(error, options.root) };
+	}
 }

@@ -4,8 +4,9 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { isEmbeddedPythonEnabled } from "../config/settings";
 import runtimeRunDescriptionTemplate from "../prompts/tools/runtime-run.md" with { type: "text" };
 import { disposeCachedRuntimeService } from "../runtime";
-import { execResultFailed, formatExecResult } from "../runtime/format";
+import { callRuntime, execResultFailed, formatExecResult, type RuntimeErrorDetails } from "../runtime/format";
 import { type RuntimeExecResult, RuntimeRpcError, resolveRunTarget } from "../runtime/protocol";
+import type { RuntimeService } from "../runtime/service";
 import type { ToolSession } from ".";
 
 const runtimeRunSchema = type({
@@ -36,7 +37,7 @@ const runtimeRunSchemaWithoutPython = type({
 
 export type RuntimeRunToolParams = typeof runtimeRunSchema.infer;
 
-export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, RuntimeExecResult> {
+export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, RuntimeExecResult | RuntimeErrorDetails> {
 	readonly name = "run";
 	readonly approval = "exec" as const;
 	readonly label = "Run";
@@ -65,11 +66,25 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 		return new RuntimeRunTool(session);
 	}
 
+	/**
+	 * An `internal` failure means the cached service itself is suspect (a dead
+	 * embedded worker, a broken endpoint), so retire it: the next call then gets
+	 * a fresh runtime instead of inheriting the poisoned one.
+	 */
+	async #retireOnInternalFailure(service: RuntimeService, error: RuntimeRpcError): Promise<void> {
+		if (error.code !== "internal" || !this.session.runtimeServiceScope) return;
+		try {
+			await disposeCachedRuntimeService(service, this.session.runtimeServiceScope);
+		} catch (disposeError) {
+			logger.warn("Failed to retire internally failed runtime service", { error: String(disposeError) });
+		}
+	}
+
 	async execute(
 		_toolCallId: string,
 		params: RuntimeRunToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeExecResult>> {
+	): Promise<AgentToolResult<RuntimeExecResult | RuntimeErrorDetails>> {
 		const target = resolveRunTarget(params);
 		if (target.language === "python" && !this.#embeddedPythonEnabled) {
 			throw new RuntimeRpcError(
@@ -82,23 +97,17 @@ export class RuntimeRunTool implements AgentTool<typeof runtimeRunSchema, Runtim
 			throw new Error(
 				"The runtime service is unavailable on this session (runtime.enabled may be false, or this host does not provide it).",
 			);
-		let result: RuntimeExecResult;
-		try {
-			result = await service.run(
-				{ ...params, cwd: params.cwd ?? this.session.cwd },
-				signal,
-				this.session.getSessionId?.() ?? undefined,
-			);
-		} catch (error) {
-			if (error instanceof RuntimeRpcError && error.code === "internal" && this.session.runtimeServiceScope) {
-				try {
-					await disposeCachedRuntimeService(service, this.session.runtimeServiceScope);
-				} catch (disposeError) {
-					logger.warn("Failed to retire internally failed runtime service", { error: String(disposeError) });
-				}
-			}
-			throw error;
-		}
+		const call = await callRuntime(
+			() =>
+				service.run(
+					{ ...params, cwd: params.cwd ?? this.session.cwd },
+					signal,
+					this.session.getSessionId?.() ?? undefined,
+				),
+			{ root: this.session.cwd, onRpcError: error => this.#retireOnInternalFailure(service, error) },
+		);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,

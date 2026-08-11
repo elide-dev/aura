@@ -147,9 +147,12 @@ describe("run tool", () => {
 			} as unknown as ToolSession;
 			const tool = new RuntimeRunTool(session);
 
-			await expect(tool.execute("id", { code: "print('first')", language: "python" })).rejects.toThrow(
-				"Embedded runtime execution worker failed.",
-			);
+			// The failure comes back as a detailed tool result rather than a throw
+			// (see runtime-error-details.test.ts); eviction still happens on the way out.
+			const failure = await tool.execute("id", { code: "print('first')", language: "python" });
+
+			expect(failure.isError).toBe(true);
+			expect((failure.content[0] as { text: string }).text).toContain("Embedded runtime execution worker failed.");
 			expect(close).toHaveBeenCalledTimes(1);
 			const replacement = getOrCreateRuntimeService(options, undefined, scope);
 			expect(replacement).not.toBe(first);

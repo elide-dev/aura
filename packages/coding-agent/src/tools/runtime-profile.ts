@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { isEmbeddedPythonEnabled } from "../config/settings";
 import runtimeProfileDescriptionTemplate from "../prompts/tools/runtime-profile.md" with { type: "text" };
-import { execResultFailed, formatExecResult } from "../runtime/format";
+import { callRuntime, execResultFailed, formatExecResult, type RuntimeErrorDetails } from "../runtime/format";
 import { type RuntimeExecResult, RuntimeRpcError, resolveRunTarget } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
@@ -31,7 +31,9 @@ const runtimeProfileSchemaWithoutPython = type({
 
 export type RuntimeProfileToolParams = typeof runtimeProfileSchema.infer;
 
-export class RuntimeProfileTool implements AgentTool<typeof runtimeProfileSchema, RuntimeExecResult> {
+export class RuntimeProfileTool
+	implements AgentTool<typeof runtimeProfileSchema, RuntimeExecResult | RuntimeErrorDetails>
+{
 	readonly name = "profile";
 	readonly approval = "exec" as const;
 	readonly label = "Profile";
@@ -60,7 +62,7 @@ export class RuntimeProfileTool implements AgentTool<typeof runtimeProfileSchema
 		_toolCallId: string,
 		params: RuntimeProfileToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeExecResult>> {
+	): Promise<AgentToolResult<RuntimeExecResult | RuntimeErrorDetails>> {
 		const service = this.session.getRuntimeService?.();
 		if (!service)
 			throw new Error(
@@ -73,11 +75,17 @@ export class RuntimeProfileTool implements AgentTool<typeof runtimeProfileSchema
 				"Python runtime profiling is disabled (python.enabled = false or python.embedded = false).",
 			);
 		}
-		const result = await service.profile(
-			{ ...params, cwd: params.cwd ?? this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
+		const call = await callRuntime(
+			() =>
+				service.profile(
+					{ ...params, cwd: params.cwd ?? this.session.cwd },
+					signal,
+					this.session.getSessionId?.() ?? undefined,
+				),
+			{ root: this.session.cwd },
 		);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,

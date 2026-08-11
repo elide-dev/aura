@@ -169,7 +169,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
+import { formatExecResult, isRuntimeExecResult } from "../runtime/format";
 import { type RuntimeExecResult, RuntimeRpcError } from "../runtime/protocol";
 import {
 	deobfuscateAssistantContent,
@@ -7299,26 +7299,34 @@ export class AgentSession {
 				if (!tool) {
 					throw new Error("Embedded Python requires the run tool (runtime.enabled may be false).");
 				}
+				const cancelled = (): PythonResult => ({
+					output: "",
+					exitCode: undefined,
+					cancelled: true,
+					truncated: false,
+					totalLines: 0,
+					totalBytes: 0,
+					outputLines: 0,
+					outputBytes: 0,
+					displayOutputs: [],
+					stdinRequested: false,
+				});
 				let details: RuntimeExecResult;
 				try {
 					const result = await tool.execute(String(Snowflake.next()), { code, language: "python", cwd }, signal);
 					if (!result.details) throw new Error("The run tool returned no execution details for Python.");
+					// A protocol failure now settles as a failed tool result carrying the
+					// runtime's own diagnostic (see runtime/format.ts) rather than throwing.
+					// The shell caller reads details, not the model-facing text, so restore
+					// the shapes it knows: a cancellation, or an error carrying that text.
+					if (!isRuntimeExecResult(result.details)) {
+						if (result.details.code === "cancelled") return cancelled();
+						const rendered = result.content.find(block => block.type === "text")?.text;
+						throw new RuntimeRpcError(result.details.code, rendered || result.details.message);
+					}
 					details = result.details;
 				} catch (error) {
-					if (error instanceof RuntimeRpcError && error.code === "cancelled") {
-						return {
-							output: "",
-							exitCode: undefined,
-							cancelled: true,
-							truncated: false,
-							totalLines: 0,
-							totalBytes: 0,
-							outputLines: 0,
-							outputBytes: 0,
-							displayOutputs: [],
-							stdinRequested: false,
-						};
-					}
+					if (error instanceof RuntimeRpcError && error.code === "cancelled") return cancelled();
 					throw error;
 				}
 				const output = formatExecResult(details);

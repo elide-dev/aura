@@ -1,10 +1,10 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import jvmDisassembleDescription from "../prompts/tools/jvm-disassemble.md" with { type: "text" };
-import { execResultFailed } from "../runtime/format";
+import { execResultFailed, type RuntimeErrorDetails } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
-import { jvmLanguage, renderJvmPayload, requireRuntimeService } from "./jvm-common";
+import { callJvm, jvmLanguage, renderJvmPayload } from "./jvm-common";
 
 const jvmDisassembleSchema = type({
 	language: jvmLanguage.describe("source language"),
@@ -15,7 +15,9 @@ const jvmDisassembleSchema = type({
 
 export type JvmDisassembleToolParams = typeof jvmDisassembleSchema.infer;
 
-export class JvmDisassembleTool implements AgentTool<typeof jvmDisassembleSchema, RuntimeJvmResult> {
+export class JvmDisassembleTool
+	implements AgentTool<typeof jvmDisassembleSchema, RuntimeJvmResult | RuntimeErrorDetails>
+{
 	readonly name = "jvm_disassemble";
 	readonly approval = "exec" as const;
 	readonly label = "JVM Disassemble";
@@ -36,12 +38,10 @@ export class JvmDisassembleTool implements AgentTool<typeof jvmDisassembleSchema
 		_toolCallId: string,
 		params: JvmDisassembleToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeJvmResult>> {
-		const result = await requireRuntimeService(this.session).jvm(
-			{ action: "disassemble", ...params, cwd: this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
-		);
+	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
+		const call = await callJvm(this.session, { action: "disassemble", ...params, cwd: this.session.cwd }, signal);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		return {
 			content: [{ type: "text", text: renderJvmPayload(result, result.stdout) }],
 			details: result,

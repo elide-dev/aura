@@ -1,10 +1,10 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import jvmFormatDescription from "../prompts/tools/jvm-format.md" with { type: "text" };
-import { execResultFailed } from "../runtime/format";
+import { execResultFailed, type RuntimeErrorDetails } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
-import { jvmLanguage, renderJvmPayload, requireRuntimeService } from "./jvm-common";
+import { callJvm, jvmLanguage, renderJvmPayload } from "./jvm-common";
 
 const jvmFormatSchema = type({
 	language: jvmLanguage.describe("source language"),
@@ -14,7 +14,7 @@ const jvmFormatSchema = type({
 
 export type JvmFormatToolParams = typeof jvmFormatSchema.infer;
 
-export class JvmFormatTool implements AgentTool<typeof jvmFormatSchema, RuntimeJvmResult> {
+export class JvmFormatTool implements AgentTool<typeof jvmFormatSchema, RuntimeJvmResult | RuntimeErrorDetails> {
 	readonly name = "jvm_format";
 	readonly approval = "exec" as const;
 	readonly label = "JVM Format";
@@ -35,12 +35,10 @@ export class JvmFormatTool implements AgentTool<typeof jvmFormatSchema, RuntimeJ
 		_toolCallId: string,
 		params: JvmFormatToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeJvmResult>> {
-		const result = await requireRuntimeService(this.session).jvm(
-			{ action: "format", ...params, cwd: this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
-		);
+	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
+		const call = await callJvm(this.session, { action: "format", ...params, cwd: this.session.cwd }, signal);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		return {
 			content: [{ type: "text", text: renderJvmPayload(result, result.formatted) }],
 			details: result,
