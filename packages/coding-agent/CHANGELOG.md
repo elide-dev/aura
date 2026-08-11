@@ -11,6 +11,7 @@
 ### Added
 
 - Added a repeatable Linux x64/glibc relocatable bundle builder that packages standalone Aura with the complete Elide process and embedded runtimes, verifies the staged and extracted layouts, and emits a tarball plus SHA-256.
+- Added the `eval.jsEngine` setting, choosing which engine runs `eval`'s JavaScript cells: `bun` (default, in-process) or `runtime` (the managed runtime). No runtime JS kernel ships yet, so `runtime` currently falls back to Bun and says so in the result. `AURA_EVAL_JS_ENGINE` overrides it for one process; an unrecognized value is an error.
 
 ### Changed
 
@@ -23,6 +24,9 @@
 
 ### Fixed
 
+- Fixed `jvm_jar` and `jvm_deps` writing to the working tree while plan mode was active. Building a JAR, and writing a `jvm_deps` report to an `output` path, now hit the same plan-mode guard `write` and `edit` do; inspecting an archive and reporting dependencies to the transcript are unaffected.
+- Fixed `serve` ignoring `launch.enabled`. It starts a supervised background job through the same broker `hub` uses, so disabling process supervision now withholds the tool instead of leaving a second way in, and `aura doctor` reports which of its two gates turned it off.
+- Fixed `--help` advertising tools that do not exist: the removed `run` tool is replaced by `eval` in the "Available Tools" list, and the `notebook` row is gone (notebook editing is part of `edit`/`read`).
 - Fixed transient internal runtime failures poisoning the session-wide service cache permanently. An embedded worker latches its failure and is never rebuilt, so one crash used to strand every later runtime call; the implicated service is now retired inside the shared runtime call path, meaning `insights`, `profile`, and the four `jvm_*` tools all get a fresh worker host on the next call without retrying the failed guest execution.
 - Fixed relocatable Aura bundles failing to launch when `bin/aura` is installed through a filesystem symlink.
 - Fixed Kotlin runtime execution missing the bundled standard library, and made Auto runtime selection try Java/Kotlin in-process before falling back when the embedded library does not support them yet.
