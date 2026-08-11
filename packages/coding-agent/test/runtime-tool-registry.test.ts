@@ -11,9 +11,19 @@ const LAUNCH_TOOLS = ["serve"] as const;
 
 const JVM_TOOLS = ["jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps"] as const;
 
-function stubSession(enabled: boolean): ToolSession {
+/**
+ * `launch.enabled` defaults on, as the schema does: it is a second gate only
+ * `serve` reads, so every other case here wants it out of the way.
+ */
+function stubSession(enabled: boolean, launchEnabled = true): ToolSession {
 	return {
-		settings: { get: (key: string) => (key === "runtime.enabled" ? enabled : undefined) },
+		settings: {
+			get: (key: string) => {
+				if (key === "runtime.enabled") return enabled;
+				if (key === "launch.enabled") return launchEnabled;
+				return undefined;
+			},
+		},
 		getRuntimeService: () => undefined,
 	} as unknown as ToolSession;
 }
@@ -92,6 +102,21 @@ describe("runtime tool registry", () => {
 			const tool = await BUILTIN_TOOLS[name](stubSession(true));
 			expect(tool).not.toBeNull();
 			expect(tool?.name).toBe(name);
+		}
+	});
+
+	/**
+	 * The launch family starts hub jobs, so it also answers to upstream's
+	 * process-supervision kill switch — a session that turned supervision off must
+	 * not be handed a second door to the broker.
+	 */
+	test("launch tools additionally gate on launch.enabled", async () => {
+		for (const name of LAUNCH_TOOLS) {
+			expect(await BUILTIN_TOOLS[name](stubSession(true, false))).toBeNull();
+		}
+		// The rest of the runtime family has no business with process supervision.
+		for (const name of RUNTIME_TOOLS.filter(n => !LAUNCH_TOOLS.includes(n as never))) {
+			expect(await BUILTIN_TOOLS[name](stubSession(true, false))).not.toBeNull();
 		}
 	});
 });

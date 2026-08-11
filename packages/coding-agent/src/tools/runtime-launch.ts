@@ -214,17 +214,25 @@ export async function startRuntimeJob(
 }
 
 /**
- * Whether the calling session actually has the `hub` tool. `createTools` sets
- * `isToolActive` from the set it really built, so this is the registry's own
- * answer rather than a second copy of hub's gate (`--tools <name>` sessions and
- * IRC-disabled subagents do not get hub). Absent — a bare test or SDK session
- * that never went through `createTools` — the common case is assumed.
+ * Whether the calling session can actually reach hub for this job. Two
+ * independent ways to fail, and both have to be checked:
+ *
+ * - The session may not have built the tool. `createTools` sets `isToolActive`
+ *   from the set it really built, so that is the registry's own answer rather
+ *   than a second copy of hub's gate (`--tools <name>` sessions and IRC-disabled
+ *   subagents do not get hub). Absent — a bare test or SDK session that never
+ *   went through `createTools` — the common case is assumed.
+ * - `launch.enabled` may be off. hub then still exists but refuses every
+ *   supervision op (`tools/hub/index.ts`), so having the tool is not the same as
+ *   being able to use it. Composed the same way `bash`'s description composes
+ *   its own `hasLaunch` hint.
  *
  * It matters because the guidance these tools print names the tool that stops the
- * job: telling a model to call `hub` it does not have is a dead end.
+ * job: telling a model to call `hub` it does not have — or that will refuse — is
+ * a dead end.
  */
 export function hubToolAvailable(session: ToolSession): boolean {
-	return session.isToolActive?.("hub") ?? true;
+	return (session.isToolActive?.("hub") ?? true) && session.settings.get("launch.enabled") === true;
 }
 
 /**
@@ -237,16 +245,20 @@ export function hubToolAvailable(session: ToolSession): boolean {
  * read-only, so it neither lists this daemon nor could stop it. What is true is
  * that the job is started without `persist` or `detached`, and the broker stops
  * every non-detached daemon on its way down.
+ *
+ * It names the two reasons hub can be out of reach without picking one: a
+ * session with `launch.enabled=false` does have the tool, and would be told
+ * something false by a bare "no hub tool".
  */
 export function jobHandleLine(details: RuntimeJobDetails, hubAvailable = true): string {
 	const state = details.state === undefined ? "" : ` (state: ${details.state})`;
 	if (!hubAvailable) {
 		return (
-			`Job: ${details.jobName}${state}. This session has no hub tool, so there is no tool here that can ` +
-			"read or stop this job. It is neither persistent nor detached, so it ends when the project's " +
-			"background broker exits; until then it has to be stopped out of band (find the process and " +
-			"terminate it), or re-run in a session that has hub. Tell the user it was left running rather " +
-			"than leaving it running silently."
+			`Job: ${details.jobName}${state}. hub is not reachable in this session (no hub tool, or process ` +
+			"supervision is disabled), so there is no tool here that can read or stop this job. It is neither " +
+			"persistent nor detached, so it ends when the project's background broker exits; until then it has " +
+			"to be stopped out of band (find the process and terminate it), or re-run in a session that can " +
+			"reach hub. Tell the user it was left running rather than leaving it running silently."
 		);
 	}
 	return (
