@@ -5,6 +5,7 @@ import { execResultFailed, formatExecResult, type RuntimeErrorDetails } from "..
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { callJvm, jvmLanguage } from "./jvm-common";
+import { enforcePlanModeWrite } from "./plan-mode-guard";
 
 const jvmDepsSchema = type({
 	"language?": jvmLanguage.describe("source language"),
@@ -40,6 +41,11 @@ export class JvmDepsTool implements AgentTool<typeof jvmDepsSchema, RuntimeJvmRe
 		params: JvmDepsToolParams,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
+		// `output` is the only thing this tool can put on disk; without it the report
+		// exists only in the transcript, which plan mode has no quarrel with.
+		if (params.output !== undefined) {
+			enforcePlanModeWrite(this.session, params.output, { op: "create" });
+		}
 		const call = await callJvm(this.session, { action: "deps", ...params, cwd: this.session.cwd }, signal);
 		if (!call.ok) return call.result;
 		const result = call.value;

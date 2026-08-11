@@ -5,6 +5,7 @@ import { execResultFailed, formatExecResult, type RuntimeErrorDetails } from "..
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
 import { callJvm, jvmLanguage } from "./jvm-common";
+import { enforcePlanModeWrite } from "./plan-mode-guard";
 
 const jvmJarSchema = type({
 	action: type("'create' | 'inspect'").describe("create or inspect"),
@@ -42,6 +43,13 @@ export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResu
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
 		const { action, ...rest } = params;
+		// `create` lands a JAR in the working tree, so it is a write and plan mode
+		// owns the decision — same guard `write`/`edit` call, because the runtime
+		// service on the far side of this call has no idea the session is planning.
+		// `inspect` only lists an existing archive and is left alone.
+		if (action === "create" && rest.output !== undefined) {
+			enforcePlanModeWrite(this.session, rest.output, { op: "create" });
+		}
 		// The protocol's `action` is the flow selector (`jar`); create/inspect is its `mode`.
 		const call = await callJvm(this.session, { action: "jar", mode: action, ...rest, cwd: this.session.cwd }, signal);
 		if (!call.ok) return call.result;

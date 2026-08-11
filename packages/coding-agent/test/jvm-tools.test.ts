@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { PlanModeState } from "../src/plan-mode/state";
 import type { RuntimeJvmParams, RuntimeJvmResult } from "../src/runtime/protocol";
 import type { ToolSession } from "../src/tools";
 import { JvmDepsTool } from "../src/tools/jvm-deps";
@@ -184,6 +185,86 @@ describe("jvm_deps", () => {
 		});
 		expect(textOf(out)).toContain("Wrote dependency report to /work/project/deps.txt");
 		expect(textOf(out)).toContain("Report.class -> java.sql");
+	});
+});
+
+/**
+ * Plan mode keeps the working tree read-only (`prompts/system/plan-mode-active.md`:
+ * "You NEVER create, edit… working-tree files"). `jvm_jar create` and a
+ * `jvm_deps` with an `output` both land a file in the working tree through the
+ * runtime service instead of through `write`/`edit`, so they need the same guard
+ * those tools call — the enforcement lives in the tool, because the runtime
+ * service has no idea a session is planning.
+ */
+describe("JVM writes under plan mode", () => {
+	const PLAN_MODE: PlanModeState = { enabled: true, planFilePath: "local://jvm-plan.md" };
+	const GUARD_ERROR = /Plan mode: the working tree is read-only/;
+
+	/** A plan-mode session that records whether the runtime service was reached at all. */
+	function planningSession(result: RuntimeJvmResult): { session: ToolSession; dispatched: () => boolean } {
+		let dispatched = false;
+		const session = {
+			cwd: SESSION_CWD,
+			settings: { get: (key: string) => (key === "runtime.enabled" ? true : undefined) },
+			getArtifactsDir: () => null,
+			getSessionId: () => "plan-session",
+			getPlanModeState: () => PLAN_MODE,
+			getRuntimeService: () => ({
+				jvm: async () => {
+					dispatched = true;
+					return result;
+				},
+			}),
+		} as unknown as ToolSession;
+		return { session, dispatched: () => dispatched };
+	}
+
+	test("jvm_jar create is refused before the runtime service is reached", async () => {
+		const { session, dispatched } = planningSession(ok({ action: "jar", phase: "jar", output: "/x.jar" }));
+		await expect(
+			JvmJarTool.createIf(session)!.execute(
+				"id",
+				{ action: "create", language: "java", code: "class Main {}", output: "build/app.jar" },
+				SIGNAL,
+			),
+		).rejects.toThrow(GUARD_ERROR);
+		expect(dispatched()).toBe(false);
+	});
+
+	test("jvm_jar inspect still runs: reading an archive writes nothing", async () => {
+		const { session, dispatched } = planningSession(
+			ok({ action: "jar", phase: "jar", jar: "/work/project/lib/dep.jar", listing: "a/B.class" }),
+		);
+		const out = await JvmJarTool.createIf(session)!.execute("id", { action: "inspect", jar: "lib/dep.jar" }, SIGNAL);
+		expect(dispatched()).toBe(true);
+		expect(textOf(out)).toBe("Entries of /work/project/lib/dep.jar:\na/B.class");
+	});
+
+	test("jvm_deps is refused when it would write its report", async () => {
+		const { session, dispatched } = planningSession(ok({ action: "deps", phase: "deps", output: "/deps.txt" }));
+		await expect(
+			JvmDepsTool.createIf(session)!.execute("id", { path: "Report.java", output: "deps.txt" }, SIGNAL),
+		).rejects.toThrow(GUARD_ERROR);
+		expect(dispatched()).toBe(false);
+	});
+
+	test("jvm_deps still runs when it only reports to the transcript", async () => {
+		const { session, dispatched } = planningSession(
+			ok({ action: "deps", phase: "deps", stdout: "Main.class -> java.base\n" }),
+		);
+		const out = await JvmDepsTool.createIf(session)!.execute("id", { path: "out/Main.class" }, SIGNAL);
+		expect(dispatched()).toBe(true);
+		expect(textOf(out)).toBe("Main.class -> java.base");
+	});
+
+	test("a session that is not planning is unaffected", async () => {
+		const { session, seen } = sessionReturning(ok({ action: "jar", phase: "jar", output: "/x.jar" }));
+		await JvmJarTool.createIf(session)!.execute(
+			"id",
+			{ action: "create", language: "java", code: "class Main {}", output: "build/app.jar" },
+			SIGNAL,
+		);
+		expect(seen().output).toBe("build/app.jar");
 	});
 });
 
