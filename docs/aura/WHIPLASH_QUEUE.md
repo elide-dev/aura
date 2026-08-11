@@ -79,13 +79,13 @@ a conversation, not a judgment call.
 | # | Topic | Decision |
 |---|---|---|
 | 1 | **Surface** | Extend `embed.capnp` + the `elide_embed_*` family. Do **not** promote the `elide_v2_repl_*` family. The context registry lives in Kotlin; `contextId` rides on capnp; no new C-side state. |
-| 2 | **Language scoping** | Per-context `permittedLanguages` via `Context.newBuilder(*langs)`, plus per-context `allowCreateThread`. TypeScript is already a first-class language id on this path (`protocol/elide/v1/engine.capnp:60`, `embed/EmbeddedHostEntry.kt:375`, `runtime/GuestExecution.kt:60`) — **no host-side transpile needed**. |
+| 2 | **Language scoping** | Per-context `permittedLanguages` via `Context.newBuilder(*langs)`, plus per-context `allowCreateThread`. TypeScript is already a first-class language id on this path (`protocol/elide/v1/engine.capnp:60`, `embed/EmbeddedHostEntry.kt:375`, `runtime/GuestExecution.kt:61`) — **no host-side transpile needed**. |
 | 3 | **Streaming** | `pollOutput`, served from a second host thread — the same cross-thread pattern already used by `cancelEmbeddedRequestUntilSettled`. Schema lands complete; the implementation is staged (item I). Bounded ring-buffer pipe, blocking-write backpressure, 16 MiB per-eval cap retained. |
 | 4 | **Reset** | Close the context and rebuild from the *same* `ElideRuntime`. Survives a reset: engine, code cache, language pre-initialization. Cost is exactly one of today's per-call context builds — i.e. the ~25 ms Python floor, paid once on reset. Every non-reset eval avoids it entirely. |
 | 5 | **Guest→host calls** | v1 = HTTP loopback bridge, which is **zero Elide work** (Aura's existing `ensurePyToolBridge` pattern; Elide's JS has `fetch`). v2 (Tier 2.2, a separate batch — item L) = a `hostCallPoll`/`hostCallResolve` pump over `ProxyExecutable`. The schema lands now and returns `unsupportedOperation` until L ships. |
 | 6 | **Cancellation** | A three-rung ladder: `interrupt(timeoutMillis)` = `Context.interrupt`, context and guest state survive → escalate to `cancel` = `close(true)` + rebuild (state gone, runtime still warm) → `contextClose`. **No runtime-imposed deadlines anywhere** — the host owns all wall-clock policy. |
 | 7 | **Errors as values** | A new `guest.capnp` carrying `ExceptionSummary` (typeName, message, language, `isSyntaxError`/`isHostWrapped`/`isInternal`/`isCancelled`/`isExit`+`exitStatus`, source location, stack frames, recursive `causedBy`) — **no ANSI escapes anywhere in the wire format**. Guest errors never poison a context; every result carries a `contextAlive` flag. Poisoning taxonomy in §1.5. |
-| 8 | **Versioning** | ABI v2, a strict superset of v1. One-shot RUN wire bytes must remain **byte-identical** (guard with a golden-bytes test). Aura pins ABI = 2 exactly, takes a new schema hash, and its generated closure grows 14 → 15 files (adding `guest.ts`). |
+| 8 | **Versioning** | ABI v2, a strict superset of v1. One-shot RUN wire bytes must remain **byte-identical** (guard with a golden-bytes test). Aura pins ABI = 2 exactly (see open question 6, which revisits exact-2 vs. `>= 1`), takes a new schema hash, and its generated closure grows 14 → 15 files (adding `guest.ts`). |
 | 9 | **Concurrency** | Serialized per context (a second concurrent eval on the same context returns `busy`); concurrent *across* contexts (threads attach via `elide_embed_attach`); control ops are always concurrent with an in-flight eval. Guaranteed minimum: 1 JS/TS context + 1 Python context alive simultaneously. |
 | 10 | **Hygiene** | Deprecate-and-document the dead engine fields; document rather than wire `ENGINE_OPTIMIZED`; add `EmbeddedEvalMode.mainScript`; leave `os.getppid()` unsupported. Full detail in Item 2 (§2.1–2.4). |
 
@@ -220,6 +220,16 @@ struct EmbeddedControl {
 
 #### Response payloads
 
+> **(sketch — the response envelope is Elide's to choose.)** The payloads below
+> carry no `protocolVersion`/`requestId` of their own, and the source spec does
+> not say whether they attach as new arms on the existing `EmbeddedResponse`
+> (`embed.capnp:56-66`, which already carries both) or ride a new response root.
+> That choice is deliberately left open here rather than invented. Whatever is
+> chosen must (a) preserve `requestId` correlation for every payload, and
+> (b) provide a carrier for the `contextAlive` signal on an
+> `outputLimitExceeded` outcome — see **open question 9**, which item B must
+> settle before the schema lands.
+
 ```capnp
 struct EmbeddedContextOpened {
   contextId    @0 :UInt64;
@@ -248,7 +258,7 @@ struct EmbeddedEvalResult {
   value        @10 :Guest.ValueSummary;   # only when captureResultValue = true
 }
 
-struct EmbeddedOutputChunk {
+struct EmbeddedOutputChunk {                            # (sketch)
   stream @0 :UInt8;   # 0 = stdout, 1 = stderr
   data   @1 :Data;
   seq    @2 :UInt64;
@@ -277,10 +287,14 @@ struct EmbeddedDescription {                            # (sketch)
   resetCount   @6 :UInt64;
 }
 
-struct EmbeddedCapabilities {
+struct EmbeddedCapabilities {                           # (sketch)
   # Feature-flag matrix. Its purpose is that any op the build does not yet
   # implement answers `unsupportedOperation`, never `internal` — so Aura can
   # feature-detect a staged rollout instead of pattern-matching error strings.
+  #
+  # The spec fixes the ROLE but not the field set; the flags below are a
+  # first cut. This is the sketch most worth Elide review, because Aura
+  # feature-detects against it — every flag here becomes a branch host-side.
 
   streaming          @0 :Bool;
   hostCalls          @1 :Bool;
@@ -558,7 +572,7 @@ limit should be raisable above 16 MiB is open question 8.)
 | | Item | Size | Notes |
 |---|---|---|---|
 | **A** | **Spike: Python-only context on a shared engine with `allowCreateThread` — does GraalPy get threads?** | **S** | **🚩 BLOCKING GATE for Python Tier 2.** Nothing about Python scope can be decided before this lands. If the answer is no, the fallback is a separate engine per Python context, which changes the warmth story (and therefore the reset cost) materially. JS/TS work (B–K) is *not* blocked by A. |
-| B | `guest.capnp` + `embed.capnp` + Makefile capnpc list + regen + fingerprint | S | **Land the whole schema in ONE commit** so Aura repins exactly once. A partial schema costs Aura a full regeneration cycle per landing. |
+| B | `guest.capnp` + `embed.capnp` + Makefile capnpc list + regen + fingerprint | S | **Land the whole schema in ONE commit** so Aura repins exactly once. A partial schema costs Aura a full regeneration cycle per landing. **Prerequisite: answer open question 9** (response-envelope shape + the `outputLimitExceeded`/`contextAlive` carrier) — the schema cannot land whole until it is settled. |
 | C | `ElideRuntime.ContextSpec` | S | Overrides applied after the component chain (§1.4). |
 | D | `EmbeddedRuntimeHost` extraction + context registry + errors | **L (2–3 d)** | The big one. Preserve every existing cleanup path. |
 | E | `EmbeddedCodec.kt` decode/encode | M | |
@@ -658,6 +672,24 @@ unsupported on the Elide path is correct, not a gap.
 8. Should the per-context `outputByteLimit` be exposable above 16 MiB, within a
    64 MiB envelope cap? (Aura has no current need; asking before the schema
    ossifies.)
+9. **[Must be settled by item B]** **Response envelope for the new payloads.**
+   The source spec names the response payloads but not how they reach the host.
+   Two sub-questions, both of which change what Aura's codec decodes:
+   - **(a) Envelope shape.** Do `EmbeddedContextOpened` / `EmbeddedEvalResult` /
+     `EmbeddedOutputBatch` / `EmbeddedHostCall` / `EmbeddedDescription` attach
+     as new arms on the existing `EmbeddedResponse` (`embed.capnp:56-66`,
+     inheriting its `protocolVersion` + `requestId`), or ride a new response
+     root that carries its own? Either is fine for Aura; what is *not* fine is
+     leaving it implicit — §1.7 item B ("land the whole schema in ONE commit so
+     Aura repins exactly once") and regeneration checklist step 4 ("encode/decode
+     the new roots") are both unexecutable until this is answered.
+   - **(b) The `outputLimitExceeded` carrier.** §1.5 promises that an eval which
+     blows `outputByteLimit` fails the *eval* and leaves the context alive. But
+     `EmbeddedEvalResult.outcome` has no arm for it, so as sketched that outcome
+     would travel as an `EmbeddedFailure` — which carries no `contextAlive`. The
+     prose promise currently has no wire carrier. Fix it either by adding an
+     outcome arm, or by giving the failure path a `contextAlive` signal; Elide
+     picks, but one of the two is required for §1.5 to be implementable.
 
 ---
 
@@ -682,7 +714,9 @@ decisions.
    `consumeResponse`. The caller-frees buffer contract is unchanged.
 4. **`embedded/codec.ts`** — encode/decode the new roots
    (`EmbeddedContextCall`, `EmbeddedControl`, and the response payloads) plus
-   the seven new failure codes.
+   the seven new failure codes. **Read the shipped schema, not this doc, for the
+   response envelope** — whether the payloads arrive as `EmbeddedResponse` arms
+   or under a new root is open question 9, resolved Elide-side in item B.
 5. **`eval/js/worker-protocol.ts`** — context-*call* goes on the execution
    worker; context-open/close/interrupt/cancel/reset/poll-output go on the
    **control** worker. This split is what makes control ops concurrent with an
