@@ -169,9 +169,11 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 	terminateCount = 0;
 	respondToProbe = true;
 	respondToOpen = true;
+	respondToClose = true;
 	closeResponse = closedResponse();
 	openHandle = 88n;
 	openResponse = openedResponse();
+	failSend: ((message: ExecutionWorkerRequest) => boolean) | undefined;
 	readonly #events: string[];
 	readonly #messageHandlers = new Set<(message: ExecutionWorkerResponse) => void>();
 	readonly #errorHandlers = new Set<(error: Error) => void>();
@@ -182,6 +184,7 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 	}
 
 	send(message: ExecutionWorkerRequest, transfer: Bun.Transferable[] = []): void {
+		if (this.failSend?.(message)) throw new Error("synthetic worker send failure");
 		this.sent.push({ message, transfer });
 		if (message.type === "probe") {
 			if (this.respondToProbe) queueMicrotask(() => this.emit({ type: "probed", id: message.id }));
@@ -207,7 +210,9 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 			return;
 		}
 		this.#events.push("execution:close-runtime");
-		queueMicrotask(() => this.emit({ type: "closed", id: message.id, response: this.closeResponse }));
+		if (this.respondToClose) {
+			queueMicrotask(() => this.emit({ type: "closed", id: message.id, response: this.closeResponse }));
+		}
 	}
 
 	onMessage(handler: (message: ExecutionWorkerResponse) => void): () => void {
@@ -258,6 +263,15 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 		});
 	}
 
+	releaseClose(): void {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ExecutionWorkerRequest, { type: "close" }>> =>
+				candidate.message.type === "close",
+		);
+		if (!request) throw new Error("missing execution close");
+		this.emit({ type: "closed", id: request.message.id, response: this.closeResponse });
+	}
+
 	releaseLatestCall(response: Uint8Array): number {
 		const request = this.sent.findLast(
 			(candidate): candidate is SentMessage<Extract<ExecutionWorkerRequest, { type: "call" }>> =>
@@ -278,6 +292,7 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 	readonly sent: SentMessage<ControlWorkerRequest>[] = [];
 	terminateCount = 0;
 	respondToProbe = true;
+	respondToShutdown = true;
 	exitBeforeShutdownAck = false;
 	cancelResponses: Uint8Array[] = [];
 	onCancel: ((attempt: number) => void) | undefined;
@@ -316,7 +331,7 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 		}
 		this.#events.push("control:shutdown");
 		if (this.exitBeforeShutdownAck) queueMicrotask(() => this.die());
-		else queueMicrotask(() => this.emit({ type: "shutdown-complete", id: message.id }));
+		else if (this.respondToShutdown) queueMicrotask(() => this.emit({ type: "shutdown-complete", id: message.id }));
 	}
 
 	onMessage(handler: (message: ControlWorkerResponse) => void): () => void {
@@ -352,6 +367,15 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 		this.emit({ type: "probed", id: request.message.id });
 	}
 
+	releaseShutdown(): void {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ControlWorkerRequest, { type: "shutdown" }>> =>
+				candidate.message.type === "shutdown",
+		);
+		if (!request) throw new Error("missing control shutdown");
+		this.emit({ type: "shutdown-complete", id: request.message.id });
+	}
+
 	die(): void {
 		for (const handler of this.#exitHandlers) handler();
 	}
@@ -382,6 +406,30 @@ function ownedTransferBuffer(bytes: Uint8Array): ArrayBuffer {
 		throw new Error("worker response did not own its complete transferable ArrayBuffer");
 	}
 	return buffer;
+}
+
+/** The id of the last request of `type` the host handed to a fake worker. */
+function lastRequestId<Request extends { type: string; id: number }>(
+	sent: SentMessage<Request>[],
+	type: Request["type"],
+): number {
+	const request = sent.findLast(candidate => candidate.message.type === type);
+	if (!request) throw new Error(`missing worker request ${type}`);
+	return request.message.id;
+}
+
+/** Bounded: yields the rejection reason, and fails loudly if `promise` resolves or stalls. */
+async function rejectionOf(promise: Promise<unknown>, label: string): Promise<unknown> {
+	return await withTimeout(
+		promise.then(
+			() => {
+				throw new Error(`${label} resolved instead of rejecting`);
+			},
+			(error: unknown) => error,
+		),
+		5_000,
+		`${label} never settled`,
+	);
 }
 
 async function expectInternalRejection(promise: Promise<unknown>, message: string): Promise<void> {
@@ -825,6 +873,137 @@ describe("embedded dual-worker host", () => {
 			message: "native runtime close failed",
 			data: { failureCode: "internal" },
 		});
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
+	});
+
+	test("restores a worker error response into its own pending request on either channel", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+
+		const call = host.call(41n, new Uint8Array([4]));
+		await flushWorkerQueue();
+		execution.emit({
+			type: "error",
+			id: lastRequestId(execution.sent, "call"),
+			error: { code: "invalid-params", message: "guest rejected the call", data: { reason: "fixture" } },
+		});
+		const callFailure = await rejectionOf(call, "execution call");
+		expect(callFailure).toBeInstanceOf(RuntimeRpcError);
+		expect(callFailure).toMatchObject({
+			code: "invalid-params",
+			message: "guest rejected the call",
+			data: { reason: "fixture" },
+		});
+
+		// Emitted ahead of the fake's queued `cancelled` acknowledgement, so the error
+		// settles the request and the acknowledgement behind it is discarded as stale.
+		const cancel = host.cancel(42n);
+		control.emit({
+			type: "error",
+			id: lastRequestId(control.sent, "cancel"),
+			error: { code: "runtime-missing", message: "control library vanished", data: { path: "/gone.so" } },
+		});
+		const cancelFailure = await rejectionOf(cancel, "control cancel");
+		expect(cancelFailure).toBeInstanceOf(RuntimeRpcError);
+		expect(cancelFailure).toMatchObject({
+			code: "runtime-missing",
+			message: "control library vanished",
+			data: { path: "/gone.so" },
+		});
+
+		// A per-request error is not a host fault, so the host still shuts down cleanly.
+		await withTimeout(host.shutdown(), 5_000, "shutdown after restored worker errors stalled");
+	});
+
+	test("one worker's fault rejects the pending requests on both channels", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		const call = host.call(51n, new Uint8Array([5]));
+		await flushWorkerQueue();
+		// The fake acknowledges a cancel on a queued microtask, so this is still pending
+		// on the control channel when the execution worker dies later in this same turn.
+		const cancel = host.cancel(52n);
+		expect(control.sent.some(entry => entry.message.type === "cancel")).toBe(true);
+		execution.die();
+
+		for (const [pending, label] of [
+			[call, "execution call"],
+			[cancel, "control cancel"],
+		] as const) {
+			const failure = await rejectionOf(pending, label);
+			expect(failure).toBeInstanceOf(RuntimeRpcError);
+			if (!(failure instanceof RuntimeRpcError)) throw new Error("expected RuntimeRpcError");
+			expect(failure.code).toBe("internal");
+			expect(failure.message).toContain("execution worker exited");
+		}
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
+	});
+
+	test("a throwing worker send faults the host and rejects the request it was carrying", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		execution.failSend = message => message.type === "call";
+
+		const failure = await rejectionOf(host.call(71n, new Uint8Array([7])), "execution call");
+		expect(failure).toBeInstanceOf(RuntimeRpcError);
+		if (!(failure instanceof RuntimeRpcError)) throw new Error("expected RuntimeRpcError");
+		expect(failure.code).toBe("internal");
+		expect(failure.message).toContain("worker host failed");
+		expect(String(failure.data?.cause)).toContain("execution worker send failed");
+
+		// The failed send is a host fault: later work is refused and both workers are gone.
+		await expectInternalRejection(host.call(72n, new Uint8Array([8])), "worker host failed");
+		await flushWorkerQueue();
+		expect(execution.terminateCount).toBe(1);
+		expect(control.terminateCount).toBe(1);
+	});
+
+	test("mints request ids from one counter shared by both worker channels", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.probe();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		const call = host.call(61n, new Uint8Array([6]));
+		await flushWorkerQueue();
+		execution.releaseLatestCall(new Uint8Array([6]));
+		await withTimeout(call, 5_000, "call stalled");
+		await withTimeout(host.cancel(62n), 5_000, "cancel stalled");
+		await withTimeout(host.shutdown(), 5_000, "shutdown stalled");
+
+		// Every id the host mints is sent, so the two workers' ids must interleave into
+		// one unbroken 1..n run; a per-channel counter would hand out duplicates instead.
+		const ids = [...execution.sent, ...control.sent].map(entry => entry.message.id).sort((a, b) => a - b);
+		expect(execution.sent.length).toBeGreaterThan(0);
+		expect(control.sent.length).toBeGreaterThan(0);
+		expect(ids).toEqual(Array.from({ length: ids.length }, (_, index) => index + 1));
+	});
+
+	test("an acknowledged control worker exit never faults the in-flight runtime close", async () => {
+		const { host, execution, control, events } = createHostHarness();
+		await host.open("/runtime.so", new Uint8Array([1]));
+		control.respondToShutdown = false;
+		execution.respondToClose = false;
+		events.length = 0;
+
+		const shutdown = host.shutdown();
+		await flushWorkerQueue();
+		control.releaseShutdown();
+		await flushWorkerQueue();
+		// The runtime close is in flight on the execution channel and the control worker
+		// has acknowledged shutdown, so its exit here is expected rather than a crash.
+		expect(events).toEqual(["control:shutdown", "execution:close-runtime"]);
+		control.die();
+		await flushWorkerQueue();
+		execution.releaseClose();
+
+		await withTimeout(shutdown, 5_000, "shutdown after an expected control exit stalled");
+		expect(events).toEqual([
+			"control:shutdown",
+			"execution:close-runtime",
+			"execution:terminate",
+			"control:terminate",
+		]);
 		expect(execution.terminateCount).toBe(1);
 		expect(control.terminateCount).toBe(1);
 	});
