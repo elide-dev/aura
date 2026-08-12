@@ -43,6 +43,8 @@ class FakeBindings implements EmbeddedNativeBindings {
 	openCount = 0;
 	callCount = 0;
 	cancelCount = 0;
+	contextCallCount = 0;
+	contextControlCount = 0;
 	closeRuntimeCount = 0;
 	closeLibraryCount = 0;
 	onCall: (() => void) | undefined;
@@ -53,6 +55,8 @@ class FakeBindings implements EmbeddedNativeBindings {
 	};
 	callResult: EmbeddedNativeCallResult = { status: 0, response: this.buffer("call", [4, 5, 6]) };
 	cancelResult: EmbeddedNativeCallResult = { status: 0, response: this.buffer("cancel", [7, 8]) };
+	contextCallResult: EmbeddedNativeCallResult = { status: 0, response: this.buffer("context-call", [21, 22]) };
+	contextControlResult: EmbeddedNativeCallResult = { status: 0, response: this.buffer("context-control", [31]) };
 	closeResult: EmbeddedNativeCallResult = { status: 0, response: this.buffer("close", [9]) };
 
 	buffer(label: string, bytes: number[], byteLength?: bigint): EmbeddedNativeBuffer {
@@ -77,6 +81,18 @@ class FakeBindings implements EmbeddedNativeBindings {
 		this.cancelCount += 1;
 		this.events.push("native:cancel");
 		return this.cancelResult;
+	}
+
+	contextCall(_handle: bigint, _request: Uint8Array): EmbeddedNativeCallResult {
+		this.contextCallCount += 1;
+		this.events.push("native:context-call");
+		return this.contextCallResult;
+	}
+
+	contextControl(_handle: bigint, _request: Uint8Array): EmbeddedNativeCallResult {
+		this.contextControlCount += 1;
+		this.events.push("native:context-control");
+		return this.contextControlResult;
 	}
 
 	closeRuntime(_handle: bigint): EmbeddedNativeCallResult {
@@ -229,6 +245,53 @@ describe("embedded native ABI ownership", () => {
 		expect(bindings.closeRuntimeCount).toBe(1);
 		expect(bindings.events).toContain("malformed-close:free");
 		expect(bindings.closeLibraryCount).toBe(1);
+	});
+
+	test("routes context call and control through the same copy-then-free contract", () => {
+		const bindings = new FakeBindings();
+		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);
+		const { handle } = library.open(new Uint8Array([1]));
+
+		expect(library.contextCall(handle, new Uint8Array([2]))).toEqual(new Uint8Array([21, 22]));
+		expect(library.contextControl(handle, new Uint8Array([3]))).toEqual(new Uint8Array([31]));
+		expect(bindings.contextCallCount).toBe(1);
+		expect(bindings.contextControlCount).toBe(1);
+		expect(bindings.events.slice(3)).toEqual([
+			"native:context-call",
+			"context-call:copy",
+			"context-call:free",
+			"native:context-control",
+			"context-control:copy",
+			"context-control:free",
+		]);
+	});
+
+	test("frees a failed context response without copying and keeps the handle guard", () => {
+		const bindings = new FakeBindings();
+		bindings.contextCallResult = { status: 4, response: bindings.buffer("failed-context", [1]) };
+		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);
+		const { handle } = library.open(new Uint8Array([1]));
+
+		expectInternalError(() => library.contextCall(handle, new Uint8Array([2])), "status 4");
+		expect(bindings.events).toContain("failed-context:free");
+		expect(bindings.events).not.toContain("failed-context:copy");
+		expectInternalError(() => library.contextCall(0n, new Uint8Array([2])), "handle");
+		expectInternalError(() => library.contextControl(0n, new Uint8Array([2])), "handle");
+		expect(bindings.contextCallCount).toBe(1);
+		expect(bindings.contextControlCount).toBe(0);
+	});
+
+	test("refuses context operations once the library is closing", () => {
+		const bindings = new FakeBindings();
+		const library = createEmbeddedNativeLibrary("/canonical/libelide_embed.so", bindings);
+		const { handle } = library.open(new Uint8Array([1]));
+		bindings.onCall = () => library.closeLibrary();
+		library.call(handle, new Uint8Array([2]));
+
+		expectInternalError(() => library.contextCall(handle, new Uint8Array([3])), "closing");
+		expectInternalError(() => library.contextControl(handle, new Uint8Array([3])), "closing");
+		expect(bindings.contextCallCount).toBe(0);
+		expect(bindings.contextControlCount).toBe(0);
 	});
 
 	test("defers dlclose until an in-flight call and its runtime are closed", () => {

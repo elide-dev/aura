@@ -4,8 +4,14 @@ import { withTimeout } from "@oh-my-pi/pi-utils";
 import { consumeWorkerInbox, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { Message } from "capnp-es";
 import type { EmbeddedNativeLibrary } from "../src/runtime/embedded/abi";
+import { decodeEmbeddedResponse } from "../src/runtime/embedded/codec";
 import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
-import { EmbeddedResponse, EmbeddedFailureCode as WireFailureCode } from "../src/runtime/embedded/generated/embed";
+import {
+	EmbeddedControl,
+	EmbeddedControl_Op_Which,
+	EmbeddedResponse,
+	EmbeddedFailureCode as WireFailureCode,
+} from "../src/runtime/embedded/generated/embed";
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import {
 	ControlWorkerCore,
@@ -13,6 +19,7 @@ import {
 	type EmbeddedWorkerHandle,
 	EmbeddedWorkerHost,
 	ExecutionWorkerCore,
+	pumpEmbeddedContextOutput,
 	spawnEmbeddedControlWorker,
 	spawnEmbeddedExecutionWorker,
 } from "../src/runtime/embedded/worker-core";
@@ -88,6 +95,16 @@ class FakeNativeLibrary implements EmbeddedNativeLibrary {
 		return new Uint8Array([12]);
 	}
 
+	contextCall(handle: bigint, request: Uint8Array): Uint8Array {
+		this.events.push(`context-call:${handle}:${request[0]}`);
+		return new Uint8Array([100, request[0] ?? 0]);
+	}
+
+	contextControl(handle: bigint, request: Uint8Array): Uint8Array {
+		this.events.push(`context-control:${handle}:${request[0]}`);
+		return new Uint8Array([200, request[0] ?? 0]);
+	}
+
 	closeRuntime(handle: bigint): Uint8Array {
 		this.events.push(`close:${handle}`);
 		if (this.closeRuntimeFailure) throw this.closeRuntimeFailure;
@@ -150,6 +167,12 @@ function requestNotActiveResponse(requestId: bigint): Uint8Array {
 	}, requestId);
 }
 
+function contextAckResponse(requestId: bigint): Uint8Array {
+	return serializeResponse(response => {
+		response.contextAck = true;
+	}, requestId);
+}
+
 function closedResponse(): Uint8Array {
 	return serializeResponse(response => {
 		response.closed = true;
@@ -207,6 +230,10 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 		}
 		if (message.type === "call") {
 			this.#events.push("execution:call");
+			return;
+		}
+		if (message.type === "context-call") {
+			this.#events.push("execution:context-call");
 			return;
 		}
 		this.#events.push("execution:close-runtime");
@@ -283,6 +310,17 @@ class FakeExecutionWorker implements EmbeddedWorkerHandle<ExecutionWorkerRequest
 		return request.message.id;
 	}
 
+	releaseLatestContextCall(response: Uint8Array): number {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ExecutionWorkerRequest, { type: "context-call" }>> =>
+				candidate.message.type === "context-call",
+		);
+		if (!request) throw new Error("missing execution context call");
+		this.#events.push("execution:context-call-response");
+		this.emit({ type: "context-called", id: request.message.id, response });
+		return request.message.id;
+	}
+
 	die(): void {
 		for (const handler of this.#exitHandlers) handler();
 	}
@@ -295,6 +333,7 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 	respondToShutdown = true;
 	exitBeforeShutdownAck = false;
 	cancelResponses: Uint8Array[] = [];
+	contextControlResponses: Uint8Array[] = [];
 	onCancel: ((attempt: number) => void) | undefined;
 	#cancelAttempts = 0;
 	readonly #events: string[];
@@ -327,6 +366,14 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 				this.emit({ type: "cancelled", id: message.id, response });
 				this.onCancel?.(this.#cancelAttempts);
 			});
+			return;
+		}
+		if (message.type === "context-control") {
+			this.#events.push("control:context-control");
+			const response = this.contextControlResponses.shift();
+			if (response !== undefined) {
+				queueMicrotask(() => this.emit({ type: "context-controlled", id: message.id, response }));
+			}
 			return;
 		}
 		this.#events.push("control:shutdown");
@@ -365,6 +412,16 @@ class FakeControlWorker implements EmbeddedWorkerHandle<ControlWorkerRequest, Co
 		);
 		if (!request) throw new Error("missing control probe");
 		this.emit({ type: "probed", id: request.message.id });
+	}
+
+	releaseLatestContextControl(response: Uint8Array): number {
+		const request = this.sent.findLast(
+			(candidate): candidate is SentMessage<Extract<ControlWorkerRequest, { type: "context-control" }>> =>
+				candidate.message.type === "context-control",
+		);
+		if (!request) throw new Error("missing control context-control");
+		this.emit({ type: "context-controlled", id: request.message.id, response });
+		return request.message.id;
 	}
 
 	releaseShutdown(): void {
@@ -1250,5 +1307,264 @@ describe("createParentPortWorkerTransport", () => {
 				"embedded-runtime-control-worker",
 			),
 		).toThrow("embedded-runtime-control-worker: missing parentPort");
+	});
+});
+
+describe("embedded Tier 2 worker routing", () => {
+	test("execution worker serves a context call from the native context entry point", async () => {
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		const events: string[] = [];
+		new ExecutionWorkerCore(transport, path => new FakeNativeLibrary(path, events));
+
+		transport.emit({ type: "open", id: 1, libraryPath: "/runtime.so", request: new Uint8Array([10]) });
+		transport.emit({ type: "context-call", id: 2, handle: 88n, request: new Uint8Array([42]) });
+		await flushWorkerQueue();
+
+		expect(events).toEqual(["open:10", "context-call:88:42"]);
+		const response = responseForId(transport.sent, 2).message;
+		expect(response.type).toBe("context-called");
+		if (!("response" in response)) throw new Error("context call response carried no bytes");
+		expect(Array.from(response.response)).toEqual([100, 42]);
+		expect(responseForId(transport.sent, 2).transfer).toEqual([ownedTransferBuffer(response.response)]);
+	});
+
+	test("execution worker refuses a context call before open and on a stale handle", async () => {
+		const transport = new MemoryTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>();
+		const events: string[] = [];
+		new ExecutionWorkerCore(transport, path => new FakeNativeLibrary(path, events));
+
+		transport.emit({ type: "context-call", id: 1, handle: 88n, request: new Uint8Array([1]) });
+		await flushWorkerQueue();
+		expect(responseForId(transport.sent, 1).message).toMatchObject({ type: "error" });
+
+		transport.emit({ type: "open", id: 2, libraryPath: "/runtime.so", request: new Uint8Array([10]) });
+		transport.emit({ type: "context-call", id: 3, handle: 99n, request: new Uint8Array([1]) });
+		await flushWorkerQueue();
+		const stale = responseForId(transport.sent, 3).message;
+		expect(stale.type).toBe("error");
+		if (stale.type !== "error") throw new Error("expected a worker error");
+		expect(stale.error.message).toContain("stale handle");
+		expect(events).toEqual(["open:10"]);
+	});
+
+	test("control worker serves a context control frame while holding the runtime handle", async () => {
+		const transport = new MemoryTransport<ControlWorkerRequest, ControlWorkerResponse>();
+		const events: string[] = [];
+		new ControlWorkerCore(transport, path => new FakeNativeLibrary(path, events));
+
+		transport.emit({ type: "init", id: 1, libraryPath: "/runtime.so", handle: 88n });
+		transport.emit({ type: "context-control", id: 2, request: new Uint8Array([7]) });
+		await flushWorkerQueue();
+
+		expect(events).toEqual(["context-control:88:7"]);
+		const response = responseForId(transport.sent, 2).message;
+		expect(response.type).toBe("context-controlled");
+		if (!("response" in response)) throw new Error("context control response carried no bytes");
+		expect(Array.from(response.response)).toEqual([200, 7]);
+	});
+
+	test("control worker refuses a context control before init and after shutdown", async () => {
+		const transport = new MemoryTransport<ControlWorkerRequest, ControlWorkerResponse>();
+		const events: string[] = [];
+		new ControlWorkerCore(transport, path => new FakeNativeLibrary(path, events));
+
+		transport.emit({ type: "context-control", id: 1, request: new Uint8Array([7]) });
+		await flushWorkerQueue();
+		expect(responseForId(transport.sent, 1).message).toMatchObject({ type: "error" });
+
+		transport.emit({ type: "init", id: 2, libraryPath: "/runtime.so", handle: 88n });
+		transport.emit({ type: "shutdown", id: 3 });
+		transport.emit({ type: "context-control", id: 4, request: new Uint8Array([7]) });
+		await flushWorkerQueue();
+		// Shutdown drops the handle first, so a frame queued behind it is refused rather than run.
+		expect(responseForId(transport.sent, 4).message).toMatchObject({
+			type: "error",
+			error: { code: "internal", message: "Embedded runtime control worker is not initialized." },
+		});
+		expect(events).toEqual(["dlclose"]);
+	});
+
+	test("host answers a context control while a context eval is still in flight", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.open("/real/libelide_embed.so", new Uint8Array([1]));
+
+		const eval1 = host.contextCall(1n, 4n, new Uint8Array([2]));
+		await flushWorkerQueue();
+		let settled = false;
+		void eval1.finally(() => {
+			settled = true;
+		});
+
+		const controlled = host.contextControl(new Uint8Array([3]));
+		await flushWorkerQueue();
+		control.releaseLatestContextControl(new Uint8Array([9]));
+		expect(Array.from(await controlled)).toEqual([9]);
+		expect(settled).toBe(false);
+
+		execution.releaseLatestContextCall(new Uint8Array([5]));
+		expect(Array.from(await eval1)).toEqual([5]);
+	});
+
+	test("host serializes context evals behind an in-flight one-shot call", async () => {
+		const { host, execution, events } = createHostHarness();
+		await host.open("/real/libelide_embed.so", new Uint8Array([1]));
+
+		const oneShot = host.call(1n, new Uint8Array([2]));
+		const contextEval = host.contextCall(2n, 4n, new Uint8Array([3]));
+		await flushWorkerQueue();
+		expect(events.filter(entry => entry.startsWith("execution:"))).toEqual(["execution:open", "execution:call"]);
+
+		execution.releaseLatestCall(new Uint8Array([8]));
+		await oneShot;
+		await flushWorkerQueue();
+		execution.releaseLatestContextCall(new Uint8Array([9]));
+		expect(Array.from(await contextEval)).toEqual([9]);
+	});
+
+	test("host discards an in-flight context eval before it waits on shutdown", async () => {
+		const { host, execution, control } = createHostHarness();
+		await host.open("/real/libelide_embed.so", new Uint8Array([1]));
+
+		const contextEval = host.contextCall(1n, 4n, new Uint8Array([2]));
+		await flushWorkerQueue();
+		const shutdown = host.shutdown();
+		await flushWorkerQueue();
+
+		const discard = control.sent.findLast(entry => entry.message.type === "context-control");
+		if (!discard) throw new Error("shutdown did not discard the in-flight context eval");
+		const request = discard.message;
+		if (request.type !== "context-control") throw new Error("expected a context-control request");
+		const decoded = new Message(request.request, false).getRoot(EmbeddedControl);
+		expect(decoded.contextId).toBe(4n);
+		expect(decoded.op.which()).toBe(EmbeddedControl_Op_Which.CANCEL);
+
+		control.releaseLatestContextControl(contextAckResponse(decoded.requestId));
+		await flushWorkerQueue();
+		execution.releaseLatestContextCall(new Uint8Array([5]));
+		await contextEval;
+		await shutdown;
+	});
+});
+
+describe("embedded context output pump", () => {
+	function batch(chunks: Array<[stream: 0 | 1, text: string, seq: bigint]>, seq: bigint, complete: boolean) {
+		const message = new Message();
+		const response = message.initRoot(EmbeddedResponse);
+		response.protocolVersion = ProtocolVersion.V2;
+		response.requestId = 1n;
+		const outputBatch = response._initOutputBatch();
+		const wireChunks = outputBatch._initChunks(chunks.length);
+		for (let index = 0; index < chunks.length; index += 1) {
+			const entry = chunks[index];
+			if (!entry) continue;
+			const chunk = wireChunks.get(index);
+			chunk.stream = entry[0];
+			const bytes = new TextEncoder().encode(entry[1]);
+			chunk._initData(bytes.byteLength).copyBuffer(bytes);
+			chunk.seq = entry[2];
+		}
+		outputBatch.seq = seq;
+		outputBatch.complete = complete;
+		return decodeEmbeddedResponse(new Uint8Array(message.toArrayBuffer()), 1n);
+	}
+
+	function failure(code: WireFailureCode, requestId = 1n) {
+		const message = new Message();
+		const response = message.initRoot(EmbeddedResponse);
+		response.protocolVersion = ProtocolVersion.V2;
+		response.requestId = requestId;
+		const detail = response._initFailure();
+		detail.code = code;
+		detail.message = "poll refused";
+		return decodeEmbeddedResponse(new Uint8Array(message.toArrayBuffer()), requestId);
+	}
+
+	function collector() {
+		const chunks: string[] = [];
+		return {
+			chunks,
+			onChunk(chunk: { stream: "stdout" | "stderr"; data: Uint8Array }): void {
+				chunks.push(`${chunk.stream}:${new TextDecoder().decode(chunk.data)}`);
+			},
+		};
+	}
+
+	test("drains chunks in sequence order and stops on the completion flag", async () => {
+		const responses = [
+			batch([[0, "one", 1n]], 1n, false),
+			batch(
+				[
+					[0, "two", 2n],
+					[1, "err", 3n],
+				],
+				3n,
+				false,
+			),
+			batch([], 3n, true),
+		];
+		const sink = collector();
+		const drain = await pumpEmbeddedContextOutput({
+			poll: async () => responses.shift() ?? batch([], 3n, true),
+			onChunk: sink.onChunk,
+			isEvalSettled: () => false,
+			evalSettlement: new Promise<void>(() => {}),
+		});
+
+		expect(sink.chunks).toEqual(["stdout:one", "stdout:two", "stderr:err"]);
+		expect(drain).toEqual({ seq: 3n, complete: true, closed: false });
+	});
+
+	test("rejects a batch whose sequence numbers move backwards", async () => {
+		const responses = [batch([[0, "one", 2n]], 2n, false), batch([[0, "stale", 1n]], 2n, false)];
+		await expectInternalRejection(
+			pumpEmbeddedContextOutput({
+				poll: async () => responses.shift() ?? batch([], 2n, true),
+				onChunk: () => {},
+				isEvalSettled: () => false,
+				evalSettlement: new Promise<void>(() => {}),
+			}),
+			"sequence",
+		);
+	});
+
+	test("stops without a completion flag once the eval settled and the pipe ran dry", async () => {
+		let polls = 0;
+		const drain = await pumpEmbeddedContextOutput({
+			poll: async () => {
+				polls += 1;
+				return batch([], 0n, false);
+			},
+			onChunk: () => {},
+			isEvalSettled: () => true,
+			evalSettlement: Promise.resolve(),
+		});
+
+		// One trailing poll after settlement catches a late batch; a second empty one ends the drain.
+		expect(polls).toBe(2);
+		expect(drain).toEqual({ seq: 0n, complete: false, closed: false });
+	});
+
+	test("treats a closed registry and an unknown context as a terminated drain, not a fault", async () => {
+		for (const code of [WireFailureCode.CLOSED, WireFailureCode.UNKNOWN_CONTEXT]) {
+			const drain = await pumpEmbeddedContextOutput({
+				poll: async () => failure(code),
+				onChunk: () => {},
+				isEvalSettled: () => false,
+				evalSettlement: new Promise<void>(() => {}),
+			});
+			expect(drain).toEqual({ seq: 0n, complete: false, closed: true });
+		}
+	});
+
+	test("raises any other poll failure so a streaming host never silently loses output", async () => {
+		await expectInternalRejection(
+			pumpEmbeddedContextOutput({
+				poll: async () => failure(WireFailureCode.CONTEXT_POISONED),
+				onChunk: () => {},
+				isEvalSettled: () => false,
+				evalSettlement: new Promise<void>(() => {}),
+			}),
+			"poll refused",
+		);
 	});
 });

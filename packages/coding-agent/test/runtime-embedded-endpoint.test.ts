@@ -1545,6 +1545,14 @@ class LoadedNativeLibrary implements EmbeddedNativeLibrary {
 		return new Uint8Array([3]);
 	}
 
+	contextCall(_handle: bigint, _request: Uint8Array): Uint8Array {
+		return new Uint8Array([5]);
+	}
+
+	contextControl(_handle: bigint, _request: Uint8Array): Uint8Array {
+		return new Uint8Array([6]);
+	}
+
 	closeRuntime(_handle: bigint): Uint8Array {
 		return new Uint8Array([4]);
 	}

@@ -16,6 +16,10 @@ export interface EmbeddedNativeLibrary {
 	open(request: Uint8Array): { handle: bigint; response: Uint8Array };
 	call(handle: bigint, request: Uint8Array): Uint8Array;
 	cancel(handle: bigint, requestId: bigint): Uint8Array;
+	/** Tier 2 eval against an open context; the request carries the context id on the wire. */
+	contextCall(handle: bigint, request: Uint8Array): Uint8Array;
+	/** Tier 2 non-eval context op; concurrent with an in-flight `contextCall` by contract. */
+	contextControl(handle: bigint, request: Uint8Array): Uint8Array;
 	closeRuntime(handle: bigint): Uint8Array;
 	closeLibrary(): void;
 }
@@ -39,10 +43,18 @@ export interface EmbeddedNativeBindings {
 	open(request: Uint8Array): EmbeddedNativeCallResult & { handle: bigint };
 	call(handle: bigint, request: Uint8Array): EmbeddedNativeCallResult;
 	cancel(handle: bigint, requestId: bigint): EmbeddedNativeCallResult;
+	contextCall(handle: bigint, request: Uint8Array): EmbeddedNativeCallResult;
+	contextControl(handle: bigint, request: Uint8Array): EmbeddedNativeCallResult;
 	closeRuntime(handle: bigint): EmbeddedNativeCallResult;
 	closeLibrary(): void;
 }
 
+/**
+ * The ABI 2 façade's exact nine exports. `elide_embed_context_call` and
+ * `elide_embed_context_control` share `elide_embed_runtime_call`'s FFI shape, and their leading
+ * `u64` is the runtime handle (the session id), not the context id — the context id rides the
+ * Cap'n Proto request. Both keep the caller-frees buffer contract unchanged.
+ */
 const EMBEDDED_SYMBOLS = {
 	elide_embed_abi_version: { args: [], returns: "u32" },
 	elide_embed_schema_hash: { args: [], returns: "ptr" },
@@ -50,6 +62,8 @@ const EMBEDDED_SYMBOLS = {
 	elide_embed_runtime_call: { args: ["u64", "ptr", "usize", "ptr"], returns: "i32" },
 	elide_embed_runtime_cancel: { args: ["u64", "u64", "ptr"], returns: "i32" },
 	elide_embed_runtime_close: { args: ["u64", "ptr"], returns: "i32" },
+	elide_embed_context_call: { args: ["u64", "ptr", "usize", "ptr"], returns: "i32" },
+	elide_embed_context_control: { args: ["u64", "ptr", "usize", "ptr"], returns: "i32" },
 	elide_embed_buffer_free: { args: ["ptr"], returns: "void" },
 } as const;
 
@@ -213,6 +227,30 @@ class FfiEmbeddedNativeBindings implements EmbeddedNativeBindings {
 		return { status, response: this.#takeResponse(response) };
 	}
 
+	contextCall(handle: bigint, request: Uint8Array): EmbeddedNativeCallResult {
+		this.#assertLive();
+		const response = new BigUint64Array(1);
+		const status = this.#library.symbols.elide_embed_context_call(
+			handle,
+			ptr(request),
+			request.byteLength,
+			ptr(response),
+		);
+		return { status, response: this.#takeResponse(response) };
+	}
+
+	contextControl(handle: bigint, request: Uint8Array): EmbeddedNativeCallResult {
+		this.#assertLive();
+		const response = new BigUint64Array(1);
+		const status = this.#library.symbols.elide_embed_context_control(
+			handle,
+			ptr(request),
+			request.byteLength,
+			ptr(response),
+		);
+		return { status, response: this.#takeResponse(response) };
+	}
+
 	closeRuntime(handle: bigint): EmbeddedNativeCallResult {
 		this.#assertLive();
 		const response = new BigUint64Array(1);
@@ -285,6 +323,18 @@ class OwnedEmbeddedNativeLibrary implements EmbeddedNativeLibrary {
 			});
 		}
 		return this.#operation(false, () => consumeResponse("cancel", this.#bindings.cancel(handle, requestId)));
+	}
+
+	contextCall(handle: bigint, request: Uint8Array): Uint8Array {
+		this.#assertHandle(handle);
+		return this.#operation(false, () => consumeResponse("context call", this.#bindings.contextCall(handle, request)));
+	}
+
+	contextControl(handle: bigint, request: Uint8Array): Uint8Array {
+		this.#assertHandle(handle);
+		return this.#operation(false, () =>
+			consumeResponse("context control", this.#bindings.contextControl(handle, request)),
+		);
 	}
 
 	closeRuntime(handle: bigint): Uint8Array {
@@ -378,7 +428,7 @@ export function createEmbeddedNativeLibrary(path: string, bindings: EmbeddedNati
 	}
 }
 
-/** Realpath and load the embedded runtime façade with its exact seven-symbol ABI. */
+/** Realpath and load the embedded runtime façade with its exact nine-symbol ABI. */
 export function openEmbeddedNativeLibrary(path: string): EmbeddedNativeLibrary {
 	const canonicalPath = fs.realpathSync(path);
 	const library = dlopen(canonicalPath, EMBEDDED_SYMBOLS);

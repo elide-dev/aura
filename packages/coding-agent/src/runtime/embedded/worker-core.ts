@@ -3,7 +3,13 @@ import { logger, workerHostEntry } from "@oh-my-pi/pi-utils";
 import { formatDisplayPath } from "../../utils/display-path";
 import { RuntimeRpcError } from "../protocol";
 import { type EmbeddedNativeLibrary, openEmbeddedNativeLibrary } from "./abi";
-import { decodeEmbeddedResponse, EmbeddedFailureCode } from "./codec";
+import {
+	decodeEmbeddedResponse,
+	type EmbeddedDecodedResponse,
+	EmbeddedFailureCode,
+	type EmbeddedOutputChunk,
+	encodeContextControl,
+} from "./codec";
 import {
 	type ControlWorkerRequest,
 	type ControlWorkerResponse,
@@ -146,6 +152,9 @@ export class ExecutionWorkerCore {
 					case "call":
 						this.#call(message);
 						break;
+					case "context-call":
+						this.#contextCall(message);
+						break;
 					case "close":
 						this.#close(message);
 						break;
@@ -267,6 +276,18 @@ export class ExecutionWorkerCore {
 		this.#transport.send({ type: "called", id: message.id, response: response.bytes }, response.transfer);
 	}
 
+	#contextCall(message: Extract<ExecutionWorkerRequest, { type: "context-call" }>): void {
+		const library = this.#library;
+		if (!library || this.#handle === undefined) {
+			throw new RuntimeRpcError("internal", "Embedded runtime execution worker is not open.");
+		}
+		if (message.handle !== this.#handle) {
+			throw new RuntimeRpcError("internal", "Embedded runtime execution worker received a stale handle.");
+		}
+		const response = transferBytes(library.contextCall(message.handle, message.request));
+		this.#transport.send({ type: "context-called", id: message.id, response: response.bytes }, response.transfer);
+	}
+
 	#close(message: Extract<ExecutionWorkerRequest, { type: "close" }>): void {
 		const library = this.#library;
 		if (!library || this.#handle === undefined) {
@@ -339,6 +360,7 @@ export class ControlWorkerCore {
 			try {
 				if (message.type === "init") this.#init(message);
 				else if (message.type === "cancel") this.#cancel(message);
+				else if (message.type === "context-control") this.#contextControl(message);
 				else this.#shutdown(message);
 			} catch (error) {
 				this.#transport.send({ type: "error", id: message.id, error: serializedError(error) });
@@ -379,6 +401,21 @@ export class ControlWorkerCore {
 		this.#validateResponse(bytes, message.requestId);
 		const response = transferBytes(bytes);
 		this.#transport.send({ type: "cancelled", id: message.id, response: response.bytes }, response.transfer);
+	}
+
+	/**
+	 * Serves every non-eval context op from the control thread, so it stays concurrent with an eval
+	 * occupying the execution thread. The frame is decoded by the host, not here: this worker owns
+	 * only the runtime handle and the native call.
+	 */
+	#contextControl(message: Extract<ControlWorkerRequest, { type: "context-control" }>): void {
+		const library = this.#library;
+		const handle = this.#handle;
+		if (!library || handle === undefined) {
+			throw new RuntimeRpcError("internal", "Embedded runtime control worker is not initialized.");
+		}
+		const response = transferBytes(library.contextControl(handle, message.request));
+		this.#transport.send({ type: "context-controlled", id: message.id, response: response.bytes }, response.transfer);
 	}
 
 	#shutdown(message: Extract<ControlWorkerRequest, { type: "shutdown" }>): void {
@@ -482,6 +519,81 @@ function yieldCancellationRetry(): Promise<void> {
 	return yielded.promise;
 }
 
+export interface EmbeddedOutputDrain {
+	/** Highest chunk sequence observed; 0 when the eval never streamed anything. */
+	seq: bigint;
+	/** True when the runtime marked the eval's output finished — the authoritative drain signal. */
+	complete: boolean;
+	/** True when the registry retired the context under the pump; not an error. */
+	closed: boolean;
+}
+
+export interface EmbeddedOutputPumpOptions {
+	/** Sends one already-encoded `poll-output` frame and decodes its response. */
+	poll(): Promise<EmbeddedDecodedResponse>;
+	onChunk(chunk: EmbeddedOutputChunk): void;
+	isEvalSettled(): boolean;
+	evalSettlement: Promise<void>;
+}
+
+/**
+ * Drain a streaming context's output from the control thread while its eval holds the execution
+ * thread — the same cross-thread shape `cancelEmbeddedRequestUntilSettled` uses, and a requirement
+ * rather than a preference.
+ *
+ * The runtime imposes **no wall-clock deadline** on a streaming write. A guest parked on a full
+ * pipe wakes on exactly three things: this drain, a control op that discards the eval or retires
+ * the context, or an interrupt. The output budget is deliberately not a wakeup. A host that never
+ * polls therefore stalls its own eval — recoverably, but it does stall.
+ *
+ * `EmbeddedOutputBatch.complete` is the drain signal; `EmbeddedEvalResult.outputSeq` reads 0 unless
+ * the host polled mid-eval, so it cannot substitute for one. When the eval settles without the
+ * runtime ever raising `complete`, one trailing poll catches a late batch and the drain then ends.
+ */
+export async function pumpEmbeddedContextOutput(options: EmbeddedOutputPumpOptions): Promise<EmbeddedOutputDrain> {
+	let seq = 0n;
+	let drainedAfterSettlement = false;
+	while (true) {
+		const response = await options.poll();
+		if (response.type === "failure") {
+			// `pollOutput` on a closed registry answers `closed` while eval and describe answer
+			// `unknownContext` for the same situation; both mean the same thing to a drain.
+			if (response.code === EmbeddedFailureCode.CLOSED || response.code === EmbeddedFailureCode.UNKNOWN_CONTEXT) {
+				return { seq, complete: false, closed: true };
+			}
+			throw new RuntimeRpcError("internal", response.message || "Embedded runtime output poll failed.", {
+				failureCode: response.code,
+			});
+		}
+		if (response.type !== "output-batch") {
+			throw new RuntimeRpcError("internal", "Embedded runtime returned an invalid output poll response.", {
+				responseType: response.type,
+			});
+		}
+		for (const chunk of response.chunks) {
+			if (chunk.seq <= seq) {
+				throw new RuntimeRpcError("internal", "Embedded runtime output chunk sequence moved backwards.", {
+					previous: seq.toString(),
+					received: chunk.seq.toString(),
+				});
+			}
+			seq = chunk.seq;
+			options.onChunk(chunk);
+		}
+		if (response.complete) return { seq: response.seq > seq ? response.seq : seq, complete: true, closed: false };
+		if (response.chunks.length > 0) {
+			drainedAfterSettlement = false;
+			continue;
+		}
+		if (!options.isEvalSettled()) {
+			await Promise.race([options.evalSettlement, yieldCancellationRetry()]);
+			continue;
+		}
+		if (drainedAfterSettlement) return { seq, complete: false, closed: false };
+		drainedAfterSettlement = true;
+	}
+}
+
 const DEFAULT_WORKER_FACTORIES: EmbeddedWorkerFactories = {
 	createExecutionWorker: spawnEmbeddedExecutionWorker,
 	createControlWorker: spawnEmbeddedControlWorker,
@@ -571,9 +683,11 @@ export class EmbeddedWorkerHost {
 	readonly #control: WorkerRequestChannel<ControlWorkerRequest, ControlWorkerResponse>;
 	readonly #lifecycleOperations = new Set<Promise<void>>();
 	#nextId = 0;
+	#nextHostControlRequestId = 0n;
 	#handle: bigint | undefined;
 	#loadedLibraryPath: string | undefined;
 	#activeRequestId: bigint | undefined;
+	#activeContextEval: { requestId: bigint; contextId: bigint } | undefined;
 	#callTail: Promise<void> = Promise.resolve();
 	#accepting = true;
 	#failure: RuntimeRpcError | undefined;
@@ -754,6 +868,50 @@ export class EmbeddedWorkerHost {
 		return result;
 	}
 
+	/**
+	 * Evaluate into an open context. Shares the execution worker with `call`, so evals are FIFO
+	 * across the whole host; `contextId` is retained so shutdown can discard an eval that would
+	 * otherwise never settle — a streaming eval has no wall-clock deadline anywhere.
+	 */
+	contextCall(requestId: bigint, contextId: bigint, request: Uint8Array): Promise<Uint8Array> {
+		try {
+			this.#assertAccepting();
+		} catch (error) {
+			return Promise.reject(error);
+		}
+		if (requestId <= 0n || requestId > MAX_UINT64) {
+			return Promise.reject(
+				new RuntimeRpcError(
+					"internal",
+					"Embedded runtime worker context call request id is outside the supported uint64 range.",
+				),
+			);
+		}
+		const run = (): Promise<Uint8Array> => this.#executeContextCall(requestId, contextId, request);
+		const result = this.#callTail.then(run, run);
+		this.#callTail = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
+	}
+
+	/**
+	 * Run one already-encoded `EmbeddedControl` frame on the control worker.
+	 *
+	 * Deliberately outside the execution FIFO: interrupt, cancel, reset, and the output poll must
+	 * reach the runtime while an eval holds the execution thread, or a parked guest write has
+	 * nothing left to wake it.
+	 */
+	contextControl(request: Uint8Array): Promise<Uint8Array> {
+		try {
+			this.#assertAccepting();
+		} catch (error) {
+			return Promise.reject(error);
+		}
+		return this.#contextControl(request);
+	}
+
 	cancel(requestId: bigint): Promise<Uint8Array> {
 		try {
 			this.#assertAccepting();
@@ -793,6 +951,75 @@ export class EmbeddedWorkerHost {
 		}
 	}
 
+	async #executeContextCall(requestId: bigint, contextId: bigint, request: Uint8Array): Promise<Uint8Array> {
+		this.#assertAccepting();
+		const handle = this.#handle;
+		if (handle === undefined) throw new RuntimeRpcError("internal", "Embedded runtime worker host is not open.");
+		const transferred = transferBytes(request);
+		this.#activeContextEval = { requestId, contextId };
+		try {
+			const id = this.#requestId();
+			const response = await this.#sendExecution(
+				{ type: "context-call", id, handle, request: transferred.bytes },
+				transferred.transfer,
+			);
+			if (response.type !== "context-called") {
+				throw this.#protocolFailure("Embedded runtime execution worker returned an invalid context call response.");
+			}
+			return response.response;
+		} finally {
+			if (this.#activeContextEval?.requestId === requestId) this.#activeContextEval = undefined;
+		}
+	}
+
+	async #contextControl(request: Uint8Array): Promise<Uint8Array> {
+		if (this.#handle === undefined) {
+			throw new RuntimeRpcError("internal", "Embedded runtime worker host is not open.");
+		}
+		const transferred = transferBytes(request);
+		const id = this.#requestId();
+		const response = await this.#sendControl(
+			{ type: "context-control", id, request: transferred.bytes },
+			transferred.transfer,
+		);
+		if (response.type !== "context-controlled") {
+			throw this.#protocolFailure("Embedded runtime control worker returned an invalid context control response.");
+		}
+		return response.response;
+	}
+
+	/**
+	 * Discard an eval that shutdown would otherwise wait on forever.
+	 *
+	 * `cancel` on a context discards the in-flight eval and rebuilds the context from the same warm
+	 * runtime; it is one of the three things that can wake a parked guest write, and the only one
+	 * available to a host that is tearing down.
+	 */
+	async #discardActiveContextEval(): Promise<void> {
+		const active = this.#activeContextEval;
+		if (!active) return;
+		const requestId = this.#nextControlRequestId();
+		const response = decodeEmbeddedResponse(
+			await this.#contextControl(encodeContextControl(requestId, { type: "cancel", contextId: active.contextId })),
+			requestId,
+		);
+		if (response.type === "context-ack") return;
+		if (response.type === "failure") {
+			// A context that is already gone needs no discard; anything else is a real fault.
+			if (
+				response.code === EmbeddedFailureCode.UNKNOWN_CONTEXT ||
+				response.code === EmbeddedFailureCode.CLOSED ||
+				response.code === EmbeddedFailureCode.UNSUPPORTED_OPERATION
+			) {
+				return;
+			}
+			throw new RuntimeRpcError("internal", response.message || "Embedded runtime context discard failed.", {
+				failureCode: response.code,
+			});
+		}
+		throw this.#protocolFailure("Embedded runtime returned an invalid context discard response.");
+	}
+
 	async #cancel(requestId: bigint): Promise<Uint8Array> {
 		if (requestId <= 0n || requestId > MAX_UINT64) {
 			throw new RuntimeRpcError(
@@ -824,6 +1051,14 @@ export class EmbeddedWorkerHost {
 			} catch (error) {
 				failure = error;
 				this.#workerFailed("shutdown cancellation failed", error);
+			}
+		}
+		if (this.#activeContextEval && !this.#failure) {
+			try {
+				await this.#discardActiveContextEval();
+			} catch (error) {
+				failure ??= error;
+				this.#workerFailed("shutdown context discard failed", error);
 			}
 		}
 		await Promise.allSettled(this.#lifecycleOperations);
@@ -960,6 +1195,15 @@ export class EmbeddedWorkerHost {
 		}
 		this.#nextId += 1;
 		return this.#nextId;
+	}
+
+	/** Ids for control frames the host mints itself; responses still correlate by worker request id. */
+	#nextControlRequestId(): bigint {
+		if (this.#nextHostControlRequestId >= MAX_UINT64) {
+			throw this.#protocolFailure("Embedded runtime host control request id space is exhausted.");
+		}
+		this.#nextHostControlRequestId += 1n;
+		return this.#nextHostControlRequestId;
 	}
 
 	#terminateWorkers(): Promise<void> {
