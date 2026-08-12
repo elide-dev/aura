@@ -2,6 +2,8 @@
 import * as $ from "capnp-es";
 import { AppEnvironment, ProtocolFormat, ProtocolVersion } from "./base.js";
 import { EngineConfig, EngineDirectories, EngineFlag, GuestTrustProfile, Language, Languages, VMOptionType } from "./engine.js";
+import { EnvironmentMap, EnvironmentSource, EnvironmentSourceType, EnvironmentVariable } from "./env.js";
+import { ExceptionSummary, SourceLocation, StackFrame, ValueKind, ValueSummary } from "./guest.js";
 import { EngineInvocation, EngineInvocation_CliInvocation, EngineInvocation_CliInvocation_ErrorFormat, EngineInvocation_CliInvocation_GlobalFlags, EngineInvocation_CliInvocation_HotReloadSettings, EngineInvocation_CliInvocation_ListenHost, EngineInvocation_CliInvocation_McpInvocation, EngineInvocation_CliInvocation_McpMode, EngineInvocation_CliInvocation_NetworkTransport, EngineInvocation_CliInvocation_RunFlags, EngineInvocation_CliInvocation_RunInvocation, EngineInvocation_CliInvocation_RunMode, EngineInvocation_CliInvocation_ServerConfig, EngineInvocation_CliInvocation_SourceLanguage, EngineInvocation_CliInvocation_WebInvocation, EngineInvocation_HttpInvocation, EngineInvocation_InvocationMetadata, FileRunInvocation } from "./invocation.js";
 export const _capnpFileId = 0xd2a7f4e8c3b6d912n;
 export class EmbeddedOpenRequest extends $.Struct {
@@ -155,7 +157,44 @@ export const EmbeddedFailureCode = {
   BUSY: 3,
   REQUEST_NOT_ACTIVE: 4,
   CLOSED: 5,
-  INTERNAL: 6
+  INTERNAL: 6,
+  /**
+* contextId is not present in the session registry.
+*
+*/
+  UNKNOWN_CONTEXT: 7,
+  /**
+* Operation is well-formed but not implemented by this build; the matching capability flag is
+* false. Never reported as `internal`.
+*
+*/
+  UNSUPPORTED_OPERATION: 8,
+  /**
+* Context is unusable; the host must reset or close it.
+*
+*/
+  CONTEXT_POISONED: 9,
+  /**
+* Eval exceeded the context's outputByteLimit. Context evals report overflow through
+* EmbeddedEvalResult.outcome instead, so the outcome can carry contextAlive.
+*
+*/
+  OUTPUT_LIMIT_EXCEEDED: 10,
+  /**
+* Host declined a host call, or resolved an unknown callId.
+*
+*/
+  HOST_CALL_REJECTED: 11,
+  /**
+* Interrupt did not land within timeoutMillis; the context is still running.
+*
+*/
+  INTERRUPT_TIMED_OUT: 12,
+  /**
+* Too many live contexts on this session.
+*
+*/
+  CONTEXT_LIMIT_EXCEEDED: 13
 } as const;
 export type EmbeddedFailureCode = (typeof EmbeddedFailureCode)[keyof typeof EmbeddedFailureCode];
 export class EmbeddedFailure extends $.Struct {
@@ -183,7 +222,18 @@ export const EmbeddedResponse_Which = {
   COMPLETED: 1,
   CANCELLED: 2,
   CLOSED: 3,
-  FAILURE: 4
+  FAILURE: 4,
+  CONTEXT_OPENED: 5,
+  EVAL_RESULT: 6,
+  OUTPUT_BATCH: 7,
+  CONTEXT_ACK: 8,
+  DESCRIPTION: 9,
+  /**
+* Acknowledges a successful close, interrupt, cancel, reset, or hostCallResolve — including the
+* context `cancel`, which lands here rather than on the v1 one-shot `cancelled` arm above.
+*
+*/
+  HOST_CALL: 10
 } as const;
 export type EmbeddedResponse_Which = (typeof EmbeddedResponse_Which)[keyof typeof EmbeddedResponse_Which];
 export class EmbeddedResponse extends $.Struct {
@@ -192,6 +242,12 @@ export class EmbeddedResponse extends $.Struct {
   static readonly CANCELLED = EmbeddedResponse_Which.CANCELLED;
   static readonly CLOSED = EmbeddedResponse_Which.CLOSED;
   static readonly FAILURE = EmbeddedResponse_Which.FAILURE;
+  static readonly CONTEXT_OPENED = EmbeddedResponse_Which.CONTEXT_OPENED;
+  static readonly EVAL_RESULT = EmbeddedResponse_Which.EVAL_RESULT;
+  static readonly OUTPUT_BATCH = EmbeddedResponse_Which.OUTPUT_BATCH;
+  static readonly CONTEXT_ACK = EmbeddedResponse_Which.CONTEXT_ACK;
+  static readonly DESCRIPTION = EmbeddedResponse_Which.DESCRIPTION;
+  static readonly HOST_CALL = EmbeddedResponse_Which.HOST_CALL;
   static override readonly _capnp = {
     displayName: "EmbeddedResponse",
     id: "81476fe3beb9982d",
@@ -277,8 +333,1435 @@ export class EmbeddedResponse extends $.Struct {
     $.utils.setUint16(2, 4, this);
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
+  _adoptContextOpened(value: $.Orphan<EmbeddedContextOpened>): void {
+    $.utils.setUint16(2, 5, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownContextOpened(): $.Orphan<EmbeddedContextOpened> {
+    return $.utils.disown(this.contextOpened);
+  }
+  get contextOpened(): EmbeddedContextOpened {
+    $.utils.testWhich("contextOpened", $.utils.getUint16(2, this), 5, this);
+    return $.utils.getStruct(0, EmbeddedContextOpened, this);
+  }
+  _hasContextOpened(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initContextOpened(): EmbeddedContextOpened {
+    $.utils.setUint16(2, 5, this);
+    return $.utils.initStructAt(0, EmbeddedContextOpened, this);
+  }
+  get _isContextOpened(): boolean {
+    return $.utils.getUint16(2, this) === 5;
+  }
+  set contextOpened(value: EmbeddedContextOpened) {
+    $.utils.setUint16(2, 5, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  _adoptEvalResult(value: $.Orphan<EmbeddedEvalResult>): void {
+    $.utils.setUint16(2, 6, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownEvalResult(): $.Orphan<EmbeddedEvalResult> {
+    return $.utils.disown(this.evalResult);
+  }
+  get evalResult(): EmbeddedEvalResult {
+    $.utils.testWhich("evalResult", $.utils.getUint16(2, this), 6, this);
+    return $.utils.getStruct(0, EmbeddedEvalResult, this);
+  }
+  _hasEvalResult(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initEvalResult(): EmbeddedEvalResult {
+    $.utils.setUint16(2, 6, this);
+    return $.utils.initStructAt(0, EmbeddedEvalResult, this);
+  }
+  get _isEvalResult(): boolean {
+    return $.utils.getUint16(2, this) === 6;
+  }
+  set evalResult(value: EmbeddedEvalResult) {
+    $.utils.setUint16(2, 6, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  _adoptOutputBatch(value: $.Orphan<EmbeddedOutputBatch>): void {
+    $.utils.setUint16(2, 7, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownOutputBatch(): $.Orphan<EmbeddedOutputBatch> {
+    return $.utils.disown(this.outputBatch);
+  }
+  get outputBatch(): EmbeddedOutputBatch {
+    $.utils.testWhich("outputBatch", $.utils.getUint16(2, this), 7, this);
+    return $.utils.getStruct(0, EmbeddedOutputBatch, this);
+  }
+  _hasOutputBatch(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initOutputBatch(): EmbeddedOutputBatch {
+    $.utils.setUint16(2, 7, this);
+    return $.utils.initStructAt(0, EmbeddedOutputBatch, this);
+  }
+  get _isOutputBatch(): boolean {
+    return $.utils.getUint16(2, this) === 7;
+  }
+  set outputBatch(value: EmbeddedOutputBatch) {
+    $.utils.setUint16(2, 7, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get _isContextAck(): boolean {
+    return $.utils.getUint16(2, this) === 8;
+  }
+  set contextAck(_: true) {
+    $.utils.setUint16(2, 8, this);
+  }
+  _adoptDescription(value: $.Orphan<EmbeddedDescription>): void {
+    $.utils.setUint16(2, 9, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownDescription(): $.Orphan<EmbeddedDescription> {
+    return $.utils.disown(this.description);
+  }
+  get description(): EmbeddedDescription {
+    $.utils.testWhich("description", $.utils.getUint16(2, this), 9, this);
+    return $.utils.getStruct(0, EmbeddedDescription, this);
+  }
+  _hasDescription(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initDescription(): EmbeddedDescription {
+    $.utils.setUint16(2, 9, this);
+    return $.utils.initStructAt(0, EmbeddedDescription, this);
+  }
+  get _isDescription(): boolean {
+    return $.utils.getUint16(2, this) === 9;
+  }
+  set description(value: EmbeddedDescription) {
+    $.utils.setUint16(2, 9, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  _adoptHostCall(value: $.Orphan<EmbeddedHostCall>): void {
+    $.utils.setUint16(2, 10, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownHostCall(): $.Orphan<EmbeddedHostCall> {
+    return $.utils.disown(this.hostCall);
+  }
+  /**
+* Never emitted until the host-call bridge ships.
+*
+*/
+  get hostCall(): EmbeddedHostCall {
+    $.utils.testWhich("hostCall", $.utils.getUint16(2, this), 10, this);
+    return $.utils.getStruct(0, EmbeddedHostCall, this);
+  }
+  _hasHostCall(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initHostCall(): EmbeddedHostCall {
+    $.utils.setUint16(2, 10, this);
+    return $.utils.initStructAt(0, EmbeddedHostCall, this);
+  }
+  get _isHostCall(): boolean {
+    return $.utils.getUint16(2, this) === 10;
+  }
+  set hostCall(value: EmbeddedHostCall) {
+    $.utils.setUint16(2, 10, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
   override toString(): string { return "EmbeddedResponse_" + super.toString(); }
   which(): EmbeddedResponse_Which {
     return $.utils.getUint16(2, this) as EmbeddedResponse_Which;
   }
 }
+/**
+* Immutable configuration for one persistent guest context. Contexts are never deduplicated: an
+* open always yields a fresh, isolated context, even for a byte-identical spec.
+*
+*/
+export class EmbeddedContextSpec extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedContextSpec",
+    id: "f90b2ab47d7f15ba",
+    size: new $.ObjectSize(16, 4),
+    defaultAllowThreads: $.getBitMask(false, 0),
+    defaultAllowPolyglot: $.getBitMask(false, 1),
+    defaultStreamOutput: $.getBitMask(false, 2),
+    defaultHostCalls: $.getBitMask(false, 3),
+    defaultOutputByteLimit: $.getUint64Mask(0x1000000n),
+    defaultOutputChunkBytes: $.getUint32Mask(65536)
+  };
+  _adoptLanguages(value: $.Orphan<$.List<Language>>): void {
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownLanguages(): $.Orphan<$.List<Language>> {
+    return $.utils.disown(this.languages);
+  }
+  /**
+* Permitted languages; drives the language scoping of the underlying context. An empty list is
+* rejected with invalidRequest — the host names the languages it wants.
+*
+*/
+  get languages(): $.List<Language> {
+    return $.utils.getList(0, $.Uint16List, this) as $.List<Language>;
+  }
+  _hasLanguages(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initLanguages(length: number): $.List<Language> {
+    return $.utils.initList(0, $.Uint16List, length, this) as $.List<Language>;
+  }
+  set languages(value: $.List<Language>) {
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  /**
+* Language pre-initialized at open, and the default for evals which omit one. `unknown` derives it
+* from languages[0]; anything outside `languages` is rejected with invalidRequest.
+*
+*/
+  get primaryLanguage(): Language {
+    return $.utils.getUint16(0, this) as Language;
+  }
+  set primaryLanguage(value: Language) {
+    $.utils.setUint16(0, value, this);
+  }
+  /**
+* Per-context thread creation. Rejected with invalidRequest when JavaScript or TypeScript appears
+* in `languages` (single-threaded guest constraint).
+*
+*/
+  get allowThreads(): boolean {
+    return $.utils.getBit(16, this, EmbeddedContextSpec._capnp.defaultAllowThreads);
+  }
+  set allowThreads(value: boolean) {
+    $.utils.setBit(16, value, this, EmbeddedContextSpec._capnp.defaultAllowThreads);
+  }
+  /**
+* Whether guest code may reach across languages.
+*
+*/
+  get allowPolyglot(): boolean {
+    return $.utils.getBit(17, this, EmbeddedContextSpec._capnp.defaultAllowPolyglot);
+  }
+  set allowPolyglot(value: boolean) {
+    $.utils.setBit(17, value, this, EmbeddedContextSpec._capnp.defaultAllowPolyglot);
+  }
+  /**
+* When true, output arrives via pollOutput batches and eval results carry empty stdout/stderr.
+*
+*/
+  get streamOutput(): boolean {
+    return $.utils.getBit(18, this, EmbeddedContextSpec._capnp.defaultStreamOutput);
+  }
+  set streamOutput(value: boolean) {
+    $.utils.setBit(18, value, this, EmbeddedContextSpec._capnp.defaultStreamOutput);
+  }
+  /**
+* Reserved for the host-call bridge; returns unsupportedOperation until it ships.
+*
+*/
+  get hostCalls(): boolean {
+    return $.utils.getBit(19, this, EmbeddedContextSpec._capnp.defaultHostCalls);
+  }
+  set hostCalls(value: boolean) {
+    $.utils.setBit(19, value, this, EmbeddedContextSpec._capnp.defaultHostCalls);
+  }
+  get workingDir(): string {
+    return $.utils.getText(1, this);
+  }
+  set workingDir(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  _adoptEnvironment(value: $.Orphan<EnvironmentMap>): void {
+    $.utils.adopt(value, $.utils.getPointer(2, this));
+  }
+  _disownEnvironment(): $.Orphan<EnvironmentMap> {
+    return $.utils.disown(this.environment);
+  }
+  /**
+* Same representation the one-shot path uses (invocation.capnp).
+*
+*/
+  get environment(): EnvironmentMap {
+    return $.utils.getStruct(2, EnvironmentMap, this);
+  }
+  _hasEnvironment(): boolean {
+    return !$.utils.isNull($.utils.getPointer(2, this));
+  }
+  _initEnvironment(): EnvironmentMap {
+    return $.utils.initStructAt(2, EnvironmentMap, this);
+  }
+  set environment(value: EnvironmentMap) {
+    $.utils.copyFrom(value, $.utils.getPointer(2, this));
+  }
+  /**
+* Combined stdout+stderr budget per eval, in bytes; clamped to the wire envelope cap on decode.
+*
+*/
+  get outputByteLimit(): bigint {
+    return $.utils.getUint64(8, this, EmbeddedContextSpec._capnp.defaultOutputByteLimit);
+  }
+  set outputByteLimit(value: bigint) {
+    $.utils.setUint64(8, value, this, EmbeddedContextSpec._capnp.defaultOutputByteLimit);
+  }
+  /**
+* Target size of a streamed output chunk.
+*
+*/
+  get outputChunkBytes(): number {
+    return $.utils.getUint32(4, this, EmbeddedContextSpec._capnp.defaultOutputChunkBytes);
+  }
+  set outputChunkBytes(value: number) {
+    $.utils.setUint32(4, value, this, EmbeddedContextSpec._capnp.defaultOutputChunkBytes);
+  }
+  /**
+* Host-supplied diagnostic label; echoed by describe. No semantics.
+*
+*/
+  get label(): string {
+    return $.utils.getText(3, this);
+  }
+  set label(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  override toString(): string { return "EmbeddedContextSpec_" + super.toString(); }
+}
+export const EmbeddedEvalMode = {
+  /**
+* REPL cell semantics; the last expression value is available.
+*
+*/
+  INTERACTIVE: 0,
+  /**
+* Module or script semantics.
+*
+*/
+  MODULE: 1,
+  /**
+* Entrypoint semantics: module semantics plus the entry metadata the language gives its `__main__`.
+* Python matches `python file.py` — `__file__` and `sys.path[0]` absolute, `sys.argv[0]` the path as
+* supplied — and an inline source seeds `sys.argv` alone, with `-c` for argv[0], as `python -c` does.
+*
+*/
+  MAIN_SCRIPT: 2
+} as const;
+export type EmbeddedEvalMode = (typeof EmbeddedEvalMode)[keyof typeof EmbeddedEvalMode];
+export const EmbeddedContextCall_Source_Which = {
+  CODE: 0,
+  FILE: 1
+} as const;
+export type EmbeddedContextCall_Source_Which = (typeof EmbeddedContextCall_Source_Which)[keyof typeof EmbeddedContextCall_Source_Which];
+export class EmbeddedContextCall_Source extends $.Struct {
+  static readonly CODE = EmbeddedContextCall_Source_Which.CODE;
+  static readonly FILE = EmbeddedContextCall_Source_Which.FILE;
+  static override readonly _capnp = {
+    displayName: "source",
+    id: "cd1aeb8fa8f63a4f",
+    size: new $.ObjectSize(32, 4),
+  };
+  get code(): string {
+    $.utils.testWhich("code", $.utils.getUint16(4, this), 0, this);
+    return $.utils.getText(0, this);
+  }
+  get _isCode(): boolean {
+    return $.utils.getUint16(4, this) === 0;
+  }
+  set code(value: string) {
+    $.utils.setUint16(4, 0, this);
+    $.utils.setText(0, value, this);
+  }
+  get file(): string {
+    $.utils.testWhich("file", $.utils.getUint16(4, this), 1, this);
+    return $.utils.getText(0, this);
+  }
+  get _isFile(): boolean {
+    return $.utils.getUint16(4, this) === 1;
+  }
+  set file(value: string) {
+    $.utils.setUint16(4, 1, this);
+    $.utils.setText(0, value, this);
+  }
+  override toString(): string { return "EmbeddedContextCall_Source_" + super.toString(); }
+  which(): EmbeddedContextCall_Source_Which {
+    return $.utils.getUint16(4, this) as EmbeddedContextCall_Source_Which;
+  }
+}
+/**
+* Evaluation request against an already-open context.
+*
+* An eval settles only once the context's event loop is idle, so pending timers and microtasks run
+* before the result is reported. A guest exit ends the eval at once: the loop is not drained further
+* and whatever the guest left queued is discarded rather than charged to the next eval.
+*
+*/
+export class EmbeddedContextCall extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedContextCall",
+    id: "d78081f0cd8be103",
+    size: new $.ObjectSize(32, 4),
+    defaultCaptureResultValue: $.getBitMask(false, 0)
+  };
+  get protocolVersion(): ProtocolVersion {
+    return $.utils.getUint16(0, this) as ProtocolVersion;
+  }
+  set protocolVersion(value: ProtocolVersion) {
+    $.utils.setUint16(0, value, this);
+  }
+  get requestId(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set requestId(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  get contextId(): bigint {
+    return $.utils.getUint64(16, this);
+  }
+  set contextId(value: bigint) {
+    $.utils.setUint64(16, value, this);
+  }
+  /**
+* Defaults to the context's primary language when unspecified.
+*
+*/
+  get language(): Language {
+    return $.utils.getUint16(2, this) as Language;
+  }
+  set language(value: Language) {
+    $.utils.setUint16(2, value, this);
+  }
+  get source(): EmbeddedContextCall_Source {
+    return $.utils.getAs(EmbeddedContextCall_Source, this);
+  }
+  _initSource(): EmbeddedContextCall_Source {
+    return $.utils.getAs(EmbeddedContextCall_Source, this);
+  }
+  /**
+* Display name for inline sources; ignored for file sources.
+*
+*/
+  get sourceName(): string {
+    return $.utils.getText(1, this);
+  }
+  set sourceName(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get mode(): EmbeddedEvalMode {
+    return $.utils.getUint16(6, this) as EmbeddedEvalMode;
+  }
+  set mode(value: EmbeddedEvalMode) {
+    $.utils.setUint16(6, value, this);
+  }
+  _adoptArgs(value: $.Orphan<$.List<string>>): void {
+    $.utils.adopt(value, $.utils.getPointer(2, this));
+  }
+  _disownArgs(): $.Orphan<$.List<string>> {
+    return $.utils.disown(this.args);
+  }
+  get args(): $.List<string> {
+    return $.utils.getList(2, $.TextList, this);
+  }
+  _hasArgs(): boolean {
+    return !$.utils.isNull($.utils.getPointer(2, this));
+  }
+  _initArgs(length: number): $.List<string> {
+    return $.utils.initList(2, $.TextList, length, this);
+  }
+  set args(value: $.List<string>) {
+    $.utils.copyFrom(value, $.utils.getPointer(2, this));
+  }
+  _adoptStdin(value: $.Orphan<$.Data>): void {
+    $.utils.adopt(value, $.utils.getPointer(3, this));
+  }
+  _disownStdin(): $.Orphan<$.Data> {
+    return $.utils.disown(this.stdin);
+  }
+  get stdin(): $.Data {
+    return $.utils.getData(3, this);
+  }
+  _hasStdin(): boolean {
+    return !$.utils.isNull($.utils.getPointer(3, this));
+  }
+  _initStdin(length: number): $.Data {
+    return $.utils.initData(3, length, this);
+  }
+  set stdin(value: $.Data) {
+    $.utils.copyFrom(value, $.utils.getPointer(3, this));
+  }
+  /**
+* When true, the result carries a ValueSummary of the eval's value.
+*
+*/
+  get captureResultValue(): boolean {
+    return $.utils.getBit(192, this, EmbeddedContextCall._capnp.defaultCaptureResultValue);
+  }
+  set captureResultValue(value: boolean) {
+    $.utils.setBit(192, value, this, EmbeddedContextCall._capnp.defaultCaptureResultValue);
+  }
+  override toString(): string { return "EmbeddedContextCall_" + super.toString(); }
+}
+export class EmbeddedContextOpen extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedContextOpen",
+    id: "9df6898cf729bd4b",
+    size: new $.ObjectSize(0, 1),
+  };
+  _adoptSpec(value: $.Orphan<EmbeddedContextSpec>): void {
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownSpec(): $.Orphan<EmbeddedContextSpec> {
+    return $.utils.disown(this.spec);
+  }
+  get spec(): EmbeddedContextSpec {
+    return $.utils.getStruct(0, EmbeddedContextSpec, this);
+  }
+  _hasSpec(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initSpec(): EmbeddedContextSpec {
+    return $.utils.initStructAt(0, EmbeddedContextSpec, this);
+  }
+  set spec(value: EmbeddedContextSpec) {
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  override toString(): string { return "EmbeddedContextOpen_" + super.toString(); }
+}
+export class EmbeddedContextInterrupt extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedContextInterrupt",
+    id: "e5314af645d18d95",
+    size: new $.ObjectSize(8, 0),
+    defaultTimeoutMillis: $.getUint32Mask(2000)
+  };
+  /**
+* Bound on how long the interrupt is awaited; on expiry the context keeps running.
+*
+*/
+  get timeoutMillis(): number {
+    return $.utils.getUint32(0, this, EmbeddedContextInterrupt._capnp.defaultTimeoutMillis);
+  }
+  set timeoutMillis(value: number) {
+    $.utils.setUint32(0, value, this, EmbeddedContextInterrupt._capnp.defaultTimeoutMillis);
+  }
+  override toString(): string { return "EmbeddedContextInterrupt_" + super.toString(); }
+}
+export class EmbeddedContextReset extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedContextReset",
+    id: "8f185251d6cd41d1",
+    size: new $.ObjectSize(8, 0),
+    defaultPreserveWarmth: $.getBitMask(true, 0),
+    defaultReinitPrimary: $.getBitMask(true, 1)
+  };
+  /**
+* Rebuild from the same runtime rather than a fresh one.
+*
+*/
+  get preserveWarmth(): boolean {
+    return $.utils.getBit(0, this, EmbeddedContextReset._capnp.defaultPreserveWarmth);
+  }
+  set preserveWarmth(value: boolean) {
+    $.utils.setBit(0, value, this, EmbeddedContextReset._capnp.defaultPreserveWarmth);
+  }
+  /**
+* Re-run primary-language pre-initialization after the rebuild.
+*
+*/
+  get reinitPrimary(): boolean {
+    return $.utils.getBit(1, this, EmbeddedContextReset._capnp.defaultReinitPrimary);
+  }
+  set reinitPrimary(value: boolean) {
+    $.utils.setBit(1, value, this, EmbeddedContextReset._capnp.defaultReinitPrimary);
+  }
+  override toString(): string { return "EmbeddedContextReset_" + super.toString(); }
+}
+export class EmbeddedPollOutput extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedPollOutput",
+    id: "c879043b47d5588a",
+    size: new $.ObjectSize(8, 0),
+  };
+  /**
+* Park bound, not a deadline; clamped on decode.
+*
+*/
+  get waitMillis(): number {
+    return $.utils.getUint32(0, this);
+  }
+  set waitMillis(value: number) {
+    $.utils.setUint32(0, value, this);
+  }
+  /**
+* Upper bound on the bytes returned in one batch.
+*
+*/
+  get maxBytes(): number {
+    return $.utils.getUint32(4, this);
+  }
+  set maxBytes(value: number) {
+    $.utils.setUint32(4, value, this);
+  }
+  override toString(): string { return "EmbeddedPollOutput_" + super.toString(); }
+}
+export const EmbeddedHostCallResolve_Outcome_Which = {
+  VALUE: 0,
+  ERROR: 1
+} as const;
+export type EmbeddedHostCallResolve_Outcome_Which = (typeof EmbeddedHostCallResolve_Outcome_Which)[keyof typeof EmbeddedHostCallResolve_Outcome_Which];
+export class EmbeddedHostCallResolve_Outcome extends $.Struct {
+  static readonly VALUE = EmbeddedHostCallResolve_Outcome_Which.VALUE;
+  static readonly ERROR = EmbeddedHostCallResolve_Outcome_Which.ERROR;
+  static override readonly _capnp = {
+    displayName: "outcome",
+    id: "d0a00529bd0fedec",
+    size: new $.ObjectSize(16, 1),
+  };
+  _adoptValue(value: $.Orphan<$.Data>): void {
+    $.utils.setUint16(8, 0, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownValue(): $.Orphan<$.Data> {
+    return $.utils.disown(this.value);
+  }
+  get value(): $.Data {
+    $.utils.testWhich("value", $.utils.getUint16(8, this), 0, this);
+    return $.utils.getData(0, this);
+  }
+  _hasValue(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initValue(length: number): $.Data {
+    $.utils.setUint16(8, 0, this);
+    return $.utils.initData(0, length, this);
+  }
+  get _isValue(): boolean {
+    return $.utils.getUint16(8, this) === 0;
+  }
+  set value(value: $.Data) {
+    $.utils.setUint16(8, 0, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  _adoptError(value: $.Orphan<ExceptionSummary>): void {
+    $.utils.setUint16(8, 1, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownError(): $.Orphan<ExceptionSummary> {
+    return $.utils.disown(this.error);
+  }
+  get error(): ExceptionSummary {
+    $.utils.testWhich("error", $.utils.getUint16(8, this), 1, this);
+    return $.utils.getStruct(0, ExceptionSummary, this);
+  }
+  _hasError(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initError(): ExceptionSummary {
+    $.utils.setUint16(8, 1, this);
+    return $.utils.initStructAt(0, ExceptionSummary, this);
+  }
+  get _isError(): boolean {
+    return $.utils.getUint16(8, this) === 1;
+  }
+  set error(value: ExceptionSummary) {
+    $.utils.setUint16(8, 1, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  override toString(): string { return "EmbeddedHostCallResolve_Outcome_" + super.toString(); }
+  which(): EmbeddedHostCallResolve_Outcome_Which {
+    return $.utils.getUint16(8, this) as EmbeddedHostCallResolve_Outcome_Which;
+  }
+}
+export class EmbeddedHostCallResolve extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedHostCallResolve",
+    id: "c15ba9ba1cf5ff8f",
+    size: new $.ObjectSize(16, 1),
+  };
+  get callId(): bigint {
+    return $.utils.getUint64(0, this);
+  }
+  set callId(value: bigint) {
+    $.utils.setUint64(0, value, this);
+  }
+  get outcome(): EmbeddedHostCallResolve_Outcome {
+    return $.utils.getAs(EmbeddedHostCallResolve_Outcome, this);
+  }
+  _initOutcome(): EmbeddedHostCallResolve_Outcome {
+    return $.utils.getAs(EmbeddedHostCallResolve_Outcome, this);
+  }
+  override toString(): string { return "EmbeddedHostCallResolve_" + super.toString(); }
+}
+export const EmbeddedControl_Op_Which = {
+  OPEN: 0,
+  CLOSE: 1,
+  INTERRUPT: 2,
+  /**
+* Discards guest state and rebuilds the context from the same warm runtime, keeping the
+* contextId usable; close instead retires the id. Not the v1 one-shot `cancel`, which aborts an
+* in-flight request and is answered by the `cancelled` response arm.
+*
+*/
+  CANCEL: 3,
+  /**
+* The routine state-clearing op: same rebuild as cancel, with preserveWarmth and reinitPrimary
+* choosing how much is rebuilt.
+*
+*/
+  RESET: 4,
+  POLL_OUTPUT: 5,
+  HOST_CALL_POLL: 6,
+  /**
+* Both reserved for the host-call bridge; unsupportedOperation until it ships.
+*
+*/
+  HOST_CALL_RESOLVE: 7,
+  DESCRIBE: 8
+} as const;
+export type EmbeddedControl_Op_Which = (typeof EmbeddedControl_Op_Which)[keyof typeof EmbeddedControl_Op_Which];
+export class EmbeddedControl_Op extends $.Struct {
+  static readonly OPEN = EmbeddedControl_Op_Which.OPEN;
+  static readonly CLOSE = EmbeddedControl_Op_Which.CLOSE;
+  static readonly INTERRUPT = EmbeddedControl_Op_Which.INTERRUPT;
+  static readonly CANCEL = EmbeddedControl_Op_Which.CANCEL;
+  static readonly RESET = EmbeddedControl_Op_Which.RESET;
+  static readonly POLL_OUTPUT = EmbeddedControl_Op_Which.POLL_OUTPUT;
+  static readonly HOST_CALL_POLL = EmbeddedControl_Op_Which.HOST_CALL_POLL;
+  static readonly HOST_CALL_RESOLVE = EmbeddedControl_Op_Which.HOST_CALL_RESOLVE;
+  static readonly DESCRIBE = EmbeddedControl_Op_Which.DESCRIBE;
+  static override readonly _capnp = {
+    displayName: "op",
+    id: "8cc31ea5b31fe4ca",
+    size: new $.ObjectSize(24, 1),
+  };
+  _adoptOpen(value: $.Orphan<EmbeddedContextOpen>): void {
+    $.utils.setUint16(2, 0, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownOpen(): $.Orphan<EmbeddedContextOpen> {
+    return $.utils.disown(this.open);
+  }
+  get open(): EmbeddedContextOpen {
+    $.utils.testWhich("open", $.utils.getUint16(2, this), 0, this);
+    return $.utils.getStruct(0, EmbeddedContextOpen, this);
+  }
+  _hasOpen(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initOpen(): EmbeddedContextOpen {
+    $.utils.setUint16(2, 0, this);
+    return $.utils.initStructAt(0, EmbeddedContextOpen, this);
+  }
+  get _isOpen(): boolean {
+    return $.utils.getUint16(2, this) === 0;
+  }
+  set open(value: EmbeddedContextOpen) {
+    $.utils.setUint16(2, 0, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get _isClose(): boolean {
+    return $.utils.getUint16(2, this) === 1;
+  }
+  set close(_: true) {
+    $.utils.setUint16(2, 1, this);
+  }
+  _adoptInterrupt(value: $.Orphan<EmbeddedContextInterrupt>): void {
+    $.utils.setUint16(2, 2, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownInterrupt(): $.Orphan<EmbeddedContextInterrupt> {
+    return $.utils.disown(this.interrupt);
+  }
+  get interrupt(): EmbeddedContextInterrupt {
+    $.utils.testWhich("interrupt", $.utils.getUint16(2, this), 2, this);
+    return $.utils.getStruct(0, EmbeddedContextInterrupt, this);
+  }
+  _hasInterrupt(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initInterrupt(): EmbeddedContextInterrupt {
+    $.utils.setUint16(2, 2, this);
+    return $.utils.initStructAt(0, EmbeddedContextInterrupt, this);
+  }
+  get _isInterrupt(): boolean {
+    return $.utils.getUint16(2, this) === 2;
+  }
+  set interrupt(value: EmbeddedContextInterrupt) {
+    $.utils.setUint16(2, 2, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get _isCancel(): boolean {
+    return $.utils.getUint16(2, this) === 3;
+  }
+  set cancel(_: true) {
+    $.utils.setUint16(2, 3, this);
+  }
+  _adoptReset(value: $.Orphan<EmbeddedContextReset>): void {
+    $.utils.setUint16(2, 4, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownReset(): $.Orphan<EmbeddedContextReset> {
+    return $.utils.disown(this.reset);
+  }
+  /**
+* The routine state-clearing op: same rebuild as cancel, with preserveWarmth and reinitPrimary
+* choosing how much is rebuilt.
+*
+*/
+  get reset(): EmbeddedContextReset {
+    $.utils.testWhich("reset", $.utils.getUint16(2, this), 4, this);
+    return $.utils.getStruct(0, EmbeddedContextReset, this);
+  }
+  _hasReset(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initReset(): EmbeddedContextReset {
+    $.utils.setUint16(2, 4, this);
+    return $.utils.initStructAt(0, EmbeddedContextReset, this);
+  }
+  get _isReset(): boolean {
+    return $.utils.getUint16(2, this) === 4;
+  }
+  set reset(value: EmbeddedContextReset) {
+    $.utils.setUint16(2, 4, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  _adoptPollOutput(value: $.Orphan<EmbeddedPollOutput>): void {
+    $.utils.setUint16(2, 5, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownPollOutput(): $.Orphan<EmbeddedPollOutput> {
+    return $.utils.disown(this.pollOutput);
+  }
+  get pollOutput(): EmbeddedPollOutput {
+    $.utils.testWhich("pollOutput", $.utils.getUint16(2, this), 5, this);
+    return $.utils.getStruct(0, EmbeddedPollOutput, this);
+  }
+  _hasPollOutput(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initPollOutput(): EmbeddedPollOutput {
+    $.utils.setUint16(2, 5, this);
+    return $.utils.initStructAt(0, EmbeddedPollOutput, this);
+  }
+  get _isPollOutput(): boolean {
+    return $.utils.getUint16(2, this) === 5;
+  }
+  set pollOutput(value: EmbeddedPollOutput) {
+    $.utils.setUint16(2, 5, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get _isHostCallPoll(): boolean {
+    return $.utils.getUint16(2, this) === 6;
+  }
+  set hostCallPoll(_: true) {
+    $.utils.setUint16(2, 6, this);
+  }
+  _adoptHostCallResolve(value: $.Orphan<EmbeddedHostCallResolve>): void {
+    $.utils.setUint16(2, 7, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownHostCallResolve(): $.Orphan<EmbeddedHostCallResolve> {
+    return $.utils.disown(this.hostCallResolve);
+  }
+  /**
+* Both reserved for the host-call bridge; unsupportedOperation until it ships.
+*
+*/
+  get hostCallResolve(): EmbeddedHostCallResolve {
+    $.utils.testWhich("hostCallResolve", $.utils.getUint16(2, this), 7, this);
+    return $.utils.getStruct(0, EmbeddedHostCallResolve, this);
+  }
+  _hasHostCallResolve(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initHostCallResolve(): EmbeddedHostCallResolve {
+    $.utils.setUint16(2, 7, this);
+    return $.utils.initStructAt(0, EmbeddedHostCallResolve, this);
+  }
+  get _isHostCallResolve(): boolean {
+    return $.utils.getUint16(2, this) === 7;
+  }
+  set hostCallResolve(value: EmbeddedHostCallResolve) {
+    $.utils.setUint16(2, 7, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get _isDescribe(): boolean {
+    return $.utils.getUint16(2, this) === 8;
+  }
+  set describe(_: true) {
+    $.utils.setUint16(2, 8, this);
+  }
+  override toString(): string { return "EmbeddedControl_Op_" + super.toString(); }
+  which(): EmbeddedControl_Op_Which {
+    return $.utils.getUint16(2, this) as EmbeddedControl_Op_Which;
+  }
+}
+/**
+* Non-eval context operation. Control operations run concurrently with in-flight evals.
+*
+*/
+export class EmbeddedControl extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedControl",
+    id: "d1e1a2be3a703fa1",
+    size: new $.ObjectSize(24, 1),
+  };
+  get protocolVersion(): ProtocolVersion {
+    return $.utils.getUint16(0, this) as ProtocolVersion;
+  }
+  set protocolVersion(value: ProtocolVersion) {
+    $.utils.setUint16(0, value, this);
+  }
+  get requestId(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set requestId(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  /**
+* Ignored for `open`.
+*
+*/
+  get contextId(): bigint {
+    return $.utils.getUint64(16, this);
+  }
+  set contextId(value: bigint) {
+    $.utils.setUint64(16, value, this);
+  }
+  get op(): EmbeddedControl_Op {
+    return $.utils.getAs(EmbeddedControl_Op, this);
+  }
+  _initOp(): EmbeddedControl_Op {
+    return $.utils.getAs(EmbeddedControl_Op, this);
+  }
+  override toString(): string { return "EmbeddedControl_" + super.toString(); }
+}
+/**
+* Feature matrix for staged rollout: a false flag means the matching operation answers
+* unsupportedOperation rather than failing as internal, so hosts feature-detect instead of
+* matching error strings.
+*
+*/
+export class EmbeddedCapabilities extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedCapabilities",
+    id: "8b4c4cb40b956372",
+    size: new $.ObjectSize(16, 0),
+  };
+  get streaming(): boolean {
+    return $.utils.getBit(0, this);
+  }
+  set streaming(value: boolean) {
+    $.utils.setBit(0, value, this);
+  }
+  get hostCalls(): boolean {
+    return $.utils.getBit(1, this);
+  }
+  set hostCalls(value: boolean) {
+    $.utils.setBit(1, value, this);
+  }
+  get reset(): boolean {
+    return $.utils.getBit(2, this);
+  }
+  set reset(value: boolean) {
+    $.utils.setBit(2, value, this);
+  }
+  get interrupt(): boolean {
+    return $.utils.getBit(3, this);
+  }
+  set interrupt(value: boolean) {
+    $.utils.setBit(3, value, this);
+  }
+  get mainScriptMode(): boolean {
+    return $.utils.getBit(4, this);
+  }
+  set mainScriptMode(value: boolean) {
+    $.utils.setBit(4, value, this);
+  }
+  get captureResultValue(): boolean {
+    return $.utils.getBit(5, this);
+  }
+  set captureResultValue(value: boolean) {
+    $.utils.setBit(5, value, this);
+  }
+  /**
+* Whether a context may be opened with allowThreads.
+*
+*/
+  get threadedContexts(): boolean {
+    return $.utils.getBit(6, this);
+  }
+  set threadedContexts(value: boolean) {
+    $.utils.setBit(6, value, this);
+  }
+  get maxContexts(): number {
+    return $.utils.getUint32(4, this);
+  }
+  set maxContexts(value: number) {
+    $.utils.setUint32(4, value, this);
+  }
+  get maxOutputBytes(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set maxOutputBytes(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  override toString(): string { return "EmbeddedCapabilities_" + super.toString(); }
+}
+export class EmbeddedContextOpened extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedContextOpened",
+    id: "abbd59b04b21b128",
+    size: new $.ObjectSize(8, 2),
+  };
+  get contextId(): bigint {
+    return $.utils.getUint64(0, this);
+  }
+  set contextId(value: bigint) {
+    $.utils.setUint64(0, value, this);
+  }
+  _adoptLanguages(value: $.Orphan<$.List<Language>>): void {
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownLanguages(): $.Orphan<$.List<Language>> {
+    return $.utils.disown(this.languages);
+  }
+  get languages(): $.List<Language> {
+    return $.utils.getList(0, $.Uint16List, this) as $.List<Language>;
+  }
+  _hasLanguages(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initLanguages(length: number): $.List<Language> {
+    return $.utils.initList(0, $.Uint16List, length, this) as $.List<Language>;
+  }
+  set languages(value: $.List<Language>) {
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  _adoptCapabilities(value: $.Orphan<EmbeddedCapabilities>): void {
+    $.utils.adopt(value, $.utils.getPointer(1, this));
+  }
+  _disownCapabilities(): $.Orphan<EmbeddedCapabilities> {
+    return $.utils.disown(this.capabilities);
+  }
+  get capabilities(): EmbeddedCapabilities {
+    return $.utils.getStruct(1, EmbeddedCapabilities, this);
+  }
+  _hasCapabilities(): boolean {
+    return !$.utils.isNull($.utils.getPointer(1, this));
+  }
+  _initCapabilities(): EmbeddedCapabilities {
+    return $.utils.initStructAt(1, EmbeddedCapabilities, this);
+  }
+  set capabilities(value: EmbeddedCapabilities) {
+    $.utils.copyFrom(value, $.utils.getPointer(1, this));
+  }
+  override toString(): string { return "EmbeddedContextOpened_" + super.toString(); }
+}
+export const EmbeddedEvalResult_Outcome_Which = {
+  OK: 0,
+  ERROR: 1,
+  CANCELLED: 2,
+  INTERRUPTED: 3,
+  /**
+* Output exceeded the context's outputByteLimit; contextAlive still applies.
+*
+*/
+  OUTPUT_LIMIT_EXCEEDED: 4
+} as const;
+export type EmbeddedEvalResult_Outcome_Which = (typeof EmbeddedEvalResult_Outcome_Which)[keyof typeof EmbeddedEvalResult_Outcome_Which];
+export class EmbeddedEvalResult_Outcome extends $.Struct {
+  static readonly OK = EmbeddedEvalResult_Outcome_Which.OK;
+  static readonly ERROR = EmbeddedEvalResult_Outcome_Which.ERROR;
+  static readonly CANCELLED = EmbeddedEvalResult_Outcome_Which.CANCELLED;
+  static readonly INTERRUPTED = EmbeddedEvalResult_Outcome_Which.INTERRUPTED;
+  static readonly OUTPUT_LIMIT_EXCEEDED = EmbeddedEvalResult_Outcome_Which.OUTPUT_LIMIT_EXCEEDED;
+  static override readonly _capnp = {
+    displayName: "outcome",
+    id: "e65630d59cf4f93a",
+    size: new $.ObjectSize(24, 4),
+  };
+  get _isOk(): boolean {
+    return $.utils.getUint16(0, this) === 0;
+  }
+  set ok(_: true) {
+    $.utils.setUint16(0, 0, this);
+  }
+  _adoptError(value: $.Orphan<ExceptionSummary>): void {
+    $.utils.setUint16(0, 1, this);
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownError(): $.Orphan<ExceptionSummary> {
+    return $.utils.disown(this.error);
+  }
+  get error(): ExceptionSummary {
+    $.utils.testWhich("error", $.utils.getUint16(0, this), 1, this);
+    return $.utils.getStruct(0, ExceptionSummary, this);
+  }
+  _hasError(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initError(): ExceptionSummary {
+    $.utils.setUint16(0, 1, this);
+    return $.utils.initStructAt(0, ExceptionSummary, this);
+  }
+  get _isError(): boolean {
+    return $.utils.getUint16(0, this) === 1;
+  }
+  set error(value: ExceptionSummary) {
+    $.utils.setUint16(0, 1, this);
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get _isCancelled(): boolean {
+    return $.utils.getUint16(0, this) === 2;
+  }
+  set cancelled(_: true) {
+    $.utils.setUint16(0, 2, this);
+  }
+  get _isInterrupted(): boolean {
+    return $.utils.getUint16(0, this) === 3;
+  }
+  set interrupted(_: true) {
+    $.utils.setUint16(0, 3, this);
+  }
+  get _isOutputLimitExceeded(): boolean {
+    return $.utils.getUint16(0, this) === 4;
+  }
+  set outputLimitExceeded(_: true) {
+    $.utils.setUint16(0, 4, this);
+  }
+  override toString(): string { return "EmbeddedEvalResult_Outcome_" + super.toString(); }
+  which(): EmbeddedEvalResult_Outcome_Which {
+    return $.utils.getUint16(0, this) as EmbeddedEvalResult_Outcome_Which;
+  }
+}
+export class EmbeddedEvalResult extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedEvalResult",
+    id: "d07b57c08b9378bb",
+    size: new $.ObjectSize(24, 4),
+  };
+  get outcome(): EmbeddedEvalResult_Outcome {
+    return $.utils.getAs(EmbeddedEvalResult_Outcome, this);
+  }
+  _initOutcome(): EmbeddedEvalResult_Outcome {
+    return $.utils.getAs(EmbeddedEvalResult_Outcome, this);
+  }
+  /**
+* Status the guest exited with when the error arm reports isExit, else the evaluation's status.
+*
+*/
+  get exitCode(): number {
+    return $.utils.getInt32(4, this);
+  }
+  set exitCode(value: number) {
+    $.utils.setInt32(4, value, this);
+  }
+  _adoptStdout(value: $.Orphan<$.Data>): void {
+    $.utils.adopt(value, $.utils.getPointer(1, this));
+  }
+  _disownStdout(): $.Orphan<$.Data> {
+    return $.utils.disown(this.stdout);
+  }
+  get stdout(): $.Data {
+    return $.utils.getData(1, this);
+  }
+  _hasStdout(): boolean {
+    return !$.utils.isNull($.utils.getPointer(1, this));
+  }
+  _initStdout(length: number): $.Data {
+    return $.utils.initData(1, length, this);
+  }
+  set stdout(value: $.Data) {
+    $.utils.copyFrom(value, $.utils.getPointer(1, this));
+  }
+  _adoptStderr(value: $.Orphan<$.Data>): void {
+    $.utils.adopt(value, $.utils.getPointer(2, this));
+  }
+  _disownStderr(): $.Orphan<$.Data> {
+    return $.utils.disown(this.stderr);
+  }
+  /**
+* Both empty when the context streams output.
+*
+*/
+  get stderr(): $.Data {
+    return $.utils.getData(2, this);
+  }
+  _hasStderr(): boolean {
+    return !$.utils.isNull($.utils.getPointer(2, this));
+  }
+  _initStderr(length: number): $.Data {
+    return $.utils.initData(2, length, this);
+  }
+  set stderr(value: $.Data) {
+    $.utils.copyFrom(value, $.utils.getPointer(2, this));
+  }
+  /**
+* High-water mark of the output chunks emitted for this eval.
+*
+*/
+  get outputSeq(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set outputSeq(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  get durationNanos(): bigint {
+    return $.utils.getUint64(16, this);
+  }
+  set durationNanos(value: bigint) {
+    $.utils.setUint64(16, value, this);
+  }
+  /**
+* False when this eval poisoned the context: the id stays registered and every later op on it
+* answers contextPoisoned until the host resets or closes it. Reached by a cleanup-step failure, or
+* by a failed rebuild of a context that did not survive its eval. Neither a guest error nor a guest
+* exit clears it: an exit ends the eval and leaves the context's guest state untouched, so a host
+* may keep evaluating against it (kernel semantics).
+*
+*/
+  get contextAlive(): boolean {
+    return $.utils.getBit(16, this);
+  }
+  set contextAlive(value: boolean) {
+    $.utils.setBit(16, value, this);
+  }
+  _adoptValue(value: $.Orphan<ValueSummary>): void {
+    $.utils.adopt(value, $.utils.getPointer(3, this));
+  }
+  _disownValue(): $.Orphan<ValueSummary> {
+    return $.utils.disown(this.value);
+  }
+  /**
+* Populated only when the call requested captureResultValue.
+*
+*/
+  get value(): ValueSummary {
+    return $.utils.getStruct(3, ValueSummary, this);
+  }
+  _hasValue(): boolean {
+    return !$.utils.isNull($.utils.getPointer(3, this));
+  }
+  _initValue(): ValueSummary {
+    return $.utils.initStructAt(3, ValueSummary, this);
+  }
+  set value(value: ValueSummary) {
+    $.utils.copyFrom(value, $.utils.getPointer(3, this));
+  }
+  override toString(): string { return "EmbeddedEvalResult_" + super.toString(); }
+}
+export class EmbeddedOutputChunk extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedOutputChunk",
+    id: "c784239463ec948b",
+    size: new $.ObjectSize(16, 1),
+  };
+  /**
+* 0 = stdout, 1 = stderr.
+*
+*/
+  get stream(): number {
+    return $.utils.getUint8(0, this);
+  }
+  set stream(value: number) {
+    $.utils.setUint8(0, value, this);
+  }
+  _adoptData(value: $.Orphan<$.Data>): void {
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownData(): $.Orphan<$.Data> {
+    return $.utils.disown(this.data);
+  }
+  get data(): $.Data {
+    return $.utils.getData(0, this);
+  }
+  _hasData(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initData(length: number): $.Data {
+    return $.utils.initData(0, length, this);
+  }
+  set data(value: $.Data) {
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  get seq(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set seq(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  override toString(): string { return "EmbeddedOutputChunk_" + super.toString(); }
+}
+export class EmbeddedOutputBatch extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedOutputBatch",
+    id: "f68771d56c564878",
+    size: new $.ObjectSize(16, 1),
+  };
+  static _Chunks: $.ListCtor<EmbeddedOutputChunk>;
+  _adoptChunks(value: $.Orphan<$.List<EmbeddedOutputChunk>>): void {
+    $.utils.adopt(value, $.utils.getPointer(0, this));
+  }
+  _disownChunks(): $.Orphan<$.List<EmbeddedOutputChunk>> {
+    return $.utils.disown(this.chunks);
+  }
+  get chunks(): $.List<EmbeddedOutputChunk> {
+    return $.utils.getList(0, EmbeddedOutputBatch._Chunks, this);
+  }
+  _hasChunks(): boolean {
+    return !$.utils.isNull($.utils.getPointer(0, this));
+  }
+  _initChunks(length: number): $.List<EmbeddedOutputChunk> {
+    return $.utils.initList(0, EmbeddedOutputBatch._Chunks, length, this);
+  }
+  set chunks(value: $.List<EmbeddedOutputChunk>) {
+    $.utils.copyFrom(value, $.utils.getPointer(0, this));
+  }
+  /**
+* Sequence of the last chunk in this batch.
+*
+*/
+  get seq(): bigint {
+    return $.utils.getUint64(0, this);
+  }
+  set seq(value: bigint) {
+    $.utils.setUint64(0, value, this);
+  }
+  /**
+* True once the eval which produced this output has settled.
+*
+*/
+  get complete(): boolean {
+    return $.utils.getBit(64, this);
+  }
+  set complete(value: boolean) {
+    $.utils.setBit(64, value, this);
+  }
+  override toString(): string { return "EmbeddedOutputBatch_" + super.toString(); }
+}
+/**
+* Reserved for the host-call bridge.
+*
+*/
+export class EmbeddedHostCall extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedHostCall",
+    id: "825e1b913795b5cb",
+    size: new $.ObjectSize(16, 2),
+  };
+  get callId(): bigint {
+    return $.utils.getUint64(0, this);
+  }
+  set callId(value: bigint) {
+    $.utils.setUint64(0, value, this);
+  }
+  get contextId(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set contextId(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  get target(): string {
+    return $.utils.getText(0, this);
+  }
+  set target(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  _adoptArgs(value: $.Orphan<$.List<$.Data>>): void {
+    $.utils.adopt(value, $.utils.getPointer(1, this));
+  }
+  _disownArgs(): $.Orphan<$.List<$.Data>> {
+    return $.utils.disown(this.args);
+  }
+  get args(): $.List<$.Data> {
+    return $.utils.getList(1, $.DataList, this);
+  }
+  _hasArgs(): boolean {
+    return !$.utils.isNull($.utils.getPointer(1, this));
+  }
+  _initArgs(length: number): $.List<$.Data> {
+    return $.utils.initList(1, $.DataList, length, this);
+  }
+  set args(value: $.List<$.Data>) {
+    $.utils.copyFrom(value, $.utils.getPointer(1, this));
+  }
+  override toString(): string { return "EmbeddedHostCall_" + super.toString(); }
+}
+export class EmbeddedDescription extends $.Struct {
+  static override readonly _capnp = {
+    displayName: "EmbeddedDescription",
+    id: "aece5f57416a67d1",
+    size: new $.ObjectSize(24, 4),
+  };
+  get contextId(): bigint {
+    return $.utils.getUint64(0, this);
+  }
+  set contextId(value: bigint) {
+    $.utils.setUint64(0, value, this);
+  }
+  /**
+* Registry state-machine name.
+*
+*/
+  get state(): string {
+    return $.utils.getText(0, this);
+  }
+  set state(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  _adoptLanguages(value: $.Orphan<$.List<Language>>): void {
+    $.utils.adopt(value, $.utils.getPointer(1, this));
+  }
+  _disownLanguages(): $.Orphan<$.List<Language>> {
+    return $.utils.disown(this.languages);
+  }
+  get languages(): $.List<Language> {
+    return $.utils.getList(1, $.Uint16List, this) as $.List<Language>;
+  }
+  _hasLanguages(): boolean {
+    return !$.utils.isNull($.utils.getPointer(1, this));
+  }
+  _initLanguages(length: number): $.List<Language> {
+    return $.utils.initList(1, $.Uint16List, length, this) as $.List<Language>;
+  }
+  set languages(value: $.List<Language>) {
+    $.utils.copyFrom(value, $.utils.getPointer(1, this));
+  }
+  get label(): string {
+    return $.utils.getText(2, this);
+  }
+  set label(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  _adoptCapabilities(value: $.Orphan<EmbeddedCapabilities>): void {
+    $.utils.adopt(value, $.utils.getPointer(3, this));
+  }
+  _disownCapabilities(): $.Orphan<EmbeddedCapabilities> {
+    return $.utils.disown(this.capabilities);
+  }
+  get capabilities(): EmbeddedCapabilities {
+    return $.utils.getStruct(3, EmbeddedCapabilities, this);
+  }
+  _hasCapabilities(): boolean {
+    return !$.utils.isNull($.utils.getPointer(3, this));
+  }
+  _initCapabilities(): EmbeddedCapabilities {
+    return $.utils.initStructAt(3, EmbeddedCapabilities, this);
+  }
+  set capabilities(value: EmbeddedCapabilities) {
+    $.utils.copyFrom(value, $.utils.getPointer(3, this));
+  }
+  get evalCount(): bigint {
+    return $.utils.getUint64(8, this);
+  }
+  set evalCount(value: bigint) {
+    $.utils.setUint64(8, value, this);
+  }
+  get resetCount(): bigint {
+    return $.utils.getUint64(16, this);
+  }
+  set resetCount(value: bigint) {
+    $.utils.setUint64(16, value, this);
+  }
+  override toString(): string { return "EmbeddedDescription_" + super.toString(); }
+}
+EmbeddedOutputBatch._Chunks = $.CompositeList(EmbeddedOutputChunk);

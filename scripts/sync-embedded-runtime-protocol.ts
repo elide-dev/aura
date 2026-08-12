@@ -311,7 +311,7 @@ async function generateBindings(closure: EmbeddedSchemaClosure, temporaryRoot: s
 }
 
 function schemaConstants(hash: string): string {
-	return `export const EMBEDDED_RUNTIME_ABI_VERSION = 1;\nexport const EMBEDDED_RUNTIME_SCHEMA_SHA256 = "${hash}";\n`;
+	return `export const EMBEDDED_RUNTIME_ABI_VERSION = 2;\nexport const EMBEDDED_RUNTIME_SCHEMA_SHA256 = "${hash}";\n`;
 }
 
 async function writeGeneratedFiles(files: ReadonlyMap<string, string>, schema: string): Promise<void> {

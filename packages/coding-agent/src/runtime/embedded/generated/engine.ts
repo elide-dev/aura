@@ -12,6 +12,8 @@ export const EngineFlag = {
   UNKNOWN: 0,
   /**
 * Enables the optimized engine (JIT-enabled).
+* Not a control surface: optimizing mode is decided by image kind (see EmbeddedRun.initializeHost);
+* overridable only via the elide.runtime.engine.default system property.
 *
 */
   ENGINE_OPTIMIZED: 1,
@@ -248,6 +250,7 @@ export class EngineConfig extends $.Struct {
   }
   /**
 * Enabled engine flags.
+* DEPRECATED: unread on the embedded path; retained for wire compatibility.
 *
 */
   get flags(): $.List<EngineFlag> {
@@ -330,6 +333,7 @@ export class EngineConfig extends $.Struct {
   }
   /**
 * Whether to enable caching.
+* DEPRECATED: unread on the embedded path; retained for wire compatibility.
 *
 */
   get caching(): boolean {
@@ -340,6 +344,7 @@ export class EngineConfig extends $.Struct {
   }
   /**
 * Whether to enable shared engine use.
+* DEPRECATED: unread on the embedded path; retained for wire compatibility.
 *
 */
   get shared(): boolean {
