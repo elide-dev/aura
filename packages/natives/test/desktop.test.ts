@@ -3,7 +3,9 @@ import { createDesktopSession } from "../native/desktop.js";
 import { DesktopSession } from "../native/index.js";
 
 const ERROR_CODE_PREFIX = /^([A-Z][A-Za-z]+): /;
-const PERMISSION_STATES = ["granted", "denied", "unknown", "unavailable"];
+// "prompt-or-granted": portal-mediated backends (Wayland) cannot distinguish
+// an ungranted permission from one the portal will grant on first prompt.
+const PERMISSION_STATES = ["granted", "denied", "unknown", "unavailable", "prompt-or-granted"];
 const BACKENDS = ["quartz", "x11", "wayland", "win32", "unavailable"];
 
 async function expectRejectionCode(operation: () => Promise<unknown>, acceptedCodes: readonly string[]): Promise<void> {

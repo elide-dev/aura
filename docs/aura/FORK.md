@@ -168,11 +168,13 @@ carry a fork-added env pin; the assertions themselves are upstream's:
 auto-merged cleanly; it needed the `☉` substitution by hand. After a merge,
 grep the fork-branded tests for stray `π` rather than trusting a clean merge.
 
-**Known pre-existing failure (not merge fallout):**
-`packages/natives/test/desktop.test.ts` pins `PERMISSION_STATES` to four values
-while the Wayland backend in `crates/pi-natives/src/desktop/linux/wayland/`
-also returns `prompt-or-granted`, so the capability-shape case fails on any
-Wayland/WSL host. Reproduces identically before the merge. Upstream test gap.
+**Fork-fixed upstream test gap (keep on merge):**
+`packages/natives/test/desktop.test.ts` now includes `prompt-or-granted` in
+`PERMISSION_STATES`; the Wayland backend in
+`crates/pi-natives/src/desktop/linux/wayland/` reports it for portal-mediated
+permissions, so upstream's four-value pin fails on any Wayland/WSL host.
+Upstream's copy is still four values — preserve the fork's fifth entry when
+merging.
 
 
 ## Fork-added files and directories (additive, no merge risk)
