@@ -782,3 +782,12 @@ scope-creep into them, and so a future reader knows they were considered:
   until item M, which is deferred.
 - **Multi-isolate migration.** One isolate, threads attach via
   `elide_embed_attach`.
+
+---
+
+## Item 3 (2026-08-11, from Aura's Tier 2 integration — Task 24): two artifact-side findings
+
+Both reproduced outside Aura's worker layer against dist `4549e32d…` / ABI 2; details in Aura's task-24 report.
+
+1. **`pollOutput` pre-eval ambiguity.** Polling before an eval starts answers `complete: true` with no chunks — describing the *previous* eval. A host pump that trusts it silently drops the coming eval's whole stream. Aura's pump now defends (honors an empty `complete` only after a chunk or settle for the current request), but the wire signal stays ambiguous for every other host. Ask: tag output batches per eval (or make the batch's requestId authoritative for the CURRENT eval and document it). Related: `outputSeq` trails the true high-water mark (observed 3 where 5 chunks had been emitted), so it cannot substitute as the drain check — `complete` is the only signal, which makes its ambiguity load-bearing.
+2. **GC summary leaks to the host's stderr.** The embedded facade writes `-R:+PrintGCSummary` blocks to the host process stderr on every runtime close. `build.mts:1699-1701` already strips this flag for the tools-library image with the same stated reason — the embedded facade image needs the same treatment. (Aura narrowed one `stderr === ""` assertion to strip the block in the interim.)
