@@ -3693,7 +3693,7 @@ export const SETTINGS_SCHEMA = {
 					value: "elide",
 					label: "Runtime",
 					description:
-						"Execute JavaScript cells on the managed runtime (no kernel ships yet; falls back to Bun with a notice).",
+						"Execute JavaScript cells on the managed runtime (falls back to Bun with a notice when no runtime library is installed).",
 				},
 			],
 		},

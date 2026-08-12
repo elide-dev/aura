@@ -372,9 +372,24 @@ Nothing else is in scope. Once queue steps 1–6 have landed, a diff that touche
 file outside these five means something in the scaffold was wrong and should be
 fixed rather than worked around.
 
-#### Row 2 is an unresolved design call, not a prescription
+#### Row 2 — RESOLVED (Task 25): a process-lifetime install site
 
-**No test pins the install site today, and the obvious one does not typecheck as
+The call below was parked as unresolved; it is now decided and pinned. The
+install site is the Elide backend's own `isAvailable()`
+(`src/eval/elide/index.ts`), which calls `ensureElideJsKernelFactory()` from
+`src/eval/elide/kernel-embedded.ts`: **process-wide, memoized, idempotent, never
+cleared**, and reached lazily so a Bun session never loads the embedded
+transport. That is the third of the three candidates below. A factory already in
+the slot always wins, which is what keeps a test's fake from being replaced by a
+real kernel that happens to resolve on the machine running the suite; the native
+runtime itself is opened on the first `open()`, not at install, so installing
+costs no `dlopen`. The obligation is discharged by
+`test/eval/elide/elide-kernel-install.test.ts`, which pins each of the three
+failure modes below as a property of the chosen shape.
+
+The original analysis, kept because it is what ruled the other two out:
+
+**No test pinned the install site, and the obvious one does not typecheck as
 a semantic.** The factory slot is **process-wide** — `let kernelFactory` is a
 module-level binding in `src/eval/elide/kernel.ts:64` — while
 `getOrCreateRuntimeService` is **per-scope**: it keys its state on a `scope`
@@ -393,14 +408,15 @@ process-wide slot from a per-scope hook has three concrete failure modes:
    the retire is `void`-async and runs *after* `onCreate` has already published
    the replacement, so the retirement's clear lands on the new factory.
 
-The wiring task must therefore pick one of three, deliberately:
+The wiring task therefore had to pick one of three, deliberately:
 
 - make the factory slot **scope-aware** (keyed the way the service cache is), or
 - **install once, process-wide, idempotently** — no clear-on-retire at all, or
 - pick a **process-lifetime install site** instead of a per-scope hook.
 
-Whichever is chosen, land a test with it: nothing in the repo constrains this
-today, which is exactly how the wrong shape would ship green.
+Whichever is chosen, land a test with it: nothing in the repo constrained this,
+which is exactly how the wrong shape would have shipped green. **Chosen: the
+third.**
 
 ### `open()` contract — the one thing a real kernel can get silently wrong
 
@@ -490,14 +506,14 @@ Naming these so the wiring diff stays reviewable:
 
 ### Known gaps to close before the engine defaults on
 
-1. **The tool prompt promises Bun globals.**
-   `packages/coding-agent/src/prompts/tools/eval.md:7` tells the model *"JS runs
-   under **Bun**: globals (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`)
-   available"*. On Elide that is at best partly true. Either make the line
-   engine-aware (the template already branches on `{{#if js}}`, so an `engine`
-   flag is the natural shape), or get Elide to document the shim subset it
-   guarantees. Shipping the current text on an Elide default would make the model
-   write cells that cannot run.
+1. ~~**The tool prompt promises Bun globals.**~~ **Closed (Task 25).**
+   `eval.md:7` now branches on `{{#if jsBun}}` / `{{#if jsElide}}`, fed by a
+   `jsEngine` flag on `EvalToolDescriptionOptions`. The runtime line promises only
+   what is true on BOTH engines (`fetch`, `Buffer`, node built-ins via `require`,
+   `Bun.file`/`Bun.write`, top-level `await`/`return`) and drops `Bun.$`, because
+   the description is assembled long before any cell runs and a session that asks
+   for the runtime engine still lands on Bun when no library resolves — so the
+   sentence has to survive the fallback.
 2. **Python is not in scope and must not be quietly added.** The blockers are
    GraalPy-side, not ours: guest threads are refused while JavaScript shares the
    context (see the spike above), and `os.getppid()` is unsupported on the `java`
@@ -505,10 +521,45 @@ Naming these so the wiring diff stays reviewable:
    `WHIPLASH_QUEUE.md:651-656`, since in-process execution has no parent to
    orphan. Both are tracked there; revisit Python only against spike A's answer
    and Tier 2 numbers.
-3. **Guest→host v1 is a loopback HTTP bridge**, which means the guest needs a
-   reachable bridge URL and a shared secret per context. That is Aura-side work
-   with no Elide dependency, but it is real work — do not assume the existing
-   in-process JS tool bridge transfers unchanged.
+3. ~~**Guest→host v1 is a loopback HTTP bridge**~~ **Superseded (Task 25): a
+   file spool, not HTTP.** Only ONE direction ever needed a side channel. The
+   guest→host direction rides stdout, because the guest's outbound frames are
+   already streamed by `poll-output`; what cannot ride a `contextCall` is the
+   host→guest REPLY, since the run it answers is holding the one execution
+   thread. So `tool-reply` is appended to a per-context spool file that the guest
+   polls (`ELIDE_GUEST_INBOX_POLL_MILLIS`, 4 ms) while a run is in flight. It
+   costs no listening socket, no URL, and no shared secret, and that same poll
+   timer is what keeps the guest event loop — and so the host's `contextCall` —
+   alive across the wait. `hostCallPoll`/`hostCallResolve` (v2) remain the
+   endgame once `capabilities.hostCalls` is true; the switch stays inside
+   `guest-entry.ts`'s `Transport`, as intended.
+4. **The guest bundle is built at runtime from `src/`.** `guest-bundle.ts` calls
+   `Bun.build` on first use, which needs the TypeScript sources on disk. Fine
+   while the engine is opt-in and gated on a locally resolved library; a shipped
+   default needs a build-time artifact instead.
+5. **TypeScript cells are not stripped in the guest.** `rewrite-imports.ts`
+   constructs a `Bun.Transpiler` at module scope, and the guest's `Bun` shim
+   answers `transformSync` with the identity — the same fallback the real
+   transpiler already takes when it fails. A cell with type annotations therefore
+   reaches the guest unstripped and fails as a syntax error, which is why the
+   engine-aware prompt line says to write cells in JavaScript. The context itself
+   permits `ts`, so a fix could route TS cells at the `contextCall` instead of
+   through the in-guest `indirectEval`.
+6. **`AsyncLocalStorage` does not survive an `await` in the guest.** Verified
+   directly against the artifact: `run(store, async () => { await …; getStore() })`
+   answers `undefined`. `JsRuntime` resolves the active run's hooks from that
+   store on every `console.log`, tool call, and status emit, so without a fix a
+   cell's output vanishes the moment it awaits anything. The guest bundle swaps in
+   a **sticky** implementation (restore on settle, not on suspend), which is exact
+   while one run at a time occupies a context — which Tier 2's FIFO guarantees. If
+   context-level eval concurrency ever lands, this becomes wrong and wants a real
+   async-context implementation in the runtime.
+7. **`interrupt` does not unwind a cell parked in the guest event loop.** It
+   unwinds running guest code (a spinning cell, pinned in the parity suite), but a
+   cell awaiting a host tool has no guest frame to interrupt and the eval runs on.
+   Rung 1 covers running code; the host's existing cancel path — terminate the
+   worker, which closes the context — covers the rest, and is what the cancellation
+   case exercises.
 
 ## Why this is worth doing beyond tidiness
 

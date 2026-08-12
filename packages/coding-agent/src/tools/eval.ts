@@ -168,6 +168,17 @@ export interface EvalToolDescriptionOptions {
 	rb?: boolean;
 	jl?: boolean;
 	/**
+	 * Engine that will serve `js` cells. Only the globals promise depends on it —
+	 * everything else the tool advertises is engine-neutral by construction.
+	 *
+	 * The claim has to survive a FALLBACK, because this description is built long
+	 * before any cell runs and a session that asks for the runtime engine still
+	 * lands on Bun when no runtime library resolves. So the runtime line promises
+	 * only what both engines actually provide; what it drops relative to the Bun
+	 * line (`Bun.$`) is the part that is Bun's alone.
+	 */
+	jsEngine?: JsEvalEngine;
+	/**
 	 * Parent spawn policy (`getSessionSpawns`). `true`/omitted means unrestricted,
 	 * `false`/`""` hides `agent()`, and a comma list drives the advertised default.
 	 */
@@ -179,12 +190,15 @@ export function getEvalToolDescription(options: EvalToolDescriptionOptions = {})
 	const js = options.js ?? true;
 	const rb = options.rb ?? false;
 	const jl = options.jl ?? false;
+	const jsEngine = options.jsEngine ?? "bun";
 	const spawnPolicy = resolveSpawnPolicy(options.spawns ?? true);
 	return prompt.render(evalDescription, {
 		py,
 		js,
 		rb,
 		jl,
+		jsBun: js && jsEngine === "bun",
+		jsElide: js && jsEngine === "elide",
 		spawns: spawnPolicy.enabled,
 		spawnDefaultAgent: spawnPolicy.defaultAgent,
 		spawnAllowedAgentsText: spawnPolicy.allowedPromptText,
@@ -324,8 +338,25 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			js: backends.js,
 			rb: backends.ruby,
 			jl: backends.julia,
+			jsEngine: this.#describedJsEngine(),
 			spawns: sessionSpawns,
 		});
+	}
+	/**
+	 * The engine the description should describe.
+	 *
+	 * A malformed `eval.jsEngine` / `AURA_EVAL_JS_ENGINE` is reported as a
+	 * `ToolError` when a cell actually runs (`resolveBackend`); a getter that
+	 * assembles the tool's description is the wrong place to raise it, and
+	 * throwing here would take the whole tool listing down over a typo.
+	 */
+	#describedJsEngine(): JsEvalEngine {
+		if (!this.session) return "bun";
+		try {
+			return resolveJsEvalEngine(this.session);
+		} catch {
+			return "bun";
+		}
 	}
 	/** All reuse-chain examples; the `examples` getter filters by enabled languages. */
 	private static readonly ALL_EXAMPLES: readonly ToolExample<typeof evalSchema.infer>[] = [

@@ -4,7 +4,7 @@ Work incrementally: imports → define → test → use, each its own cell. Re-r
 Parallelize *within* a cell with `parallel(thunks)`, not by batching.
 
 {{#if py}}Top-level `await` works; `asyncio.run(…)` raises error.{{/if}}
-{{#if js}}JS runs under **Bun**: globals (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`) available; top-level `await`/`return` work.{{/if}}
+{{#if jsBun}}JS runs under **Bun**: globals (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`) available; top-level `await`/`return` work.{{/if}}{{#if jsElide}}JS runs on the **managed runtime**: `fetch`, `Buffer`, node built-ins via `require`, and `Bun.file`/`Bun.write` available; top-level `await`/`return` work. Write cells in JavaScript — type annotations are not stripped.{{/if}}
 
 On error, fix and re-run only the failing step.
 
