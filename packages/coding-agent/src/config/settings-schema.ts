@@ -3699,6 +3699,31 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"eval.pyEngine": {
+		type: "enum",
+		values: ["cpython", "elide"] as const,
+		default: "cpython",
+		ui: {
+			tab: "shell",
+			group: "Eval & Runtimes",
+			label: "Python Eval Engine",
+			description: "Engine that executes Python eval cells.",
+			options: [
+				{
+					value: "cpython",
+					label: "CPython",
+					description: "Execute Python cells on the CPython kernel subprocess.",
+				},
+				{
+					value: "elide",
+					label: "Runtime",
+					description:
+						"Execute Python cells on the managed runtime's persistent context (falls back to CPython with a notice when no runtime library is installed). Has no eval tool bridge yet.",
+				},
+			],
+		},
+	},
+
 	"eval.rb": {
 		type: "boolean",
 		default: false,

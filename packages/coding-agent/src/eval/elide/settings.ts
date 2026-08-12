@@ -64,3 +64,56 @@ function jsEvalEngineFromSetting(configured: string | undefined): JsEvalEngine {
 export function resolveJsEvalEngine(session: Pick<ToolSession, "settings">): JsEvalEngine {
 	return jsEvalEngineFromEnvironment(jsEvalEngineFromSetting(session.settings.get("eval.jsEngine")));
 }
+
+/**
+ * Engine that executes Python eval cells.
+ *
+ * `"cpython"` is the default and names the subprocess kernel every session has
+ * always used; `"elide"` serves cells from a persistent guest context on the
+ * managed runtime. Same shape as {@link JsEvalEngine}, including the naming
+ * rule: these strings are typed into config files and env vars.
+ */
+export type PyEvalEngine = "cpython" | "elide";
+
+/** The accepted engine values, named once so the two validators cannot drift. */
+const PY_EVAL_ENGINES: readonly string[] = ["cpython", "elide"];
+
+function isPyEvalEngine(value: string): value is PyEvalEngine {
+	return PY_EVAL_ENGINES.includes(value);
+}
+
+/**
+ * Apply the `AURA_EVAL_PY_ENGINE` override to a configured engine. Empty or
+ * whitespace-only values are ignored; an unrecognized value throws.
+ */
+export function pyEvalEngineFromEnvironment(
+	configured: PyEvalEngine,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): PyEvalEngine {
+	const value = env.AURA_EVAL_PY_ENGINE?.trim();
+	if (!value) return configured;
+	if (isPyEvalEngine(value)) return value;
+	throw new Error(`AURA_EVAL_PY_ENGINE must be cpython or elide; received ${JSON.stringify(value)}.`);
+}
+
+/**
+ * Validate a stored `eval.pyEngine` value, for the same reason `eval.jsEngine`
+ * is validated above: `settings.get` hands back whatever the YAML said, so an
+ * unrecognized value would otherwise miss the `elide` branch in
+ * `resolveBackend` and run every cell on CPython with no notice at all.
+ */
+function pyEvalEngineFromSetting(configured: string | undefined): PyEvalEngine {
+	const value = configured?.trim();
+	if (!value) return "cpython";
+	if (isPyEvalEngine(value)) return value;
+	throw new Error(`eval.pyEngine must be cpython or elide; received ${JSON.stringify(value)}.`);
+}
+
+/**
+ * Resolve the Python eval engine for a session: setting, then env override.
+ * The stored value is validated first so a malformed setting is reported even
+ * when the override would have replaced it.
+ */
+export function resolvePyEvalEngine(session: Pick<ToolSession, "settings">): PyEvalEngine {
+	return pyEvalEngineFromEnvironment(pyEvalEngineFromSetting(session.settings.get("eval.pyEngine")));
+}

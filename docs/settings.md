@@ -630,6 +630,7 @@ lsp:
 | `eval.py` | boolean | `true` | Permit the Python eval backend when `python.enabled` is also true. `PI_PY=0` disables it for the process; `PI_PY=1` cannot bypass `python.enabled`. |
 | `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
 | `eval.jsEngine` | enum | `bun` | Engine that executes JavaScript eval cells: `bun` (in-process Bun runtime) or `elide` (the managed Elide runtime, which serves cells from a persistent guest context; it falls back to Bun with a notice when no runtime library resolves — see `runtime.embeddedPath` / `AURA_RUNTIME_EMBEDDED_LIB`). `AURA_EVAL_JS_ENGINE` overrides it for the process; an unrecognized value is an error. |
+| `eval.pyEngine` | enum | `cpython` | Engine that executes Python eval cells: `cpython` (the kernel subprocess) or `elide` (the managed Elide runtime, which serves cells from a persistent guest context; it falls back to CPython with a notice when no runtime library resolves — see `runtime.embeddedPath` / `AURA_RUNTIME_EMBEDDED_LIB`). The `elide` engine has no eval tool bridge yet: cells calling `read()`/`write()`/`agent()` fail with a notice pointing back at `cpython`. `AURA_EVAL_PY_ENGINE` overrides it for the process; an unrecognized value is an error. |
 | `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |
 | `python.interpreter` | string | `""` | Path to a Python interpreter; empty = auto-detect. |
 | `lsp.enabled` | boolean | `true` | Language-server integration. `--no-lsp` disables for the run. |
