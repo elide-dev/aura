@@ -17,7 +17,6 @@ import { closeElidePythonContextsForTests, findEvalToolBridgeUse } from "../../.
 import {
 	type ElidePythonKernelFactory,
 	type ElidePythonKernelSession,
-	ensureElidePythonKernelFactory,
 	resetElidePythonKernelInstallForTests,
 	setElidePythonKernelFactory,
 } from "../../../src/eval/elide/python-kernel";
@@ -64,7 +63,14 @@ function createFakePythonKernelFactory(): FakeFactory {
 	return factory;
 }
 
+const NO_RUNTIME_LIBRARY = "/nonexistent/no-python-kernel-for-dispatch.so";
+
 function makeSession(settings = Settings.isolated()): ToolSession {
+	// `isAvailable()` is also the install site, and since only SUCCESS is
+	// memoized a pre-primed failed attempt does not stick. A nonblank
+	// configured path is BINDING, so stamping it on every test session keeps
+	// these cases hermetic even with AURA_RUNTIME_EMBEDDED_LIB exported.
+	settings.set("runtime.embeddedPath" as never, NO_RUNTIME_LIBRARY as never);
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
@@ -94,11 +100,9 @@ describe("EvalTool Python engine dispatch", () => {
 			delete Bun.env[name];
 		}
 		restoreFactory = setElidePythonKernelFactory(undefined);
-		// `isAvailable()` is also the install site, so pin the process-wide attempt
-		// to "no library found" — a nonblank configured path is BINDING, which holds
-		// even when this file runs with AURA_RUNTIME_EMBEDDED_LIB exported.
+		// Hermeticity rides `makeSession`'s binding `runtime.embeddedPath` stamp
+		// (see above); the reset just forgets any earlier file's attempt.
 		resetElidePythonKernelInstallForTests();
-		await ensureElidePythonKernelFactory({ embeddedPath: "/nonexistent/no-python-kernel-for-dispatch.so" });
 		// The CPython backend is mocked available everywhere below; the elide branch
 		// sits behind that gate today (recorded).
 		vi.spyOn(evalIndex.pythonBackend, "isAvailable").mockResolvedValue(true);
