@@ -7,7 +7,7 @@ import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
 // Engine selection only — a leaf module with no runtime imports, so consulting it
 // here keeps the Elide backend itself out of the default graph (see below).
-import { type JsEvalEngine, resolveJsEvalEngine } from "../eval/elide/settings";
+import { type JsEvalEngine, type PyEvalEngine, resolveJsEvalEngine, resolvePyEvalEngine } from "../eval/elide/settings";
 import { IdleTimeout } from "../eval/idle-timeout";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
@@ -254,7 +254,21 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 					: 'Python backend is unavailable in this session. Install the python kernel to use language: "py".',
 			);
 		}
-		return { backend: pythonBackend };
+		let pyEngine: PyEvalEngine;
+		try {
+			pyEngine = resolvePyEvalEngine(session);
+		} catch (error) {
+			// Host misconfiguration on the same ToolError channel as the cases above.
+			throw new ToolError(error instanceof Error ? error.message : String(error), { cause: error });
+		}
+		if (pyEngine !== "elide") return { backend: pythonBackend };
+		// Lazy on purpose: a CPython session must never load the runtime Python
+		// executor or kernel seam, so the shipped module graph is unchanged.
+		const { default: elidePythonBackend } = await import("../eval/elide/python");
+		if (await elidePythonBackend.isAvailable(session)) return { backend: elidePythonBackend };
+		// The caller asked for a different engine; running on CPython beats failing,
+		// but it is never silent.
+		return { backend: pythonBackend, notice: "Elide Python engine unavailable; ran on the CPython engine." };
 	}
 	if (language === "ruby") {
 		if (!allowRb) throw new ToolError("Ruby backend is disabled (PI_RB=0 or eval.rb = false).");

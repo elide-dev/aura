@@ -521,6 +521,24 @@ Naming these so the wiring diff stays reviewable:
    `WHIPLASH_QUEUE.md:651-656`, since in-process execution has no parent to
    orphan. Both are tracked there; revisit Python only against spike A's answer
    and Tier 2 numbers.
+   **Partly superseded (Task 26): `eval.pyEngine: cpython | elide` exists and is
+   opt-in.** A native probe on the Tier 2 artifact settled spike A's caveat —
+   Python-only contexts opened with `allowThreads: true` really do run guest
+   threads on the native image (the flag is load-bearing; without it `threading`
+   raises at runtime), and state persistence plus survivable `sys.exit(3)` both
+   hold. What the engine still does NOT have, and what keeps the default on
+   CPython: **(a) no eval tool bridge** — the host→guest reply spool needs a
+   Python-side guest shim, so `read()`/`write()`/`agent()` are undefined and a
+   cell using one is failed early with a notice pointing back at `cpython`;
+   **(b) no mainScript mode**, hence no file/args/stdin carriers, no rich display
+   outputs, and no captured result value; **(c) Python contexts are not in the
+   shared VM context manager**, so owner-scoped disposal does not reap them;
+   **(d) the `elide` branch still sits behind `pythonBackend.isAvailable`**, so a
+   host with no CPython cannot reach it. Two runtime quirks any caller must know:
+   cells run on an **adopted host thread** (`threading.active_count()` reads 1
+   inside a cell, the current thread is named `Dummy-N`, and
+   `threading.main_thread()` does not identify it), and **the GIL is on** — the
+   threads buy I/O overlap, not CPU parallelism.
 3. ~~**Guest→host v1 is a loopback HTTP bridge**~~ **Superseded (Task 25): a
    file spool, not HTTP.** Only ONE direction ever needed a side channel. The
    guest→host direction rides stdout, because the guest's outbound frames are
