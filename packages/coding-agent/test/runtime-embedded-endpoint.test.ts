@@ -33,6 +33,7 @@ import {
 import type { RuntimeEndpoint } from "../src/runtime/service";
 import { EmbeddedRuntimeEndpoint, type EmbeddedRuntimeWorkerHost } from "../src/runtime/transport/embedded";
 import { SelectedRuntimeEndpoint } from "../src/runtime/transport/selected";
+import { subscribeTelemetry, type TelemetryEvent } from "../src/telemetry/events";
 
 const encoder = new TextEncoder();
 
@@ -1587,5 +1588,173 @@ describe("load-only execution worker contract", () => {
 		expect(factoryCalls).toBe(1);
 		expect(library.openCount).toBe(0);
 		expect(transport.sent[1]?.type).toBe("error");
+	});
+});
+
+describe("SelectedRuntimeEndpoint fallback and transport telemetry", () => {
+	function captureTelemetry(): { events: TelemetryEvent[]; unsubscribe: () => void } {
+		const events: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(event => events.push(event));
+		return { events, unsubscribe };
+	}
+
+	function lifecycleEvents(events: TelemetryEvent[]): TelemetryEvent[] {
+		return events.filter(event => event.type === "runtime.embedded.lifecycle");
+	}
+
+	test("auto falls back to the process endpoint when the embedded runtime fails internally", async () => {
+		const { events, unsubscribe } = captureTelemetry();
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embedded = new StubEndpoint(
+			"embedded",
+			validEmbeddedStatus,
+			new RuntimeRpcError("internal", "isolate crashed", { failureCode: "internal" }),
+		);
+		try {
+			const response = await selectedRun("auto", processEndpoint, embedded, {
+				code: "print(1)",
+				language: "python",
+			});
+			const result = unwrapResponse<{ stdout: string; transport: string; fallbackFrom?: string }>(response);
+			expect(result.stdout).toBe("process");
+			expect(result.transport).toBe("process");
+			expect(result.fallbackFrom).toBe("embedded");
+			expect(processEndpoint.requests.map(request => request.method)).toEqual(["runtime/run"]);
+		} finally {
+			unsubscribe();
+		}
+		expect(lifecycleEvents(events)).toEqual([
+			{
+				type: "runtime.embedded.lifecycle",
+				stage: "fallback",
+				errorType: "internal",
+				method: "runtime/run",
+				language: "python",
+			},
+		]);
+	});
+
+	test("forced embedded adapter falls back to the process endpoint on infrastructure failure", async () => {
+		const { events, unsubscribe } = captureTelemetry();
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embedded = new StubEndpoint(
+			"embedded",
+			validEmbeddedStatus,
+			new RuntimeRpcError("internal", "embedded runtime worker exited", { failureCode: "closed" }),
+		);
+		try {
+			const response = await selectedRun("embedded", processEndpoint, embedded, {
+				code: "print(1)",
+				language: "python",
+			});
+			const result = unwrapResponse<{ stdout: string; transport: string; fallbackFrom?: string }>(response);
+			expect(result.stdout).toBe("process");
+			expect(result.transport).toBe("process");
+			expect(result.fallbackFrom).toBe("embedded");
+		} finally {
+			unsubscribe();
+		}
+		expect(lifecycleEvents(events)).toMatchObject([{ stage: "fallback", errorType: "closed" }]);
+	});
+
+	test("guest failures do not fall back and keep their embedded transport", async () => {
+		const { events, unsubscribe } = captureTelemetry();
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embedded: RuntimeEndpoint = {
+			async request(request) {
+				if (request.method === "runtime/status") return okResponse(request.id, validEmbeddedStatus);
+				return okResponse(request.id, { exitCode: 3, stdout: "", stderr: "boom", durationMs: 2, killed: false });
+			},
+		};
+		try {
+			const endpoint = new SelectedRuntimeEndpoint({
+				adapter: "embedded",
+				processEndpoint,
+				embeddedEndpoint: embedded,
+			});
+			const response = await endpoint.request(
+				rpcRequest(17, "runtime/run", { code: "raise SystemExit(3)", language: "python" }),
+			);
+			const result = unwrapResponse<{ exitCode: number; transport: string; fallbackFrom?: string }>(response);
+			expect(result.exitCode).toBe(3);
+			expect(result.transport).toBe("embedded");
+			expect(result.fallbackFrom).toBeUndefined();
+			expect(processEndpoint.requests).toHaveLength(0);
+		} finally {
+			unsubscribe();
+		}
+		expect(lifecycleEvents(events)).toHaveLength(0);
+	});
+
+	test("timeouts and cancellations do not fall back", async () => {
+		for (const code of ["timeout", "cancelled"] as const) {
+			const { events, unsubscribe } = captureTelemetry();
+			const processEndpoint = new StubEndpoint("process", processStatus);
+			const embedded = new StubEndpoint("embedded", validEmbeddedStatus, new RuntimeRpcError(code, `guest ${code}`));
+			try {
+				const response = await selectedRun("embedded", processEndpoint, embedded, {
+					code: "while True: pass",
+					language: "python",
+				});
+				expect(responseError(response).error.code).toBe(code);
+				expect(processEndpoint.requests).toHaveLength(0);
+			} finally {
+				unsubscribe();
+			}
+			expect(lifecycleEvents(events)).toHaveLength(0);
+		}
+	});
+
+	test("stamps the serving transport on every ok run result", async () => {
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embedded = new StubEndpoint("embedded", validEmbeddedStatus);
+		const bunEndpoint = new StubEndpoint("bun", processStatus);
+		const endpoint = new SelectedRuntimeEndpoint({
+			adapter: "auto",
+			processEndpoint,
+			embeddedEndpoint: embedded,
+			bunEndpoint,
+		});
+		const embeddedServed = unwrapResponse<{ transport: string }>(
+			await endpoint.request(rpcRequest(21, "runtime/run", { code: "print(1)", language: "python" })),
+		);
+		expect(embeddedServed.transport).toBe("embedded");
+		const bunServed = unwrapResponse<{ transport: string }>(
+			await endpoint.request(rpcRequest(22, "runtime/run", { code: "1", language: "ts" })),
+		);
+		expect(bunServed.transport).toBe("bun");
+		const processServed = unwrapResponse<{ transport: string }>(
+			await new SelectedRuntimeEndpoint({
+				adapter: "process",
+				processEndpoint,
+				embeddedEndpoint: embedded,
+			}).request(rpcRequest(23, "runtime/run", { code: "print(1)", language: "python" })),
+		);
+		expect(processServed.transport).toBe("process");
+	});
+
+	test("unsupported-language routing is not reported as a fallback", async () => {
+		const { events, unsubscribe } = captureTelemetry();
+		const processEndpoint = new StubEndpoint("process", processStatus);
+		const embedded = new StubEndpoint(
+			"embedded",
+			validEmbeddedStatus,
+			new RuntimeRpcError("internal", "unsupported embedded source language: java", {
+				failureCode: "unsupported-language",
+			}),
+		);
+		try {
+			const response = await selectedRun("auto", processEndpoint, embedded, {
+				code: "class Main {}",
+				language: "java",
+			});
+			const result = unwrapResponse<{ stdout: string; transport: string; fallbackFrom?: string }>(response);
+			expect(result.stdout).toBe("process");
+			expect(result.transport).toBe("process");
+			expect(result.fallbackFrom).toBeUndefined();
+		} finally {
+			unsubscribe();
+		}
+		expect(lifecycleEvents(events)).toHaveLength(0);
 	});
 });

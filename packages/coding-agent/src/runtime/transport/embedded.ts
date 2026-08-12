@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { postmortem } from "@oh-my-pi/pi-utils";
+import { emitTelemetryEvent } from "../../telemetry/events";
 import {
 	decodeEmbeddedResponse,
 	type EmbeddedDecodedResponse,
@@ -692,6 +693,9 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 	async #ensureOpen(selection: Extract<EmbeddedSelection, { kind: "ready" }>): Promise<void> {
 		if (this.#opened) return this.#opened;
 		this.#opened = (async () => {
+			// Telemetry-only timing: deliberately not this.#options.now, which tests
+			// inject to script per-call durations.
+			const startedAt = performance.now();
 			try {
 				const host = this.#workerHost();
 				let opened: EmbeddedOpenedRuntime;
@@ -715,6 +719,11 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 				if (response.type !== "opened") {
 					throw new RuntimeRpcError("internal", "Embedded runtime returned an invalid open response.");
 				}
+				emitTelemetryEvent({
+					type: "runtime.embedded.lifecycle",
+					stage: "open",
+					durationMs: Math.round(Math.max(0, performance.now() - startedAt)),
+				});
 			} catch (error) {
 				const failure = toRuntimeRpcError(error);
 				this.#poison(failure);
@@ -735,7 +744,18 @@ export class EmbeddedRuntimeEndpoint implements RuntimeEndpoint {
 	}
 
 	#poison(error: RuntimeRpcError): void {
-		this.#poisoned ??= new RuntimeRpcError("internal", error.message, error.data);
+		if (this.#poisoned) return;
+		this.#poisoned = new RuntimeRpcError("internal", error.message, error.data);
+		const data = error.data;
+		const failureCode =
+			data !== null && typeof data === "object" && typeof data.failureCode === "string"
+				? data.failureCode
+				: undefined;
+		emitTelemetryEvent({
+			type: "runtime.embedded.lifecycle",
+			stage: "poisoned",
+			errorType: failureCode ?? error.code,
+		});
 	}
 }
 
