@@ -347,7 +347,18 @@ export function ensureElidePythonKernelFactory(options: EnsureElidePythonKernelO
 		setElidePythonKernelFactory(createElideEmbeddedPythonKernelFactory({ libraryPath: resolved.libraryPath }));
 		return true;
 	})();
-	return installation;
+	const attempt = installation;
+	const forgetFailure = (installed: boolean): boolean => {
+		// Only success is permanent: a runtime installed on demand mid-session
+		// must be picked up by the next resolve. Guarded on identity so a later
+		// attempt's memo is never dropped by an earlier one settling late.
+		if (!installed && installation === attempt) installation = undefined;
+		return installed;
+	};
+	return attempt.then(forgetFailure, error => {
+		if (installation === attempt) installation = undefined;
+		throw error;
+	});
 }
 
 /** Test-only: forget the memoized install attempt. Never call this outside tests. */

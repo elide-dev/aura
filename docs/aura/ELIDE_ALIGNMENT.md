@@ -532,7 +532,13 @@ Naming these so the wiring diff stays reviewable:
    cell using one is failed early with a notice pointing back at `cpython`;
    **(b) no mainScript mode**, hence no file/args/stdin carriers, no rich display
    outputs, and no captured result value; **(c) Python contexts are not in the
-   shared VM context manager**, so owner-scoped disposal does not reap them;
+   shared VM context manager**, so owner-scoped disposal does not reap them —
+   and nothing else does: the module-local map is cleared only by failed opens
+   and a test-only teardown, so a long session that mints many owners holds one
+   native context each until the process exits. The per-owner keying is also
+   STRICTER than the framework's share-until-reset owner-fork rule (every owner
+   gets a private context from its first cell — over-isolation, not leakage);
+   both resolve together when these contexts join the shared manager;
    **(d) the `elide` branch still sits behind `pythonBackend.isAvailable`**, so a
    host with no CPython cannot reach it. Two runtime quirks any caller must know:
    cells run on an **adopted host thread** (`threading.active_count()` reads 1

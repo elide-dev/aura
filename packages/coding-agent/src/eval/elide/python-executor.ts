@@ -3,10 +3,18 @@
  * key, held for the process lifetime and reused cell to cell.
  *
  * Contexts are keyed by the caller's already-namespaced session key PLUS the
- * kernel owner id, which is how the framework's owner-fork rule is inherited:
- * a forked owner asks under the same session id and gets its own context rather
- * than sharing the parent's globals. Contexts are never deduplicated on the
- * runtime's `label`, so two keys always mean two contexts.
+ * kernel owner id. NOTE: this is STRICTER than the framework's owner-fork rule
+ * (share until a non-exclusive owner resets, THEN fork, as the JS engine pins):
+ * here every distinct owner gets a private context from its first cell, so a
+ * sub-agent never sees the session's existing Python globals. Over-isolation,
+ * not leakage — recorded as a gap until Python contexts join the shared VM
+ * context manager. Contexts are never deduplicated on the runtime's `label`,
+ * so two keys always mean two contexts.
+ *
+ * Nothing releases these contexts in production: the map is cleared only by
+ * failed opens and the test-only teardown below, so a long session that mints
+ * many owners holds one native context each until the process exits (same
+ * recorded gap).
  *
  * Every failure arm here is a VALUE (`exitCode: 1` and the message in the
  * output), never a throw: an eval cell reporting its own error is the contract
@@ -83,7 +91,12 @@ export async function closeElidePythonContextsForTests(): Promise<void> {
  * The Elide Python engine has no prelude and no bridge (a recorded gap), so a
  * cell using one would fail with a bare `NameError` that names nothing useful.
  * Detected as bare calls — a leading `.` or word character excludes
- * `file.read()` and `my_display(...)`.
+ * `file.read()` and `my_display(...)`. Known over-refusals beyond a
+ * user-defined bare `read(...)` call: the names inside comments or string
+ * literals (`# write(x) is unused`, `s = "output(1)"`) and a cell DEFINING
+ * one (`def read(path):` — the space before `read` matches). Each gets the
+ * bridge-gap refusal below rather than a run; acceptable while the engine is
+ * opt-in, listed here so the false-positive class is not understated.
  */
 const BRIDGE_NAMES = ["read", "write", "display", "output", "env", "completion", "agent", "parallel", "pipeline"];
 const BRIDGE_CALL = new RegExp(String.raw`(^|[^\w.])(${BRIDGE_NAMES.join("|")})\s*\(`, "m");
