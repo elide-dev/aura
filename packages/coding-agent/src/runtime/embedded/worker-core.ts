@@ -9,6 +9,7 @@ import {
 	EmbeddedFailureCode,
 	type EmbeddedOutputChunk,
 	encodeContextControl,
+	MAX_EMBEDDED_POLL_WAIT_MILLIS,
 } from "./codec";
 import {
 	type ControlWorkerRequest,
@@ -528,12 +529,31 @@ export interface EmbeddedOutputDrain {
 	closed: boolean;
 }
 
+/**
+ * Default park bound for one `poll-output`, in milliseconds.
+ *
+ * Owned by the pump rather than left to the caller because the wire default is 0 — an unparked
+ * poll — and an unparked poll under a no-deadline contract degenerates into a hot FFI loop across
+ * the worker boundary for the whole eval. 50 ms parks the control thread inside the runtime, where
+ * a write can wake it immediately, instead of spinning outside it.
+ */
+export const DEFAULT_EMBEDDED_POLL_WAIT_MILLIS = 50;
+
 export interface EmbeddedOutputPumpOptions {
-	/** Sends one already-encoded `poll-output` frame and decodes its response. */
-	poll(): Promise<EmbeddedDecodedResponse>;
+	/**
+	 * Sends one `poll-output` frame with `waitMillis` as its park bound and decodes the response.
+	 *
+	 * The bound is how long the runtime may park this poll waiting for output — not a deadline on
+	 * anything. Nothing in Tier 2 has a wall-clock deadline: the park simply ends early the moment a
+	 * chunk lands, so a larger bound costs latency nothing and saves round trips.
+	 */
+	poll(waitMillis: number): Promise<EmbeddedDecodedResponse>;
 	onChunk(chunk: EmbeddedOutputChunk): void;
 	isEvalSettled(): boolean;
+	/** Settles when the eval does. A rejection here is the caller's to observe; the pump only drains. */
 	evalSettlement: Promise<void>;
+	/** Park bound per poll; defaults to `DEFAULT_EMBEDDED_POLL_WAIT_MILLIS`, clamped to the runtime's 1 s cap. */
+	waitMillis?: number;
 }
 
 /**
@@ -557,11 +577,21 @@ export interface EmbeddedOutputPumpOptions {
  * trailing poll catches a late batch and the drain then ends.
  */
 export async function pumpEmbeddedContextOutput(options: EmbeddedOutputPumpOptions): Promise<EmbeddedOutputDrain> {
+	const waitMillis = Math.min(
+		Math.max(Math.trunc(options.waitMillis ?? DEFAULT_EMBEDDED_POLL_WAIT_MILLIS), 0),
+		MAX_EMBEDDED_POLL_WAIT_MILLIS,
+	);
+	// The drain must outlive a failing eval: a rejection is the caller's to see on its own reference,
+	// and racing the raw promise here would abandon output the runtime has already produced.
+	const settlement = options.evalSettlement.then(
+		() => undefined,
+		() => undefined,
+	);
 	let seq = 0n;
 	let observedOutput = false;
 	let drainedAfterSettlement = false;
 	while (true) {
-		const response = await options.poll();
+		const response = await options.poll(waitMillis);
 		if (response.type === "failure") {
 			// `pollOutput` on a closed registry answers `closed` while eval and describe answer
 			// `unknownContext` for the same situation; both mean the same thing to a drain.
@@ -596,7 +626,7 @@ export async function pumpEmbeddedContextOutput(options: EmbeddedOutputPumpOptio
 			continue;
 		}
 		if (!options.isEvalSettled()) {
-			await Promise.race([options.evalSettlement, yieldCancellationRetry()]);
+			await Promise.race([settlement, yieldCancellationRetry()]);
 			continue;
 		}
 		if (drainedAfterSettlement) return { seq, complete: false, closed: false };
@@ -1207,7 +1237,14 @@ export class EmbeddedWorkerHost {
 		return this.#nextId;
 	}
 
-	/** Ids for control frames the host mints itself; responses still correlate by worker request id. */
+	/**
+	 * Ids for control frames the host mints itself — today only the shutdown-time eval discard.
+	 *
+	 * This counter is intentionally separate from any id space a caller owns: an owner driving
+	 * contexts through `contextControl` mints its own ids and the two may collide freely, because a
+	 * response is correlated by the numeric worker request id, not by the capnp `requestId`, which is
+	 * only checked for echo.
+	 */
 	#nextControlRequestId(): bigint {
 		if (this.#nextHostControlRequestId >= MAX_UINT64) {
 			throw this.#protocolFailure("Embedded runtime host control request id space is exhausted.");

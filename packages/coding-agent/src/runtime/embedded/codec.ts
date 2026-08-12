@@ -224,6 +224,8 @@ export const MIN_EMBEDDED_INTERRUPT_MILLIS = 1;
 export const MAX_EMBEDDED_INTERRUPT_MILLIS = 60_000;
 const DEFAULT_INTERRUPT_MILLIS = 2_000;
 const MAX_UINT32 = 0xffff_ffff;
+/** The producer emits at most 8 `causedBy` links below the root, the last of them a sentinel. */
+const MAX_CAUSE_CHAIN_DEPTH = 8;
 
 /** Immutable configuration for one persistent guest context. Contexts are never deduplicated. */
 export interface EmbeddedContextSpecInput {
@@ -387,6 +389,8 @@ export function encodeContextControl(requestId: bigint, operation: EmbeddedContr
 			break;
 		}
 		case "poll-output": {
+			// 0 is the wire default: an unparked poll that answers immediately. That is almost never what
+			// a drain wants — `pumpEmbeddedContextOutput` supplies a real park bound for exactly that reason.
 			const poll = op._initPollOutput();
 			poll.waitMillis = clampUint32(operation.waitMillis ?? 0, 0, MAX_EMBEDDED_POLL_WAIT_MILLIS);
 			poll.maxBytes = clampUint32(operation.maxBytes ?? 0, 0, MAX_UINT32);
@@ -717,9 +721,13 @@ function decodeStackFrame(frame: StackFrame): EmbeddedGuestStackFrame {
 	};
 }
 
-function decodeException(summary: ExceptionSummary): EmbeddedGuestException {
+function decodeException(summary: ExceptionSummary, depth = 0): EmbeddedGuestException {
 	// An unset pointer means "the runtime had nothing to say"; a present-but-empty one means
 	// "it looked and found nothing". They are different facts, so absent stays absent here.
+	//
+	// The chain is capped so the decoder is total: the producer emits at most 8 links below the root
+	// plus a sentinel, so anything deeper is a malformed or hostile message and is simply not walked.
+	const walkCause = summary._hasCausedBy() && depth < MAX_CAUSE_CHAIN_DEPTH;
 	return {
 		typeName: summary.typeName,
 		message: summary.message,
@@ -732,7 +740,7 @@ function decodeException(summary: ExceptionSummary): EmbeddedGuestException {
 		exitStatus: summary.exitStatus,
 		...(summary._hasSourceLocation() ? { sourceLocation: decodeSourceLocation(summary.sourceLocation) } : {}),
 		...(summary._hasStack() ? { stack: listOf(summary.stack).map(decodeStackFrame) } : {}),
-		...(summary._hasCausedBy() ? { causedBy: decodeException(summary.causedBy) } : {}),
+		...(walkCause ? { causedBy: decodeException(summary.causedBy, depth + 1) } : {}),
 	};
 }
 

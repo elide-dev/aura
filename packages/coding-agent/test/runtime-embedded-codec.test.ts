@@ -798,6 +798,36 @@ describe("embedded runtime Tier 2 response decoding", () => {
 		expect(error.causedBy).not.toHaveProperty("stack");
 	});
 
+	test("stops walking a cause chain deeper than the producer can emit", () => {
+		const bytes = serializeResponse(46n, response => {
+			const result = response._initEvalResult();
+			const root = result.outcome._initError();
+			root.typeName = "Error";
+			let link = root;
+			// Deeper than the producer's 8-link cap: a malformed or hostile message must not be able to
+			// drive unbounded recursion through the decoder.
+			for (let depth = 1; depth <= 20; depth += 1) {
+				link = link._initCausedBy();
+				link.typeName = `cause-${depth}`;
+			}
+			result._initStdout(0);
+			result._initStderr(0);
+			result.contextAlive = true;
+		});
+
+		const decoded = decodeEmbeddedResponse(bytes, 46n);
+		if (decoded.type !== "eval-result" || decoded.result.outcome.type !== "error") {
+			throw new Error("expected an error outcome");
+		}
+		let depth = 0;
+		let cursor = decoded.result.outcome.error.causedBy;
+		while (cursor) {
+			depth += 1;
+			cursor = cursor.causedBy;
+		}
+		expect(depth).toBe(8);
+	});
+
 	test("decodes the cancelled, interrupted, and output-limit outcome arms", () => {
 		const arms = [
 			["cancelled", (outcome: { cancelled: true }) => (outcome.cancelled = true)],

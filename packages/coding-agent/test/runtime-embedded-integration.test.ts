@@ -40,7 +40,9 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 /** Drops the dev-build artifact's isolate-teardown GC summary; every other stderr byte survives. */
 function stripRuntimeGcSummaries(stderr: string): string {
-	return stderr.replace(/GC summary\n(?:[ \t]+[^\n]*\n)+/g, "");
+	// Anchored: only a whole "GC summary" line plus its indented body goes, so an indented line from a
+	// real error following the block cannot be swallowed with it.
+	return stderr.replace(/^GC summary$\n(?:^[ \t]+[^\n]*$\n)+/gm, "");
 }
 
 async function exists(filePath: string): Promise<boolean> {
@@ -737,16 +739,14 @@ describe.skipIf(!applicable).serial("Tier 2 persistent contexts (real embedded l
 			const stdout: Uint8Array[] = [];
 			const seqs: bigint[] = [];
 			const drain = await pumpEmbeddedContextOutput({
-				poll: () => session.control({ type: "poll-output", contextId, waitMillis: 50, maxBytes: 65_536 }),
+				poll: waitMillis => session.control({ type: "poll-output", contextId, waitMillis, maxBytes: 65_536 }),
 				onChunk: chunk => {
 					seqs.push(chunk.seq);
 					if (chunk.stream === "stdout") stdout.push(chunk.data);
 				},
 				isEvalSettled: () => settled,
-				evalSettlement: evaluation.then(
-					() => undefined,
-					() => undefined,
-				),
+				// Handed over raw: the pump is contractually safe against a rejecting eval.
+				evalSettlement: evaluation.then(() => undefined),
 			});
 
 			const result = await evaluation;

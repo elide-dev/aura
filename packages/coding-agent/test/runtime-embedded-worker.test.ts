@@ -4,7 +4,7 @@ import { withTimeout } from "@oh-my-pi/pi-utils";
 import { consumeWorkerInbox, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { Message } from "capnp-es";
 import type { EmbeddedNativeLibrary } from "../src/runtime/embedded/abi";
-import { decodeEmbeddedResponse } from "../src/runtime/embedded/codec";
+import { decodeEmbeddedResponse, MAX_EMBEDDED_POLL_WAIT_MILLIS } from "../src/runtime/embedded/codec";
 import { ProtocolVersion } from "../src/runtime/embedded/generated/base";
 import {
 	EmbeddedControl,
@@ -15,6 +15,7 @@ import {
 import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "../src/runtime/embedded/schema";
 import {
 	ControlWorkerCore,
+	DEFAULT_EMBEDDED_POLL_WAIT_MILLIS,
 	type EmbeddedWorkerFactories,
 	type EmbeddedWorkerHandle,
 	EmbeddedWorkerHost,
@@ -1505,6 +1506,7 @@ describe("embedded context output pump", () => {
 		const sink = collector();
 		const drain = await pumpEmbeddedContextOutput({
 			poll: async () => responses.shift() ?? batch([], 3n, true),
+			waitMillis: 0,
 			onChunk: sink.onChunk,
 			isEvalSettled: () => false,
 			evalSettlement: new Promise<void>(() => {}),
@@ -1512,6 +1514,66 @@ describe("embedded context output pump", () => {
 
 		expect(sink.chunks).toEqual(["stdout:one", "stdout:two", "stderr:err"]);
 		expect(drain).toEqual({ seq: 3n, complete: true, closed: false });
+	});
+
+	test("parks each poll on the pump's own bound, and lets a caller override it", async () => {
+		const bounds: number[] = [];
+		const responses = [batch([[0, "one", 1n]], 1n, false), batch([], 1n, true)];
+		const drain = await pumpEmbeddedContextOutput({
+			poll: async waitMillis => {
+				bounds.push(waitMillis);
+				return responses.shift() ?? batch([], 1n, true);
+			},
+			onChunk: () => {},
+			isEvalSettled: () => false,
+			evalSettlement: new Promise<void>(() => {}),
+		});
+		// The wire default is 0 — an unparked poll, which would spin the control thread across the
+		// worker boundary for the whole eval. The pump supplies a real bound instead.
+		expect(bounds).toEqual([DEFAULT_EMBEDDED_POLL_WAIT_MILLIS, DEFAULT_EMBEDDED_POLL_WAIT_MILLIS]);
+		expect(drain.complete).toBe(true);
+
+		const overridden: number[] = [];
+		await pumpEmbeddedContextOutput({
+			poll: async waitMillis => {
+				overridden.push(waitMillis);
+				return batch([], 0n, true);
+			},
+			onChunk: () => {},
+			isEvalSettled: () => true,
+			evalSettlement: Promise.resolve(),
+			waitMillis: 90_000,
+		});
+		// A caller-supplied bound wins, still clamped to the runtime's one-second cap.
+		expect(overridden).toEqual([MAX_EMBEDDED_POLL_WAIT_MILLIS]);
+	});
+
+	test("finishes the drain when the eval rejects mid-stream instead of throwing out of the pump", async () => {
+		const evalFailure = new Error("guest eval failed");
+		const evaluation = Promise.reject<void>(evalFailure);
+		let settled = false;
+		void evaluation.catch(() => {
+			settled = true;
+		});
+		const responses = [
+			batch([[0, "before", 1n]], 1n, false),
+			batch([[0, "after", 2n]], 2n, false),
+			batch([], 2n, true),
+		];
+		const sink = collector();
+
+		const drain = await pumpEmbeddedContextOutput({
+			poll: async () => responses.shift() ?? batch([], 2n, true),
+			onChunk: sink.onChunk,
+			isEvalSettled: () => settled,
+			evalSettlement: evaluation,
+			waitMillis: 0,
+		});
+
+		expect(sink.chunks).toEqual(["stdout:before", "stdout:after"]);
+		expect(drain).toEqual({ seq: 2n, complete: true, closed: false });
+		// The rejection stays the caller's to observe on its own reference.
+		await expect(evaluation).rejects.toBe(evalFailure);
 	});
 
 	test("ignores a completion flag that arrives before the eval produced anything", async () => {
