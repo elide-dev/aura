@@ -546,12 +546,19 @@ export interface EmbeddedOutputPumpOptions {
  * the context, or an interrupt. The output budget is deliberately not a wakeup. A host that never
  * polls therefore stalls its own eval — recoverably, but it does stall.
  *
- * `EmbeddedOutputBatch.complete` is the drain signal; `EmbeddedEvalResult.outputSeq` reads 0 unless
- * the host polled mid-eval, so it cannot substitute for one. When the eval settles without the
- * runtime ever raising `complete`, one trailing poll catches a late batch and the drain then ends.
+ * `EmbeddedOutputBatch.complete` is the drain signal; `EmbeddedEvalResult.outputSeq` is not — it
+ * reads 0 unless the host polled mid-eval, and even then it trails the true high-water mark.
+ *
+ * `complete` is only trustworthy once this eval has demonstrably begun. A poll that reaches the
+ * control thread before the execution thread enters the eval answers `complete: true` with no
+ * chunks — the pipe is describing the *previous* eval, and a pump that believed it would return
+ * instantly and drop the whole stream. So an empty `complete` is honoured only after a chunk has
+ * arrived or the eval has settled. When the eval settles without `complete` ever being raised, one
+ * trailing poll catches a late batch and the drain then ends.
  */
 export async function pumpEmbeddedContextOutput(options: EmbeddedOutputPumpOptions): Promise<EmbeddedOutputDrain> {
 	let seq = 0n;
+	let observedOutput = false;
 	let drainedAfterSettlement = false;
 	while (true) {
 		const response = await options.poll();
@@ -578,9 +585,12 @@ export async function pumpEmbeddedContextOutput(options: EmbeddedOutputPumpOptio
 				});
 			}
 			seq = chunk.seq;
+			observedOutput = true;
 			options.onChunk(chunk);
 		}
-		if (response.complete) return { seq: response.seq > seq ? response.seq : seq, complete: true, closed: false };
+		if (response.complete && (observedOutput || options.isEvalSettled())) {
+			return { seq: response.seq > seq ? response.seq : seq, complete: true, closed: false };
+		}
 		if (response.chunks.length > 0) {
 			drainedAfterSettlement = false;
 			continue;

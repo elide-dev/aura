@@ -1514,6 +1514,39 @@ describe("embedded context output pump", () => {
 		expect(drain).toEqual({ seq: 3n, complete: true, closed: false });
 	});
 
+	test("ignores a completion flag that arrives before the eval produced anything", async () => {
+		// A poll that beats the execution thread into the eval describes the *previous* eval and answers
+		// complete with no chunks. Believing it drops the entire stream.
+		const responses = [
+			batch([], 0n, true),
+			batch([], 0n, true),
+			batch([[0, "late", 1n]], 1n, false),
+			batch([], 1n, true),
+		];
+		const sink = collector();
+		const drain = await pumpEmbeddedContextOutput({
+			poll: async () => responses.shift() ?? batch([], 1n, true),
+			onChunk: sink.onChunk,
+			isEvalSettled: () => false,
+			evalSettlement: new Promise<void>(() => {}),
+		});
+
+		expect(sink.chunks).toEqual(["stdout:late"]);
+		expect(drain).toEqual({ seq: 1n, complete: true, closed: false });
+	});
+
+	test("accepts an empty completion once the eval settled, so a silent eval still terminates", async () => {
+		const drain = await pumpEmbeddedContextOutput({
+			poll: async () => batch([], 0n, true),
+			onChunk: () => {
+				throw new Error("a silent eval must not deliver chunks");
+			},
+			isEvalSettled: () => true,
+			evalSettlement: Promise.resolve(),
+		});
+		expect(drain).toEqual({ seq: 0n, complete: true, closed: false });
+	});
+
 	test("rejects a batch whose sequence numbers move backwards", async () => {
 		const responses = [batch([[0, "one", 2n]], 2n, false), batch([[0, "stale", 1n]], 2n, false)];
 		await expectInternalRejection(
