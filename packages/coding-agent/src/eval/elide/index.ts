@@ -41,13 +41,28 @@ export default {
 	highlightLang: "javascript",
 
 	/**
-	 * Both halves matter: the session must ask for the `runtime` engine, and a
-	 * kernel must actually exist to serve it. The factory slot is empty in
-	 * production this milestone, so this is `false` for every real session today
-	 * and the eval tool falls back to Bun with a notice.
+	 * Both halves matter: the session must ask for the `elide` engine, and a
+	 * kernel must actually exist to serve it.
+	 *
+	 * **This is the install site**, and it is a deliberate answer to the design
+	 * call `docs/aura/ELIDE_ALIGNMENT.md` parked: the factory slot is
+	 * process-wide, so it is filled from a process-lifetime path rather than from
+	 * a per-scope hook that would let one session's factory serve another's evals
+	 * and one scope's retirement empty the slot under a healthy sibling. The
+	 * install is memoized, idempotent, and never cleared —
+	 * `ensureElideJsKernelFactory` is a no-op once anything holds the slot, which
+	 * is what keeps a test's fake from being replaced by a real kernel that
+	 * happens to be resolvable on the machine running the suite.
+	 *
+	 * Checked before the ensure so an already-installed factory costs nothing,
+	 * and imported lazily so a Bun session never loads the embedded transport.
 	 */
 	async isAvailable(session: ToolSession): Promise<boolean> {
-		return resolveJsEvalEngine(session) === "elide" && getElideJsKernelFactory() !== undefined;
+		if (resolveJsEvalEngine(session) !== "elide") return false;
+		if (getElideJsKernelFactory() !== undefined) return true;
+		const { ensureElideJsKernelFactory } = await import("./kernel-embedded");
+		await ensureElideJsKernelFactory({ embeddedPath: session.settings.get("runtime.embeddedPath") ?? undefined });
+		return getElideJsKernelFactory() !== undefined;
 	},
 
 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {

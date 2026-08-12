@@ -17,6 +17,7 @@ import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { withTimeout } from "@oh-my-pi/pi-utils";
 import elideBackend from "../../../src/eval/elide";
 import { type ElideJsKernelFactory, setElideJsKernelFactory } from "../../../src/eval/elide/kernel";
+import { ensureElideJsKernelFactory, resetElideJsKernelInstallForTests } from "../../../src/eval/elide/kernel-embedded";
 import { createFakeElideJsKernelFactory } from "./fake-kernel";
 
 /** Bounds every real await so a wedged kernel fails loudly, under Bun's 5s default. */
@@ -68,19 +69,27 @@ const mockResult = {
 };
 
 describe("EvalTool JS engine dispatch", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		for (const name of ["PI_JS", "AURA_EVAL_JS_ENGINE"] as const) {
 			savedEnv.set(name, Bun.env[name]);
 			delete Bun.env[name];
 		}
 		// Production installs no kernel factory; start every case from that state.
 		restoreFactory = setElideJsKernelFactory(undefined);
+		// `isAvailable()` is also the kernel's install site, so an empty slot is only
+		// half the setup: pin the process-wide install attempt to "no library found"
+		// as well. A nonblank configured path is BINDING, so this holds on a machine
+		// that has a real runtime library installed or `AURA_RUNTIME_EMBEDDED_LIB`
+		// exported — which is exactly how this file is run against the artifact.
+		resetElideJsKernelInstallForTests();
+		await ensureElideJsKernelFactory({ embeddedPath: "/nonexistent/no-kernel-for-dispatch-tests.so" });
 	});
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		setElideJsKernelFactory(restoreFactory);
 		restoreFactory = undefined;
+		resetElideJsKernelInstallForTests();
 		for (const [name, value] of savedEnv) restoreEnv(name, value);
 		savedEnv.clear();
 		await withTimeout(disposeAllVmContexts(), WAIT_TIMEOUT_MS, "VM context disposal never settled");
