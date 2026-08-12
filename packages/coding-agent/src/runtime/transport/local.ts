@@ -333,8 +333,16 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 		);
 	}
 
-	/** Resolve the binary; auto-provision when allowed. Throws runtime-missing otherwise. */
-	private async ensureBinary(): Promise<ResolvedRuntime> {
+	/**
+	 * Resolve the binary; auto-provision when allowed. Throws runtime-missing
+	 * otherwise, carrying {@link missingGuidance}.
+	 *
+	 * Public because it is the only place the provisioning preconditions live —
+	 * `runtime.autoDownload`, an explicit path, an off-pin version — and
+	 * `aura setup runtime` drives the same install the first tool call would,
+	 * rather than keeping a second copy of those rules.
+	 */
+	async ensureBinary(): Promise<ResolvedRuntime> {
 		const found = await this.locate();
 		if (found) return found;
 		if (this.opts.autoDownload !== false && !this.opts.explicitPath && this.offPinVersion() === undefined) {

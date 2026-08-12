@@ -26,14 +26,6 @@ export interface EvalRunnerHost {
 	appendSessionMessage(message: PythonExecutionMessage): void;
 }
 
-export interface PythonExecutionContext {
-	cwd: string;
-	signal: AbortSignal;
-	onChunk?: (chunk: string) => void;
-}
-
-export type PythonExecutionHandler = (context: PythonExecutionContext) => Promise<PythonResult>;
-
 /** Owns user-initiated Python execution and retained eval-kernel lifecycle. */
 export class EvalRunner {
 	readonly #host: EvalRunnerHost;
@@ -51,45 +43,10 @@ export class EvalRunner {
 	}
 
 	/** Executes Python in the session's shared kernel. */
-	executePython(
+	async executePython(
 		code: string,
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean },
-	): Promise<PythonResult> {
-		return this.#executePython(code, onChunk, options, async ({ cwd, signal }) => {
-			const sessionId =
-				this.getSessionId() ??
-				defaultEvalSessionId({
-					cwd,
-					getSessionFile: () => this.#host.sessionManager.getSessionFile() ?? null,
-				});
-			return executePythonCommand(code, {
-				cwd,
-				sessionId: namespacePythonSessionId(sessionId),
-				kernelOwnerId: this.#kernelOwnerId,
-				kernelMode: this.#host.settings.get("python.kernelMode"),
-				interpreter: this.#host.settings.get("python.interpreter")?.trim() || undefined,
-				onChunk,
-				signal,
-			});
-		});
-	}
-
-	/** Executes a user Python action through an alternate backend while preserving hooks, history, and cancellation. */
-	executePythonWith(
-		code: string,
-		handler: PythonExecutionHandler,
-		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean },
-	): Promise<PythonResult> {
-		return this.#executePython(code, onChunk, options, handler);
-	}
-
-	async #executePython(
-		code: string,
-		onChunk: ((chunk: string) => void) | undefined,
-		options: { excludeFromContext?: boolean } | undefined,
-		handler: PythonExecutionHandler,
 	): Promise<PythonResult> {
 		const excludeFromContext = options?.excludeFromContext === true;
 		const cwd = this.#host.sessionManager.getCwd();
@@ -110,7 +67,21 @@ export class EvalRunner {
 					return hookResult.result;
 				}
 			}
-			const result = await handler({ cwd, signal: abortController.signal, onChunk });
+			const sessionId =
+				this.getSessionId() ??
+				defaultEvalSessionId({
+					cwd,
+					getSessionFile: () => this.#host.sessionManager.getSessionFile() ?? null,
+				});
+			const result = await executePythonCommand(code, {
+				cwd,
+				sessionId: namespacePythonSessionId(sessionId),
+				kernelOwnerId: this.#kernelOwnerId,
+				kernelMode: this.#host.settings.get("python.kernelMode"),
+				interpreter: this.#host.settings.get("python.interpreter")?.trim() || undefined,
+				onChunk,
+				signal: abortController.signal,
+			});
 			this.recordPythonResult(code, result, options);
 			return result;
 		})();

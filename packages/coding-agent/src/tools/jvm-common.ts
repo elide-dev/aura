@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
-import { formatExecResult } from "../runtime/format";
-import type { RuntimeJvmResult } from "../runtime/protocol";
+import { callRuntime, formatExecResult, type RuntimeCallOutcome } from "../runtime/format";
+import type { RuntimeJvmParams, RuntimeJvmResult } from "../runtime/protocol";
 import type { RuntimeService } from "../runtime/service";
 import type { ToolSession } from ".";
 
@@ -15,6 +15,25 @@ export function requireRuntimeService(session: ToolSession): RuntimeService {
 	const service = session.getRuntimeService?.();
 	if (!service) throw new Error(RUNTIME_SERVICE_UNAVAILABLE);
 	return service;
+}
+
+/**
+ * Dispatch one JVM flow. A protocol failure comes back as the failed tool
+ * result to return in place of a value — thrown, its `data` (the compiler argv,
+ * the toolchain's stderr) would be flattened away before the model saw it.
+ * Everything else, a missing service included, still throws.
+ */
+export function callJvm(
+	session: ToolSession,
+	params: RuntimeJvmParams,
+	signal?: AbortSignal,
+): Promise<RuntimeCallOutcome<RuntimeJvmResult>> {
+	const service = requireRuntimeService(session);
+	return callRuntime(() => service.jvm(params, signal, session.getSessionId?.() ?? undefined), {
+		root: session.cwd,
+		service,
+		scope: session.runtimeServiceScope,
+	});
 }
 
 /**

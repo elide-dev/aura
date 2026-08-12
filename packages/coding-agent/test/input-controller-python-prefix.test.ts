@@ -193,9 +193,10 @@ describe("InputController Python prompt prefix", () => {
 		expect(onInputCallback).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps the shell action available on the subprocess fallback when embedded Python is off", async () => {
-		// embedded off + shell on: the action survives on a subprocess interpreter
-		// rather than the managed runtime, so `$` still dispatches.
+	it("keeps the shell action offered by python.shell when embedded Python is off", async () => {
+		// Neither key picks a backend — the action always runs in the shared CPython
+		// kernel. `python.shell` just offers it on hosts without the embedded
+		// runtime, so with embedded off and shell on `$` still dispatches.
 		const { ctx, editor, handlePythonCommand } = createContext(true, true, false);
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
@@ -205,7 +206,7 @@ describe("InputController Python prompt prefix", () => {
 		expect(handlePythonCommand).toHaveBeenCalledWith("print(1)", false);
 	});
 
-	it("keeps the shell action disabled when embedded Python and the subprocess fallback are both off", async () => {
+	it("keeps the shell action disabled when neither python.embedded nor python.shell offers it", async () => {
 		const { ctx, editor, handlePythonCommand, onInputCallback } = createContext(true, false, false);
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();

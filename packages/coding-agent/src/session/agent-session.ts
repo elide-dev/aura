@@ -169,8 +169,6 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
-import { formatExecResult } from "../runtime/format";
-import { type RuntimeExecResult, RuntimeRpcError } from "../runtime/protocol";
 import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
@@ -207,7 +205,6 @@ import {
 	PROPOSE_DEVICE_NAME,
 	writeDeviceDispatch,
 } from "../tools/resolve";
-import type { RuntimeRunTool } from "../tools/runtime-run";
 import type { TodoPhase } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { parseCommandArgs } from "../utils/command-args";
@@ -342,7 +339,6 @@ import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./ses
 import { SessionStatsTracker, type SessionStatsTrackerHost } from "./session-stats";
 import { SessionTools, type SessionToolsHost } from "./session-tools";
 import type { ShakeMode, ShakeResult } from "./shake-types";
-import { noTruncResult } from "./streaming-output";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { TurnRecovery, type TurnRecoveryHost } from "./turn-recovery";
@@ -7281,65 +7277,6 @@ export class AgentSession {
 		options?: { excludeFromContext?: boolean },
 	): Promise<PythonResult> {
 		return this.#eval.executePython(code, onChunk, options);
-	}
-
-	/**
-	 * Execute the local $/$$ Python action through the managed runtime.
-	 * Preserves user_python hooks, session history, and abort ownership.
-	 */
-	executePythonShell(
-		code: string,
-		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean },
-	): Promise<PythonResult> {
-		return this.#eval.executePythonWith(
-			code,
-			async ({ cwd, signal, onChunk: emitChunk }) => {
-				const tool = this.getToolByName("run") as RuntimeRunTool | undefined;
-				if (!tool) {
-					throw new Error("Embedded Python requires the run tool (runtime.enabled may be false).");
-				}
-				let details: RuntimeExecResult;
-				try {
-					const result = await tool.execute(String(Snowflake.next()), { code, language: "python", cwd }, signal);
-					if (!result.details) throw new Error("The run tool returned no execution details for Python.");
-					details = result.details;
-				} catch (error) {
-					if (error instanceof RuntimeRpcError && error.code === "cancelled") {
-						return {
-							output: "",
-							exitCode: undefined,
-							cancelled: true,
-							truncated: false,
-							totalLines: 0,
-							totalBytes: 0,
-							outputLines: 0,
-							outputBytes: 0,
-							displayOutputs: [],
-							stdinRequested: false,
-						};
-					}
-					throw error;
-				}
-				const output = formatExecResult(details);
-				emitChunk?.(output);
-				const stats = noTruncResult(output);
-				return {
-					output,
-					exitCode: details.exitCode,
-					cancelled: details.killed,
-					truncated: false,
-					totalLines: stats.totalLines,
-					totalBytes: stats.totalBytes,
-					outputLines: stats.totalLines,
-					outputBytes: stats.totalBytes,
-					displayOutputs: [],
-					stdinRequested: false,
-				};
-			},
-			onChunk,
-			options,
-		);
 	}
 
 	assertEvalExecutionAllowed(): void {

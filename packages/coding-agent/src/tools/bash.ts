@@ -590,7 +590,13 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			hasGrep: isToolActive("grep", this.session.settings.get("grep.enabled")),
 			hasGlob: isToolActive("glob", this.session.settings.get("glob.enabled")),
 			hasRead: isToolActive("read", true),
-			hasLaunch: isToolActive("hub", this.session.settings.get("launch.enabled")),
+			// Two independent halves, so they compose with AND rather than one
+			// standing in for the other: hub still EXISTS when `launch.enabled` is
+			// off, it just refuses every supervision op (`tools/hub/index.ts`). As a
+			// fallback the setting only reached sessions with no `isToolActive` at
+			// all — every session built by `createTools` ignored the kill switch and
+			// was told services MUST use a tool that would reject them.
+			hasLaunch: isToolActive("hub", true) && this.session.settings.get("launch.enabled") === true,
 			hasEval: isToolActive(
 				"eval",
 				evalBackends.python || evalBackends.js || evalBackends.ruby || evalBackends.julia,

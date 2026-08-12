@@ -473,7 +473,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Runtime",
 			label: "Enable runtime capabilities",
-			description: "Innate run/check/insights/profile and JVM tools executed on the managed runtime.",
+			description: "Innate insights/profile and JVM tools executed on the managed runtime.",
 		},
 	},
 	"runtime.adapter": {
@@ -3678,6 +3678,27 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"eval.jsEngine": {
+		type: "enum",
+		values: ["bun", "elide"] as const,
+		default: "bun",
+		ui: {
+			tab: "shell",
+			group: "Eval & Runtimes",
+			label: "JavaScript Eval Engine",
+			description: "Engine that executes JavaScript eval cells.",
+			options: [
+				{ value: "bun", label: "Bun", description: "Execute JavaScript cells on the in-process Bun runtime." },
+				{
+					value: "elide",
+					label: "Runtime",
+					description:
+						"Execute JavaScript cells on the managed runtime (no kernel ships yet; falls back to Bun with a notice).",
+				},
+			],
+		},
+	},
+
 	"eval.rb": {
 		type: "boolean",
 		default: false,
@@ -3717,7 +3738,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Embedded Python",
-			description: "Allow Python execution through the managed runtime tools, including run, insights, and profile.",
+			description: "Allow Python through the managed runtime tools insights and profile.",
 		},
 	},
 	"python.shell": {
@@ -3727,8 +3748,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "shell",
 			group: "Eval & Runtimes",
 			label: "Python Shell Action",
-			description:
-				"Fall back to a subprocess Python interpreter for the local $/$$ action when the embedded runtime is unavailable.",
+			description: "Offer the local $/$$ action on hosts running without the embedded runtime.",
 		},
 	},
 	// Python eval-kernel knobs

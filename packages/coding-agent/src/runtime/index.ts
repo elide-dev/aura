@@ -230,6 +230,35 @@ export function runtimeAdapterFromEnvironment(
 	);
 }
 
+const AUTO_DOWNLOAD_TRUE = ["true", "1", "yes", "on"];
+const AUTO_DOWNLOAD_FALSE = ["false", "0", "no", "off"];
+
+/**
+ * Apply the `AURA_RUNTIME_AUTO_DOWNLOAD` override to the configured
+ * `runtime.autoDownload` policy, mirroring {@link runtimeAdapterFromEnvironment}:
+ * empty or whitespace-only values are ignored, and an unrecognized value throws
+ * rather than being coerced. Accepted spellings match the ones `aura config set`
+ * takes for a boolean setting.
+ *
+ * The benchmark harness sets this to `false` inside its containers: a campaign
+ * that fetches the runtime it is measuring is measuring the download, and a
+ * failed fetch turns every runtime call into an error.
+ */
+export function runtimeAutoDownloadFromEnvironment(
+	configured: boolean,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+	const value = env.AURA_RUNTIME_AUTO_DOWNLOAD?.trim();
+	if (!value) return configured;
+	const normalized = value.toLowerCase();
+	if (AUTO_DOWNLOAD_TRUE.includes(normalized)) return true;
+	if (AUTO_DOWNLOAD_FALSE.includes(normalized)) return false;
+	throw new RuntimeRpcError(
+		"invalid-params",
+		`AURA_RUNTIME_AUTO_DOWNLOAD must be true/false, yes/no, on/off, or 1/0; received ${JSON.stringify(value)}.`,
+	);
+}
+
 /**
  * Map runtime settings onto selected endpoint options. Returns `undefined` when
  * the runtime is disabled, which is the signal to expose no service at all.

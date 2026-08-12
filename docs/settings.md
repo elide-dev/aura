@@ -6,7 +6,7 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 
 - For model/provider credentials, `.env` files, and the env-var table that resolves API keys, see [Providers](./providers.md).
 - For custom model definitions in `models.yml`, see [Models](./models.md).
-- For instruction files discovered into the agent context (`AGENTS.md`, `.omp/`, etc.), see [Context files](./context-files.md).
+- For instruction files discovered into the agent context (`AGENTS.md`, `.aura/`, etc.), see [Context files](./context-files.md).
 - For the full catalog of environment variables, see [Environment variables](./environment-variables.md).
 - For prompt words that activate specialized per-turn behavior, see [Magic keywords](./magic-keywords.md).
 
@@ -14,16 +14,22 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 
 | Scope             | Path                                                  | Read behavior                                                                                                                            | Write behavior                                                                                                                                                                   |
 | ----------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Global            | `~/.omp/agent/config.yml` (or existing `config.yaml`) | The main persistent settings file. `config.yml` is the canonical write target; an existing `config.yaml` is loaded and updated in place. | `/settings`, `omp config set`, and `omp config reset` write here.                                                                                                                |
-| Global legacy     | `~/.omp/agent/settings.json`                          | Migrated into `config.yml` once, only when neither main YAML filename exists.                                                            | Not written after migration; the original is renamed to `settings.json.bak`.                                                                                                     |
-| Project           | `<cwd>/.omp/config.yml` (plus `.omp/settings.json`)   | Loaded when the process working directory has a non-empty `.omp/`.                                                                       | Settings commands do not write arbitrary project keys. With `modelRoleStorage: project`, model-selector role assignments update only `modelRoles` here; edit other keys by hand. |
-| Project legacy    | `<cwd>/.omp/settings.json`                            | Still read; project `config.yml` is merged on top of it.                                                                                 | Not written by settings commands.                                                                                                                                                |
-| CLI overlay       | Any file passed with `--config <file>`                | Loaded after global and project settings, for that one process. Repeatable.                                                              | Never persisted.                                                                                                                                                                 |
-| Runtime overrides | In-memory only                                        | Set by dedicated CLI flags (`--model`, `--approval-mode`, …) and feature env vars.                                                       | Never persisted.                                                                                                                                                                 |
+| Global            | `~/.aura/agent/config.yml` (or existing `config.yaml`) | The main persistent settings file. `config.yml` is the canonical write target; an existing `config.yaml` is loaded and updated in place. | `/settings`, `omp config set`, and `omp config reset` write here.                                                                                                                |
+| Global legacy     | `~/.aura/agent/settings.json`                          | Migrated into `config.yml` once, only when neither main YAML filename exists.                                                            | Not written after migration; the original is renamed to `settings.json.bak`.                                                                                                     |
+| Project           | `<cwd>/.aura/config.yml` (plus `.aura/settings.json`)  | Loaded when the process working directory has a non-empty `.aura/`.                                                                      | Settings commands do not write arbitrary project keys. With `modelRoleStorage: project`, model-selector role assignments update only `modelRoles` here; edit other keys by hand. |
+| Project legacy    | `<cwd>/.aura/settings.json`                            | Still read; project `config.yml` is merged on top of it.                                                                                 | Not written by settings commands.                                                                                                                                                |
+| CLI overlay       | Any file passed with `--config <file>`                 | Loaded after global and project settings, for that one process. Repeatable.                                                              | Never persisted.                                                                                                                                                                 |
+| Runtime overrides | In-memory only                                         | Set by dedicated CLI flags (`--model`, `--approval-mode`, …) and feature env vars.                                                       | Never persisted.                                                                                                                                                                 |
 
-`PI_CODING_AGENT_DIR` relocates the `~/.omp/agent` base directory. When it is set, the global `config.yml`, the auth store (`agent.db`), and everything else under the agent directory move with it. Use `omp config path` to print the active agent directory.
+**Pre-rebrand `.omp` directories (read for a narrow set of surfaces, never written).** Aura's config directory is `.aura`; `.omp` was its name before the rename. Nothing is ever written into a `.omp` directory — not even a move-aside of a malformed file. What is still *read* differs by surface:
 
-Native project settings are intentionally scoped to the process working directory's `.omp/` folder — settings discovery does **not** walk ancestor directories looking for the nearest `.omp/`. Other discovery providers (Claude, Codex, Gemini, Cursor, OpenCode) can also contribute project-level settings from their own files; those are read-only from `omp` settings commands and can be turned off by provider id (see [Provider and source disabling](#provider-and-source-disabling)).
+- **Settings documents: almost nothing.** A pre-rebrand `<cwd>/.omp/config.yml` is consulted only for its `modelRoles` slice, and `<cwd>/.omp/settings.json` only for its `extensions` slice. No legacy settings document is ever loaded wholesale — `loadSettings` skips legacy directories outright, because sections like `tools:` were inert before the rebrand and must not activate now.
+- **Discovery surfaces: the same as `.aura`.** The native provider ranks `<cwd>/.omp` directly below the branded dir and loads its `AGENTS.md` / `RULES.md` / `SYSTEM.md`, `rules/`, `prompts/`, `agents/`, `skills/`, `mcp.json` / `.mcp.json` servers, `commands/`, `extensions/`, **`tools/*` custom tools, and `hooks/pre/*` + `hooks/post/*` — which auto-fire around tool calls with no approval prompt.** "Read-only" means nothing is written there; it does **not** mean the content is inert. This is deliberate — `.omp` is your own pre-rebrand config dir and carries the same trust as `.aura`, exactly like the `.claude` / `.codex` / `.gemini` bases whose hooks and tools are already loaded — but it is worth knowing about before you leave a stale `.omp/` in a repository you did not write. See [Context files](./context-files.md#pre-rebrand-omp-directories).
+- **User level: nothing.** `~/.omp/agent` is on **no** read path at all — point `PI_CONFIG_DIR=.omp` at it if you need pre-rebrand global state back.
+
+`PI_CODING_AGENT_DIR` relocates the `~/.aura/agent` base directory. When it is set, the global `config.yml`, the auth store (`agent.db`), and everything else under the agent directory move with it. Use `omp config path` to print the active agent directory.
+
+Native project settings are intentionally scoped to the process working directory's `.aura/` folder — settings discovery does **not** walk ancestor directories looking for the nearest `.aura/`. Other discovery providers (Claude, Codex, Gemini, Cursor, OpenCode) can also contribute project-level settings from their own files; those are read-only from `omp` settings commands and can be turned off by provider id (see [Provider and source disabling](#provider-and-source-disabling)).
 
 ## Config file formats
 
@@ -86,7 +92,7 @@ Keys must match a real schema path exactly. There is no shorthand — set `theme
 
 ### Where writes go
 
-`omp config set`, `omp config reset`, `/settings`, and ordinary runtime settings changes write the global main YAML file under the active agent directory. They do not write arbitrary keys to `<cwd>/.omp/config.yml`. The one supported project write path is a model-selector role assignment when `modelRoleStorage` is `project`; it updates only that role under `<cwd>/.omp/config.yml`, and missing project roles continue to fall back to global roles. To create any other project-local override, edit the project file directly (see [Project-local config](#project-local-config)). Saves are debounced and re-read the file under a lock, so external edits made while a session is open are preserved.
+`omp config set`, `omp config reset`, `/settings`, and ordinary runtime settings changes write the global main YAML file under the active agent directory. They do not write arbitrary keys to `<cwd>/.aura/config.yml`. The one supported project write path is a model-selector role assignment when `modelRoleStorage` is `project`; it updates only that role under `<cwd>/.aura/config.yml`, and missing project roles continue to fall back to global roles. To create any other project-local override, edit the project file directly (see [Project-local config](#project-local-config)). Saves are debounced and re-read the file under a lock, so external edits made while a session is open are preserved.
 
 ## Precedence
 
@@ -100,8 +106,8 @@ From highest to lowest:
 
 1. **Runtime overrides** — dedicated CLI flags and feature env vars applied in memory for the current process: `--model`, `--smol`, `--slow`, `--plan`, `--approval-mode`, `--auto-approve`/`--yolo`, `--hide-thinking`, `--advisor`, `--no-pty`, `--api-key`, and protocol-mode defaults. Never persisted.
 2. **CLI config overlays** — each `--config <file>`; later overlay files override earlier ones.
-3. **Project settings** — `<cwd>/.omp/settings.json` then `<cwd>/.omp/config.yml` (and contributions from other discovery providers at project level).
-4. **Global settings** — `~/.omp/agent/config.yml`.
+3. **Project settings** — `<cwd>/.aura/settings.json` then `<cwd>/.aura/config.yml` (and contributions from other discovery providers at project level).
+4. **Global settings** — `~/.aura/agent/config.yml`.
 5. **Built-in defaults** — from the settings schema.
 
 A key that is unset at every layer resolves to its schema default at read time.
@@ -190,7 +196,7 @@ The named replacement tool must be available in the current session or the inter
 ### Worked example: global vs. project
 
 ```yaml
-# ~/.omp/agent/config.yml
+# ~/.aura/agent/config.yml
 tools:
   approvalMode: write
   approval:
@@ -201,7 +207,7 @@ disabledProviders:
   - openai
   - google
 
-# <repo>/.omp/config.yml
+# <repo>/.aura/config.yml
 tools:
   approval:
     bash: allow
@@ -225,10 +231,10 @@ Array replacement is the most common surprise: the project's `disabledProviders`
 
 ## Project-local config
 
-Create `<repo>/.omp/config.yml` when a repository needs its own settings:
+Create `<repo>/.aura/config.yml` when a repository needs its own settings:
 
 ```yaml
-# <repo>/.omp/config.yml
+# <repo>/.aura/config.yml
 modelRoles:
   default: anthropic/claude-sonnet-4-5
   smol: openai/gpt-4.1-mini
@@ -310,12 +316,12 @@ Most provider-control use cases list model provider ids. Disabling the `claude` 
 Because arrays replace rather than append, a project that sets `disabledProviders` must list the complete desired set:
 
 ```yaml
-# ~/.omp/agent/config.yml
+# ~/.aura/agent/config.yml
 disabledProviders:
   - anthropic
   - openai
 
-# <repo>/.omp/config.yml — inside this repo ONLY groq is disabled
+# <repo>/.aura/config.yml — inside this repo ONLY groq is disabled
 disabledProviders:
   - groq
 ```
@@ -355,7 +361,7 @@ enabledModels:
 | Key                    | Type    | Default                     | Notes                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------- | ------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `modelRoles`           | record  | `{}`                        | Map of role name -> model id. Built-in roles: `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `task`, `advisor`. The `tiny` role overrides the online model for lightweight background tasks (titles, memory, auto-thinking, unexpected-stop), else `@smol`. Per-role env/flags exist only for `--model`/`--smol`/`--slow`/`--plan`; configure the advisor with `modelRoles.advisor`. |
-| `modelRoleStorage`     | enum    | `global`                    | `global` saves model-selector role assignments in the active global/profile config; `project` saves only those role assignments in `<cwd>/.omp/config.yml`. Missing project roles fall back to global roles.                                                                                                                                                                                                     |
+| `modelRoleStorage`     | enum    | `global`                    | `global` saves model-selector role assignments in the active global/profile config; `project` saves only those role assignments in `<cwd>/.aura/config.yml`. Missing project roles fall back to global roles.                                                                                                                                                                                                     |
 | `modelTags`            | record  | `{}`                        | Custom role/tag metadata; can introduce additional roles.                                                                                                                                                                                                                                                                                                                                                        |
 | `modelProviderOrder`   | array   | `[]`                        | Preferred provider order when a model id is ambiguous.                                                                                                                                                                                                                                                                                                                                                           |
 | `cycleOrder`           | array   | `["smol","default","slow"]` | Roles cycled by the model switcher.                                                                                                                                                                                                                                                                                                                                                                              |
@@ -508,14 +514,14 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `l
 
 Python has a parent/child capability hierarchy. `python.enabled` is the parent
 gate for every Python surface. `python.embedded` controls Python in the managed
-`run`, `insights`, and `profile` tools. The local `$`/`$$` snake action routes to
-that embedded runtime when it is on; `python.shell` adds a subprocess-interpreter
-fallback for when it is not. The two are alternatives, so either one keeps the
-action alive and only `python.enabled` withdraws it outright.
+`insights` and `profile` tools. The local `$`/`$$` snake action executes in the
+same shared CPython kernel as `eval`'s Python backend, so a `$` cell and an
+`eval` cell see the same names; either `python.embedded` or `python.shell` keeps
+the action offered, and only `python.enabled` withdraws it outright.
 
 ### Runtime
 
-The `run`, `check`, `insights`, and `profile` tools execute on a managed runtime binary, as do four JVM specialists (`jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps`). Java and Kotlin execution is part of `run`. The `serve` long-running flow is supervised as a `hub` job rather than by the runtime layer. All nine tools are gated on `runtime.enabled`; when it is off, none register.
+The `insights` and `profile` tools execute on a managed runtime binary, as do four JVM specialists (`jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps`). The `serve` long-running flow is supervised as a `hub` job rather than by the runtime layer. All seven tools are gated on `runtime.enabled`; when it is off, none register. Code execution itself is not one of them: `eval` and `bash` own that surface.
 
 ```yaml
 runtime:
@@ -530,9 +536,9 @@ runtime:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `runtime.enabled` | boolean | `true` | Enable the innate `run`/`check`/`insights`/`profile`, `serve`, and four specialized `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` still runs, reporting the disabled state with a nonzero exit. |
+| `runtime.enabled` | boolean | `true` | Enable the innate `insights`/`profile`, `serve`, and four specialized `jvm_*` tools executed on the managed runtime. Off disables the tools; `aura runtime status` (and `aura setup runtime`) still runs, reporting the disabled state with a nonzero exit. |
 | `runtime.adapter` | `process` \| `embedded` \| `auto` | `process` | Select the runtime process, require the embedded runtime library, or choose the library automatically when it is available and compatible. Explicit `embedded` mode never falls back to the process adapter when the library is missing or incompatible. |
-| `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir on first use when no binary is found. Ignored when `runtime.path` is set. |
+| `runtime.autoDownload` | boolean | `true` | Fetch the pinned runtime into the config dir when no binary is found — implicitly on first use, or on demand with `aura setup runtime`. Ignored when `runtime.path` is set. Off means neither path downloads: both report the same guidance instead. |
 | `runtime.path` | string | `""` | Explicit runtime binary path; overrides discovery and disables auto-download. Also settable per-run with `--runtime <path>`, which reports `source: flag` in `aura runtime status`. |
 | `runtime.version` | string | `""` | Managed runtime version to select instead of the pinned one, i.e. `~/.aura/runtime/<version>/`. Empty uses the pinned version. **Only the pinned version has a published sha256**, so an off-pin version is never downloaded: if that install is absent, the runtime reports missing with guidance rather than performing an unverified fetch. Install it yourself under that directory, or use `runtime.path`. |
 | `runtime.embeddedPath` | string | `""` | Explicit embedded runtime library path. A nonblank value is binding and takes precedence over `AURA_RUNTIME_EMBEDDED_LIB` and installed-library discovery. |
@@ -544,9 +550,9 @@ Embedded library resolution checks a nonblank `runtime.embeddedPath`, then a non
 #### Inherent runtime guidance
 
 Runtime selection is part of Aura's system policy whenever runtime tools are
-registered. The agent chooses direct execution (`run`), validation (`check`),
-instrumentation (`insights`), profiling (`profile`), serving, and the four JVM
-specialists from the available tool inventory. Project builds use the project's
+registered. The agent chooses execution (`eval`, `bash`), instrumentation
+(`insights`), profiling (`profile`), serving, and the four JVM specialists from
+the available tool inventory. Project builds use the project's
 declared build command rather than a separate runtime tool. Tool prompts remain
 the argument and failure-shape reference.
 
@@ -555,9 +561,13 @@ appear in skill lists or `/skill:*` commands, and require no skill-load round
 trip. `runtime.enabled` remains the single capability gate.
 
 
-`aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
+`aura doctor` reports the resolved runtime alongside the rest of the install (identity and Bun version, native addon, registered tools, plugin health, terminal capabilities, memory backend); `aura doctor --json` emits the same report structurally, and `aura --check` collapses it to one line for clean-env CI probes. None of the three touch a model, the network, or provisioning — the runtime probe is read-only and never downloads a binary, whatever `runtime.autoDownload` says. What they do run in-process is the tool-gate derivation below (in-memory tool construction against a stub settings document, no filesystem or subprocess work) and the plugin health checks, which read the plugins directory. All three exit nonzero only on a hard failure: a Bun older than the minimum, or a runtime that is enabled but unavailable. Optional misses (runtime disabled, no memory backend, missing plugin directory) are warnings and still exit 0.
 
-See [run](./tools/run.md), [check](./tools/check.md), [insights](./tools/insights.md), and [profile](./tools/profile.md) for core behavior; [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), and [jvm_deps](./tools/jvm_deps.md) for JVM specialists; and [serve](./tools/serve.md) for the supervised long-running flow. Its handle is a `hub` job name, so `hub logs` and `hub stop` apply; there is no separate stop tool. `jvm_jar` creation and `jvm_deps` with `output` are the only runtime flows that write into the project. Both require `output` to resolve inside the session cwd and refuse an existing output unless `overwrite: true` is passed. Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
+Doctor's tool section is derived from the tool registry rather than from a list: each builtin factory is constructed against a stub session carrying the settings above, and the ones that decline are reported as gated off with the setting responsible (`memory.backend = off`, `runtime.enabled = false`, …). A tool held back by two settings at once names both — `serve` with `runtime.enabled` and `launch.enabled` both off reads `runtime.enabled = false and launch.enabled = false`, since turning on only one of them would not bring it back. Two sets are answered without constructing anything. `ask`, `lsp`, `github`, `checkpoint`, and `rewind` are listed separately as session-gated and counted as registered: their registration turns on the live session or an external program (`ask` on a UI, `lsp` on the session's LSP flag, `github` on a `gh` binary) or, for `checkpoint`/`rewind`, on `checkpoint.enabled` at session build time — none of which a settings-only report can decide, and doctor will not shell out to try. `task` is counted as registered without being built because building it discovers agents across the project, user, and extension directories, which a readiness report has no reason to do.
+
+Three commands report the runtime, and they are the same probe underneath: `aura runtime status` (canonical, `--json` and `--runtime <path>` supported), `aura setup runtime --check` (the component form, identical output and exit code), and the runtime section of `aura doctor`. Only `aura setup runtime` without flags installs anything: it downloads the pinned managed runtime when it is missing, subject to `runtime.autoDownload`, `runtime.path`, and `runtime.version` exactly as the first innate tool call would be, then re-probes and reports what the install produced.
+
+See [insights](./tools/insights.md) and [profile](./tools/profile.md) for core behavior; [jvm_disassemble](./tools/jvm_disassemble.md), [jvm_format](./tools/jvm_format.md), [jvm_jar](./tools/jvm_jar.md), and [jvm_deps](./tools/jvm_deps.md) for JVM specialists; and [serve](./tools/serve.md) for the supervised long-running flow. Its handle is a `hub` job name, so `hub logs` and `hub stop` apply; there is no separate stop tool. `jvm_jar` creation and `jvm_deps` with `output` are the only runtime flows that write into the project. Both require `output` to resolve inside the session cwd and refuse an existing output unless `overwrite: true` is passed. Containment is enforced after resolving symlinks, so a symlinked directory cannot redirect either write outside the cwd.
 
 ### Window-scoped computer use
 
@@ -615,10 +625,11 @@ lsp:
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
 | `python.enabled` | boolean | `true` | Parent gate for every Python capability. When false, child settings cannot re-enable Python. |
-| `python.embedded` | boolean | `true` | Permit Python in the managed `run`, `insights`, and `profile` tools when `python.enabled` is true. Disabled sessions omit Python from those tools' schemas and descriptions. |
-| `python.shell` | boolean | `false` | Fall back to a subprocess Python interpreter for the local `$`/`$$` snake action when the embedded runtime is unavailable. The action itself follows `python.embedded`, so it already works by default; this key only adds the subprocess route for hosts running without the embedded runtime. With `python.enabled` off, or with embedded and this both off, sigil input is ordinary prompt text and the action is omitted from welcome and hotkey guidance. Disabled sessions treat sigil input as ordinary prompt text and omit the action from welcome and hotkey guidance. |
+| `python.embedded` | boolean | `true` | Permit Python in the managed `insights` and `profile` tools when `python.enabled` is true. Disabled sessions omit Python from those tools' schemas and descriptions. |
+| `python.shell` | boolean | `false` | Offer the local `$`/`$$` snake action on hosts running without the embedded runtime. The action executes in the shared CPython kernel either way; this key only decides whether it is offered when `python.embedded` is off, so it already works by default. With `python.enabled` off, or with embedded and this both off, sigil input is ordinary prompt text and the action is omitted from welcome and hotkey guidance. |
 | `eval.py` | boolean | `true` | Permit the Python eval backend when `python.enabled` is also true. `PI_PY=0` disables it for the process; `PI_PY=1` cannot bypass `python.enabled`. |
 | `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
+| `eval.jsEngine` | enum | `bun` | Engine that executes JavaScript eval cells: `bun` (in-process Bun runtime) or `elide` (the managed Elide runtime; no kernel ships yet, so it falls back to Bun with a notice). `AURA_EVAL_JS_ENGINE` overrides it for the process; an unrecognized value is an error. |
 | `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |
 | `python.interpreter` | string | `""` | Path to a Python interpreter; empty = auto-detect. |
 | `lsp.enabled` | boolean | `true` | Language-server integration. `--no-lsp` disables for the run. |
@@ -691,7 +702,7 @@ memory:
 | `compaction.remoteEnabled`    | boolean | `true`        | Allow remote compaction service.                                                                                                                                                                                                          |
 | `compaction.autoContinue`     | boolean | `true`        | Continue automatically after compaction.                                                                                                                                                                                                  |
 | `memory.backend`              | enum    | `off`         | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys.                                                                                                                  |
-| `autolearn.enabled`           | boolean | `false`       | Experimental: after the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills under `~/.omp/agent/managed-skills`. Enables the `manage_skill` tool (and `learn` when a memory backend is active). |
+| `autolearn.enabled`           | boolean | `false`       | Experimental: after the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills under `~/.aura/agent/managed-skills`. Enables the `manage_skill` tool (and `learn` when a memory backend is active). |
 | `autolearn.autoContinue`      | boolean | `false`       | When `autolearn.enabled`, auto-run one capture turn at stop (uses extra tokens). Off = a passive reminder rides your next turn.                                                                                                           |
 | `autolearn.minToolCalls`      | number  | `5`           | Only nudge after a turn that used at least this many tools.                                                                                                                                                                               |
 
@@ -820,9 +831,9 @@ Provider credentials and custom model definitions are configured separately — 
 
 ### Startup migration to `config.yml`
 
-When neither `~/.omp/agent/config.yml` nor the compatible `config.yaml` exists, startup builds canonical `config.yml` once from legacy sources, then writes the result:
+When neither `~/.aura/agent/config.yml` nor the compatible `config.yaml` exists, startup builds canonical `config.yml` once from legacy sources, then writes the result:
 
-1. `~/.omp/agent/settings.json` (renamed to `settings.json.bak` after a successful parse).
+1. `~/.aura/agent/settings.json` (renamed to `settings.json.bak` after a successful parse).
 2. Settings persisted in `agent.db`.
 
 After either main YAML file exists, these legacy sources are no longer consulted. The generic config loader also performs `.json` -> `.yml` migration for other config files when only the `.json` form is present.
@@ -846,8 +857,8 @@ Applied whenever raw settings are loaded (global, project, overlays, and runtime
 
 ### A project setting is not taking effect
 
-- Start `omp` from the directory that contains `.omp/config.yml`. Settings discovery only checks the current working directory's `.omp/`, not ancestor directories.
-- Ensure `.omp/` is non-empty; empty config directories are ignored.
+- Start `omp` from the directory that contains `.aura/config.yml`. Settings discovery only checks the current working directory's `.aura/`, not ancestor directories.
+- Ensure `.aura/` is non-empty; empty config directories are ignored.
 - Confirm the file is valid YAML and its top level is a mapping.
 - Run `omp config get <key>` from that directory to see the effective value.
 - Remember that `--config` overlays and runtime flags override project config.
@@ -865,11 +876,11 @@ Arrays replace; they do not append. If a project sets `disabledProviders`, `enab
 
 ### `omp config set` changed the wrong file
 
-`omp config set` and `omp config reset` always write the global `config.yml` under the active agent directory. Run `omp config path` to print it. For project-local settings, edit `<repo>/.omp/config.yml` directly.
+`omp config set` and `omp config reset` always write the global `config.yml` under the active agent directory. Run `omp config path` to print it. For project-local settings, edit `<repo>/.aura/config.yml` directly.
 
 ### `omp config reset` did not remove my key
 
-`reset` writes the schema **default** value into the global config — it persists the default rather than deleting the key. To stop overriding a project value from global config, delete the key from `~/.omp/agent/config.yml` by hand.
+`reset` writes the schema **default** value into the global config — it persists the default rather than deleting the key. To stop overriding a project value from global config, delete the key from `~/.aura/agent/config.yml` by hand.
 
 ### A `--config` overlay fails at startup
 

@@ -7,10 +7,13 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import {
 	disposeAllVmContexts,
+	executeInVmContext,
 	setJsEvalWorkerThreadForTests,
 	setWorkerCloseTimeoutMsForTests,
+	type WorkerHandle,
 } from "../../src/eval/js/context-manager";
 import { executeJs } from "../../src/eval/js/executor";
+import type { WorkerInbound, WorkerOutbound } from "../../src/eval/js/worker-protocol";
 import type { ToolSession } from "../../src/tools";
 
 const originalWorker = globalThis.Worker;
@@ -207,6 +210,101 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 		writable: true,
 		value: FakeWorker as unknown as typeof Worker,
 	});
+}
+
+const INJECTED_INIT_FAILURE = "injected worker factory failed to initialize";
+/**
+ * The inline rung runs user code through indirect eval in the HOST realm, so a
+ * global set by a cell is a positive tell that the inline worker executed it.
+ */
+const LADDER_CANARY = "__ompInjectedLadderCanary";
+
+interface InjectedWorkerStats {
+	spawns: number;
+	inits: number;
+	runs: number;
+	closes: number;
+	terminates: number;
+}
+
+function makeInjectedWorkerStats(): InjectedWorkerStats {
+	return { spawns: 0, inits: 0, runs: 0, closes: 0, terminates: 0 };
+}
+
+/**
+ * A `spawnWorker` factory standing in for a non-Bun engine (the Elide kernel
+ * adapter's shape): it answers `init` with `ready` — or faults through
+ * `onError` when `failInit` is set — and settles runs without executing them.
+ */
+function makeInjectedSpawn(stats: InjectedWorkerStats, opts: { failInit?: boolean } = {}): () => WorkerHandle {
+	return () => {
+		stats.spawns++;
+		const messageListeners = new Set<(msg: WorkerOutbound) => void>();
+		const errorListeners = new Set<(error: Error) => void>();
+		const emit = (msg: WorkerOutbound): void => {
+			queueMicrotask(() => {
+				for (const listener of [...messageListeners]) listener(msg);
+			});
+		};
+		return {
+			mode: "elide",
+			send(msg: WorkerInbound): void {
+				if (msg.type === "init") {
+					stats.inits++;
+					if (!opts.failInit) {
+						emit({ type: "ready" });
+						return;
+					}
+					queueMicrotask(() => {
+						for (const listener of [...errorListeners]) listener(new Error(INJECTED_INIT_FAILURE));
+					});
+					return;
+				}
+				if (msg.type === "run") {
+					stats.runs++;
+					emit({ type: "result", runId: msg.runId, ok: true });
+					return;
+				}
+				if (msg.type === "close") emit({ type: "closed" });
+			},
+			onMessage(handler) {
+				messageListeners.add(handler);
+				return () => {
+					messageListeners.delete(handler);
+				};
+			},
+			onError(handler) {
+				errorListeners.add(handler);
+				return () => {
+					errorListeners.delete(handler);
+				};
+			},
+			async close() {
+				stats.closes++;
+				return true;
+			},
+			async terminate() {
+				stats.terminates++;
+			},
+		};
+	};
+}
+
+/** Wrap the installed `globalThis.Worker` so Bun-Worker rung entries are counted. */
+function installWorkerConstructionCounter(): { count: number } {
+	const counter = { count: 0 };
+	const base = globalThis.Worker;
+	Object.defineProperty(globalThis, "Worker", {
+		configurable: true,
+		writable: true,
+		value: new Proxy(base, {
+			construct(target, args, newTarget) {
+				counter.count++;
+				return Reflect.construct(target as unknown as new (...a: unknown[]) => object, args, newTarget);
+			},
+		}),
+	});
+	return counter;
 }
 
 describe("JavaScript eval worker lifecycle", () => {
@@ -438,6 +536,147 @@ describe("JavaScript eval worker lifecycle", () => {
 		const result = await cell;
 		expect(toolReturned).toBe(true);
 		expect(result.exitCode).toBe(0);
+	});
+});
+
+describe("JavaScript eval worker injection", () => {
+	let restoreCloseTimeoutMs = 0;
+	let restoreWorkerThread = false;
+	beforeEach(() => {
+		// Skip the subprocess rung: these cases are about which worker the context
+		// manager picks, not about spawning a real one.
+		restoreWorkerThread = setJsEvalWorkerThreadForTests(true);
+		restoreCloseTimeoutMs = setWorkerCloseTimeoutMsForTests(1);
+	});
+
+	afterEach(async () => {
+		await disposeAllVmContexts();
+		setWorkerCloseTimeoutMsForTests(restoreCloseTimeoutMs);
+		Object.defineProperty(globalThis, "Worker", {
+			configurable: true,
+			writable: true,
+			value: originalWorker,
+		});
+		setJsEvalWorkerThreadForTests(restoreWorkerThread);
+		delete (globalThis as unknown as Record<string, unknown>)[LADDER_CANARY];
+	});
+
+	it("spawns a fresh session through the injected worker factory", async () => {
+		using tempDir = TempDir.createSync("@omp-js-inject-spawn-");
+		installFakeWorker({ closeRequests: 0, terminateCalls: 0 }, { exitOnClose: true, settleRuns: true });
+		const workers = installWorkerConstructionCounter();
+		const stats = makeInjectedWorkerStats();
+		const session = makeSession(tempDir.path());
+		const sessionKey = `js-inject:${crypto.randomUUID()}`;
+
+		await withTimeout(
+			executeInVmContext({
+				sessionKey,
+				sessionId: sessionKey,
+				cwd: tempDir.path(),
+				session,
+				code: "return 1;",
+				filename: "inject.js",
+				runState: {},
+				spawnWorker: makeInjectedSpawn(stats),
+			}),
+			5_000,
+			"injected spawn",
+		);
+
+		expect(stats.spawns).toBe(1);
+		expect(stats.inits).toBe(1);
+		expect(stats.runs).toBe(1);
+		// The built-in ladder never ran: no Bun Worker was constructed.
+		expect(workers.count).toBe(0);
+	});
+
+	it("reuses the live session instead of calling the injected factory again", async () => {
+		using tempDir = TempDir.createSync("@omp-js-inject-reuse-");
+		installFakeWorker({ closeRequests: 0, terminateCalls: 0 }, { exitOnClose: true, settleRuns: true });
+		const workers = installWorkerConstructionCounter();
+		const stats = makeInjectedWorkerStats();
+		const session = makeSession(tempDir.path());
+		const sessionKey = `js-inject-reuse:${crypto.randomUUID()}`;
+		const spawnWorker = makeInjectedSpawn(stats);
+		const cell = (code: string): Promise<{ value: unknown }> =>
+			executeInVmContext({
+				sessionKey,
+				sessionId: sessionKey,
+				cwd: tempDir.path(),
+				session,
+				code,
+				filename: "inject-reuse.js",
+				runState: {},
+				spawnWorker,
+			});
+
+		await withTimeout(cell("globalThis.marker = 1;"), 5_000, "injected first cell");
+		await withTimeout(cell("globalThis.marker = 2;"), 5_000, "injected second cell");
+
+		expect(stats.spawns).toBe(1);
+		expect(stats.inits).toBe(1);
+		expect(stats.runs).toBe(2);
+		expect(workers.count).toBe(0);
+	});
+
+	it("keeps the built-in worker ladder when no factory is injected", async () => {
+		using tempDir = TempDir.createSync("@omp-js-inject-absent-");
+		const fakeStats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(fakeStats, { exitOnClose: true, settleRuns: true });
+		const workers = installWorkerConstructionCounter();
+		const session = makeSession(tempDir.path());
+		const sessionKey = `js-inject-absent:${crypto.randomUUID()}`;
+
+		await withTimeout(
+			executeInVmContext({
+				sessionKey,
+				sessionId: sessionKey,
+				cwd: tempDir.path(),
+				session,
+				code: "return 1;",
+				filename: "inject-absent.js",
+				runState: {},
+			}),
+			5_000,
+			"ladder cell",
+		);
+
+		// The Bun Worker rung served the session, and it still closes gracefully.
+		expect(workers.count).toBe(1);
+		await withTimeout(disposeAllVmContexts(), 5_000, "ladder dispose");
+		expect(fakeStats.closeRequests).toBe(1);
+		expect(fakeStats.terminateCalls).toBe(0);
+	});
+
+	it("surfaces an injected factory's init failure instead of descending the Bun ladder", async () => {
+		using tempDir = TempDir.createSync("@omp-js-inject-init-fail-");
+		installFakeWorker({ closeRequests: 0, terminateCalls: 0 }, { exitOnClose: true, settleRuns: true });
+		const workers = installWorkerConstructionCounter();
+		const stats = makeInjectedWorkerStats();
+		const session = makeSession(tempDir.path());
+		const sessionKey = `js-inject-fail:${crypto.randomUUID()}`;
+
+		const cell = executeInVmContext({
+			sessionKey,
+			sessionId: sessionKey,
+			cwd: tempDir.path(),
+			session,
+			code: `globalThis[${JSON.stringify(LADDER_CANARY)}] = 42;`,
+			filename: "inject-fail.js",
+			runState: {},
+			spawnWorker: makeInjectedSpawn(stats, { failInit: true }),
+		});
+
+		// A session pinned to another engine must fail loudly: silently retrying on
+		// Bun would run the user's cells on a runtime they did not ask for.
+		await expect(withTimeout(cell, 5_000, "injected init failure")).rejects.toThrow(INJECTED_INIT_FAILURE);
+		expect(stats.inits).toBe(1);
+		// The failed handle is torn down, no Bun rung is constructed, and the inline
+		// rung never evaluated the cell.
+		expect(stats.terminates).toBe(1);
+		expect(workers.count).toBe(0);
+		expect((globalThis as unknown as Record<string, unknown>)[LADDER_CANARY]).toBeUndefined();
 	});
 });
 

@@ -1,6 +1,6 @@
 /**
- * Gallery fixtures for `run`, `check`, `insights`, `profile`, the four
- * specialized `jvm_*` flows, and the hub-backed `serve` tool.
+ * Gallery fixtures for `insights`, `profile`, the four specialized `jvm_*`
+ * flows, and the hub-backed `serve` tool.
  *
  * The success/error envelopes are built by the two helpers below rather than
  * repeated for every tool: the execution tools return the same
@@ -29,21 +29,6 @@ function jobResult(text: string, over: Record<string, unknown>): GalleryResult {
 }
 
 export const runtimeFixtures: Record<string, GalleryFixture> = {
-	run: {
-		label: "Run",
-		streamingArgs: { code: "const rows = await db.query(" },
-		args: { code: 'const rows = await db.query("select 1");\nconsole.log(rows.length);', language: "ts" },
-		result: execResult("1"),
-		errorResult: execResult("--- stderr ---\nReferenceError: db is not defined\n(exit code 1)", { exitCode: 1 }),
-	},
-
-	check: {
-		label: "Check",
-		args: { cwd: "packages/api" },
-		result: execResult("Resolved 41 dependencies. Compiled 128 sources."),
-		errorResult: execResult("src/api/routes.ts:88:12 — cannot find symbol `Router`\n(exit code 2)", { exitCode: 2 }),
-	},
-
 	insights: {
 		label: "Insights",
 		args: { path: "src/worker.ts", insightPath: "hooks/alloc-trace.js" },

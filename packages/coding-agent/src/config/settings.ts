@@ -2507,12 +2507,12 @@ export function isEmbeddedPythonEnabled(config: Pick<Settings, "get">): boolean 
 /**
  * Whether the TUI may interpret $/$$ input as the local Python action.
  *
- * The action routes to the embedded runtime when that is enabled, and otherwise
- * to a subprocess interpreter — `enumeratePythonRuntimes` already prefers the
- * managed interpreter and falls back to system `python`/`python3`. So the
- * embedded runtime and the `python.shell` subprocess fallback are alternatives,
- * not a chain: either one can carry the action, and only the parent
- * `python.enabled` can withdraw it outright.
+ * The action itself always executes in the shared CPython kernel (the same one
+ * `eval`'s Python backend uses), so neither child key selects a backend any
+ * more: they are two independent ways to offer the action — `python.embedded`
+ * for hosts that carry the managed runtime, `python.shell` for hosts that do
+ * not — and only the parent `python.enabled` can withdraw it outright. Folding
+ * these into one key is the settings collapse tracked for a later milestone.
  */
 export function isPythonShellEnabled(config: Pick<Settings, "get">): boolean {
 	if (!isPythonEnabled(config)) return false;

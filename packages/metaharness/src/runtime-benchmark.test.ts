@@ -3,17 +3,23 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	EMBEDDED_RUNTIME_ABI_VERSION,
+	EMBEDDED_RUNTIME_SCHEMA_SHA256,
+} from "../../coding-agent/src/runtime/embedded/schema";
+import {
 	type AdapterBenchmarkRuntime,
 	type ArmLaunch,
 	type ArmSummary,
 	analyzeRuntimeComparison,
 	armRunnerArgs,
 	BASELINE_TOOLS,
+	type BenchmarkArm,
 	buildArmLaunches,
 	countToolCalls,
 	countTrialToolCalls,
 	formatComparison,
 	measureAdapterCase,
+	microRuntimeEndpointOptions,
 	packagedRuntimeBinaryForLibrary,
 	parseRuntimeBenchmarkCli,
 	runAdapterMicrobenchmarks,
@@ -22,7 +28,13 @@ import {
 	validateAdapterOutput,
 	writeRuntimeBenchmarkManifest,
 } from "./runtime-benchmark";
-import { RUNTIME_TASKS } from "./runtime-benchmark-suite";
+import {
+	BENCHMARK_BUN_CONTAINER_PATH,
+	type DockerRunResult,
+	RUNTIME_ARM_PROBE_SENTINEL,
+	RUNTIME_TASKS,
+	smokeRuntimeArmExecution,
+} from "./runtime-benchmark-suite";
 
 const cleanups: string[] = [];
 
@@ -204,8 +216,10 @@ describe("runtime benchmark orchestration", () => {
 		expect(launches.filter(launch => launch.arm === "baseline")).toHaveLength(RUNTIME_TASKS.length);
 		expect(launches.filter(launch => launch.arm === "runtime")).toHaveLength(RUNTIME_TASKS.length);
 		expect(launches[0].args).toContain(`--agent-arg=${BASELINE_TOOLS.join(",")}`);
-		expect(launches.find(launch => launch.arm === "runtime")?.args).toContain(
-			`--agent-arg=${[...BASELINE_TOOLS, "run", "check"].join(",")}`,
+		// A task that names a discoverable runtime tool is what separates the arms
+		// now that no runtime tool rides along in every runtime launch.
+		expect(launches.find(launch => launch.arm === "runtime" && launch.taskId === "instrumentation")?.args).toContain(
+			`--agent-arg=${[...BASELINE_TOOLS, "insights"].join(",")}`,
 		);
 		expect(launches.every(launch => launch.args.includes("--host-network"))).toBe(true);
 	});
@@ -224,7 +238,9 @@ describe("runtime benchmark orchestration", () => {
 		});
 		const runtimeArgs = (taskId: string) =>
 			launches.find(launch => launch.arm === "runtime" && launch.taskId === taskId)?.args;
-		const essentials = [...BASELINE_TOOLS, "run", "check"];
+		// `run`/`check` are retired, so the runtime arm's floor is the baseline set:
+		// a task that names no runtime tool mounts exactly what the baseline does.
+		const essentials = BASELINE_TOOLS;
 
 		expect(runtimeArgs("project-validation")).toContain(`--agent-arg=${essentials.join(",")}`);
 		expect(runtimeArgs("project-validation")?.join(" ")).not.toContain("project_advice");
@@ -256,6 +272,49 @@ describe("runtime benchmark orchestration", () => {
 				"--env=AURA_RUNTIME_EMBEDDED_LIB=/opt/omp/src/out/aura-elide-linux-x64/lib/libelide_embed.so",
 			);
 			expect(launch.args).toContain("--env=AURA_RUNTIME_ADAPTER=auto");
+			expect(launch.args).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		}
+	});
+
+	it("never lets an agent container fetch the runtime it is measuring", () => {
+		const runtimeBinary = path.resolve(import.meta.dir, "../../../out/aura-elide-linux-x64/bin/elide");
+		const embeddedLib = path.resolve(import.meta.dir, "../../../out/aura-elide-linux-x64/lib/libelide_embed.so");
+		const options = {
+			model: "openai-codex/gpt-5.6-sol",
+			thinking: "xhigh",
+			attempts: 1,
+			prefix: "rtbench",
+			jobsDir: "/tmp/jobs",
+			taskRoot: "/tmp/tasks",
+			gatewayUrl: "http://127.0.0.1:4000",
+			hostNetwork: true,
+			taskIds: ["python-execution"],
+			historicalBinary: "/tmp/aura-linux-x64",
+		};
+		const injected = buildArmLaunches({ ...options, runtimeBinary, embeddedLib });
+		const bare = buildArmLaunches(options);
+		const armArgs = (launches: ArmLaunch[], arm: BenchmarkArm) =>
+			launches.find(launch => launch.arm === arm)?.args ?? [];
+
+		// The measured arms carry the override the same way they carry every other
+		// runtime env: the two arms must differ only in their tool set.
+		expect(armArgs(injected, "runtime")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		expect(armArgs(injected, "baseline")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+
+		// An artifact-less campaign is the shape that produced the original failure:
+		// a runtime arm with `run`/`check` mounted, no runtime present, and nothing
+		// stopping the container from fetching one. The override is unconditional.
+		expect(armArgs(bare, "runtime")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		expect(armArgs(bare, "baseline")).toContain("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
+		// Only the override is unconditional: the artifact paths still require artifacts.
+		expect(armArgs(bare, "runtime").join(" ")).not.toContain("AURA_RUNTIME_BIN");
+		expect(armArgs(bare, "runtime").join(" ")).not.toContain("AURA_RUNTIME_EMBEDDED_LIB");
+		expect(armArgs(bare, "runtime").join(" ")).not.toContain("AURA_RUNTIME_ADAPTER");
+
+		// The historical control runs a frozen binary from before this override
+		// existed, with baseline tools and no runtime env of any kind.
+		for (const launches of [injected, bare]) {
+			expect(armArgs(launches, "historical").join(" ")).not.toContain("AURA_RUNTIME");
 		}
 	});
 
@@ -334,11 +393,11 @@ describe("runtime benchmark orchestration", () => {
 		cleanups.push(jobDir);
 		const agentDir = path.join(jobDir, "trial", "agent");
 		fs.mkdirSync(agentDir, { recursive: true });
-		const call = { type: "toolCall", id: "call-1", name: "run", arguments: {} };
+		const call = { type: "toolCall", id: "call-1", name: "insights", arguments: {} };
 		const lines = [
 			{ type: "message_start", message: { role: "assistant", content: [call] } },
 			{ type: "message_end", message: { role: "assistant", content: [call] } },
-			{ type: "tool_execution_start", toolCallId: "call-1", toolName: "run" },
+			{ type: "tool_execution_start", toolCallId: "call-1", toolName: "insights" },
 		];
 		fs.writeFileSync(path.join(agentDir, "omp.txt"), lines.map(line => JSON.stringify(line)).join("\n"));
 
@@ -368,7 +427,7 @@ describe("runtime benchmark orchestration", () => {
 		);
 		fs.writeFileSync(
 			path.join(trialDir, "agent", "omp.txt"),
-			`${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "run" })}\n`,
+			`${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "insights" })}\n`,
 		);
 
 		expect(countTrialToolCalls(jobDir, trialName)).toEqual({ total: 1, runtimeUsed: true });
@@ -466,27 +525,49 @@ describe("runtime benchmark orchestration", () => {
 	});
 
 	it("returns inconclusive below overall runtime adoption threshold", () => {
-		const usedTasks = new Set(RUNTIME_TASKS.slice(0, 9).map(task => task.id));
-		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => usedTasks.has(taskId) });
+		// Skipping one profiling and one jvm task lands adoption at 4/6 = 66.7%
+		// while keeping every group at or above 50%, so only the overall gate fires.
+		const skipped = new Set(["call-tracing", "jvm-dependencies"]);
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => !skipped.has(taskId) });
 
 		const result = analyzeRuntimeComparison(baseline, runtime);
 
-		expect(result.adoptionOverall).toBe(0.75);
+		expect(result.adoptionOverall).toBeCloseTo(4 / 6, 10);
 		expect(result.verdict).toBe("inconclusive");
-		expect(result.reasons).toContain("runtime adoption 75.0% is below 80%");
+		expect(result.reasons).toContain("runtime adoption 66.7% is below 80%");
+		expect(result.reasons.join(" ")).not.toContain("below 50%");
 	});
 
 	it("returns inconclusive when one capability group is below adoption threshold", () => {
-		const { baseline, runtime } = comparisonSummaries({
-			runtimeUsed: taskId => RUNTIME_TASKS.find(task => task.id === taskId)?.group !== "profiling",
-		});
+		// `instrumentation` is the debugging group's only adoption-measurable task,
+		// so skipping just it isolates the per-group gate from the overall one.
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => taskId !== "instrumentation" });
 
 		const result = analyzeRuntimeComparison(baseline, runtime);
 
 		expect(result.adoptionOverall).toBeGreaterThanOrEqual(0.8);
-		expect(result.adoptionByGroup.profiling).toBe(0);
+		expect(result.adoptionByGroup.debugging).toBe(0);
 		expect(result.verdict).toBe("inconclusive");
-		expect(result.reasons).toContain("runtime adoption is below 50% for: profiling");
+		expect(result.reasons).toContain("runtime adoption is below 50% for: debugging");
+	});
+
+	it("scores adoption only over tasks whose runtime arm mounts a runtime tool", () => {
+		// The regression this guards: `run`/`check` retired, so six of twelve tasks
+		// mount no runtime tool. Counting their trials would peg execution and
+		// project at 0% and cap overall at 50%, tripping both gates on every
+		// campaign regardless of what the runtime arm actually did.
+		const mountless = RUNTIME_TASKS.filter(task => task.runtimeTools.length === 0).map(task => task.id);
+		expect(mountless.length).toBeGreaterThan(0);
+		const { baseline, runtime } = comparisonSummaries({ runtimeUsed: taskId => !mountless.includes(taskId) });
+
+		const result = analyzeRuntimeComparison(baseline, runtime);
+
+		expect(result.adoptionOverall).toBe(1);
+		expect(result.adoptionMeasuredTrials).toBe(RUNTIME_TASKS.length - mountless.length);
+		// Groups made up entirely of mountless tasks report nothing rather than zero.
+		expect(result.adoptionByGroup.execution).toBeUndefined();
+		expect(result.adoptionByGroup.project).toBeUndefined();
+		expect(result.reasons.join(" ")).not.toContain("adoption");
 	});
 
 	it("formats the primary success, efficiency, and tool-use deltas", () => {
@@ -550,6 +631,17 @@ describe("runtime benchmark orchestration", () => {
 
 		await expect(measured).rejects.toThrow('expected stdout "ok\\n", received "wrong\\n"');
 		expect(calls).toEqual(["process", "embedded", "process"]);
+	});
+
+	it("measures the packaged binary in the host micro suite and never downloads one", () => {
+		// The deterministic micro suite runs on the host, outside every container
+		// guard, so it needs the same policy in its own right: no fetch, and the
+		// binary under test rather than whatever PATH resolution turns up.
+		expect(microRuntimeEndpointOptions()).toEqual({ autoDownload: false });
+		expect(microRuntimeEndpointOptions("/repo/out/aura-elide-linux-x64/bin/elide")).toEqual({
+			autoDownload: false,
+			explicitPath: "/repo/out/aura-elide-linux-x64/bin/elide",
+		});
 	});
 
 	it("computes p50, p95, and process-over-embedded speedups", () => {
@@ -666,15 +758,31 @@ describe("runtime benchmark orchestration", () => {
 			tools: {
 				baseline: BASELINE_TOOLS,
 				runtimeByTask: {
-					"python-execution": [...BASELINE_TOOLS, "run", "check"],
+					"python-execution": BASELINE_TOOLS,
 				},
 				historical: BASELINE_TOOLS,
 			},
+			// A campaign that bypassed the runtime-arm gate must not be indistinguishable
+			// from one that passed it.
+			allowMissingRuntime: false,
 		});
 		expect(manifest.taskHashes["python-execution"]).toMatch(/^[a-f0-9]{64}$/);
 		expect(manifest.verifierBun).toMatchObject({ version: Bun.version });
 		expect(manifest.verifierBun.sha256).toMatch(/^[a-f0-9]{64}$/);
 		expect(manifest.logicalCpuCount).toBeGreaterThan(0);
+
+		const bypassed = await Bun.file(
+			await writeRuntimeBenchmarkManifest(
+				parseRuntimeBenchmarkCli([
+					`--jobs-dir=${jobsDir}`,
+					"--prefix=manifest-bypassed",
+					"--task=python-execution",
+					"--allow-missing-runtime",
+				]),
+				"2026-07-29T00:00:00.000Z",
+			),
+		).json();
+		expect(bypassed.allowMissingRuntime).toBe(true);
 	});
 
 	it("labels the historical control separately from the causal decision", () => {
@@ -744,5 +852,201 @@ describe("runtime benchmark orchestration", () => {
 			),
 		).rejects.toThrow("measurement failed");
 		expect(closed).toEqual(["process", "embedded"]);
+	});
+});
+
+// ── runtime arm preflight ────────────────────────────────────────────────────
+// Decision logic only: `runDocker` is always injected, so no test here ever
+// contacts the docker daemon. The probe language must stay non-JS — TypeScript
+// executes through the Bun adapter even with the packaged runtime absent, which
+// is how a whole campaign once measured bash fallback and reported 100% pass.
+
+const PROBE_REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+const PROBE_RUNTIME_BINARY = path.join(PROBE_REPO_ROOT, "out", "aura-elide-linux-x64", "bin", "elide");
+const PROBE_EMBEDDED_LIB = path.join(PROBE_REPO_ROOT, "out", "aura-elide-linux-x64", "lib", "libelide_embed.so");
+const PROBE_BINARY_CONTAINER_PATH = "/opt/omp/src/out/aura-elide-linux-x64/bin/elide";
+const PROBE_LIBRARY_CONTAINER_PATH = "/opt/omp/src/out/aura-elide-linux-x64/lib/libelide_embed.so";
+
+function dockerStub(overrides: { build?: Partial<DockerRunResult>; run?: Partial<DockerRunResult> } = {}): {
+	calls: string[][];
+	runDocker: (args: string[]) => Promise<DockerRunResult>;
+} {
+	const calls: string[][] = [];
+	return {
+		calls,
+		runDocker: async (args: string[]) => {
+			calls.push(args);
+			if (args[0] === "build") {
+				return { exitCode: 0, stdout: "sha256:probe-image\n", stderr: "", ...overrides.build };
+			}
+			if (args[0] === "run") {
+				return { exitCode: 0, stdout: `${RUNTIME_ARM_PROBE_SENTINEL}\n`, stderr: "", ...overrides.run };
+			}
+			return { exitCode: 0, stdout: "", stderr: "" };
+		},
+	};
+}
+
+function probeScript(calls: string[][]): string {
+	const run = calls.find(args => args[0] === "run");
+	if (!run) throw new Error("the preflight never issued a docker run");
+	return run.at(-1) ?? "";
+}
+
+describe("runtime arm preflight", () => {
+	it("skips the probe entirely when no runtime artifacts are injected", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({ taskRoot: "/tmp/tasks", runDocker: docker.runDocker });
+
+		expect(docker.calls).toEqual([]);
+	});
+
+	it("executes the injected artifacts inside the existing task image when a runtime is supplied", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		});
+
+		expect(docker.calls[0]).toEqual(["build", "--quiet", path.join("/tmp/tasks", "python-execution", "environment")]);
+		const run = docker.calls.find(args => args[0] === "run");
+		expect(run).toBeDefined();
+		expect(run).toContain(`${PROBE_REPO_ROOT}:/opt/omp/src:ro`);
+		expect(run).toContain("sha256:probe-image");
+		// The probe must prove the *injected* artifacts run, so it cannot reach the
+		// network to acquire a runtime, and it needs a writable HOME to be believed.
+		expect(run?.join(" ")).toContain("--network none");
+		expect(run?.join(" ")).toContain("--env HOME=/tmp");
+		expect(probeScript(docker.calls)).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(probeScript(docker.calls)).toContain(PROBE_LIBRARY_CONTAINER_PATH);
+		// An absent artifact must say which one, not just fail an anonymous `test`.
+		expect(probeScript(docker.calls)).toContain(
+			`missing or non-executable process binary: ${PROBE_BINARY_CONTAINER_PATH}`,
+		);
+		expect(probeScript(docker.calls)).toContain(
+			`missing or unreadable embedded library: ${PROBE_LIBRARY_CONTAINER_PATH}`,
+		);
+		expect(docker.calls.at(-1)).toEqual(["image", "rm", "--force", "sha256:probe-image"]);
+	});
+
+	it("fails the campaign naming the artifact path when the probe exits non-zero", async () => {
+		const docker = dockerStub({ run: { exitCode: 1, stderr: "bash: elide: No such file or directory" } });
+
+		const failure = await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		}).then(
+			() => null,
+			(error: unknown) => error as Error,
+		);
+
+		expect(failure).not.toBeNull();
+		expect(failure?.message).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(failure?.message).toContain(PROBE_LIBRARY_CONTAINER_PATH);
+		expect(failure?.message).toContain("bash: elide: No such file or directory");
+	});
+
+	it("fails the campaign when the probe prints something other than the sentinel", async () => {
+		const docker = dockerStub({ run: { exitCode: 0, stdout: "hello from bash fallback\n" } });
+
+		const failure = await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		}).then(
+			() => null,
+			(error: unknown) => error as Error,
+		);
+
+		expect(failure).not.toBeNull();
+		expect(failure?.message).toContain(RUNTIME_ARM_PROBE_SENTINEL);
+		expect(failure?.message).toContain("hello from bash fallback");
+		expect(failure?.message).toContain(PROBE_BINARY_CONTAINER_PATH);
+	});
+
+	// `test -r` is not enough. Under `AURA_RUNTIME_ADAPTER=auto` a present-but-incompatible
+	// library is still routed to the embedded endpoint (`selected.ts` picks embedded whenever
+	// `embeddedLibraryPath` is set, and `embedded.ts` sets it in the broken branch too), so an
+	// ABI or schema mismatch fails every runtime call and drops the agent onto bash.
+	it("rejects a present but unloadable embedded library", async () => {
+		const docker = dockerStub({
+			run: { exitCode: 1, stderr: "AssertionError: abi 2" },
+		});
+
+		const failure = await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		}).then(
+			() => null,
+			(error: unknown) => error as Error,
+		);
+
+		expect(probeScript(docker.calls)).toContain(`ctypes.CDLL('${PROBE_LIBRARY_CONTAINER_PATH}')`);
+		expect(probeScript(docker.calls)).toContain(`== ${EMBEDDED_RUNTIME_ABI_VERSION}`);
+		expect(probeScript(docker.calls)).toContain(EMBEDDED_RUNTIME_SCHEMA_SHA256);
+		expect(failure).not.toBeNull();
+		expect(failure?.message).toContain(PROBE_LIBRARY_CONTAINER_PATH);
+		expect(failure?.message).toContain("AssertionError: abi 2");
+	});
+
+	it("omits the library-load step when only a process binary is injected", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			runDocker: docker.runDocker,
+		});
+
+		const script = probeScript(docker.calls);
+		expect(script).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(script).not.toContain("ctypes");
+		expect(script).not.toContain(PROBE_LIBRARY_CONTAINER_PATH);
+	});
+
+	it("downgrades the failure to a warning under --allow-missing-runtime", async () => {
+		const docker = dockerStub({ run: { exitCode: 1, stderr: "no such file" } });
+		const warnings: string[] = [];
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+			allowMissingRuntime: true,
+			warn: message => warnings.push(message),
+		});
+
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain(PROBE_BINARY_CONTAINER_PATH);
+		expect(parseRuntimeBenchmarkCli([]).allowMissingRuntime).toBe(false);
+		expect(parseRuntimeBenchmarkCli(["--allow-missing-runtime"]).allowMissingRuntime).toBe(true);
+	});
+
+	it("probes a non-JavaScript language so the Bun adapter cannot mask a missing runtime", async () => {
+		const docker = dockerStub();
+
+		await smokeRuntimeArmExecution({
+			taskRoot: "/tmp/tasks",
+			runtimeBinary: PROBE_RUNTIME_BINARY,
+			embeddedLib: PROBE_EMBEDDED_LIB,
+			runDocker: docker.runDocker,
+		});
+
+		const script = probeScript(docker.calls);
+		expect(script).toContain("-l python");
+		expect(script).toContain(".py");
+		expect(script).not.toContain(BENCHMARK_BUN_CONTAINER_PATH);
+		expect(script).not.toContain(".ts");
+		expect(script).not.toMatch(/\b(ts|typescript|javascript|bun|node)\b/i);
 	});
 });

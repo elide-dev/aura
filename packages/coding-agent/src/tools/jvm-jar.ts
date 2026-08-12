@@ -1,10 +1,12 @@
+import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import jvmJarDescription from "../prompts/tools/jvm-jar.md" with { type: "text" };
-import { execResultFailed, formatExecResult } from "../runtime/format";
+import { execResultFailed, formatExecResult, type RuntimeErrorDetails } from "../runtime/format";
 import type { RuntimeJvmResult } from "../runtime/protocol";
 import type { ToolSession } from ".";
-import { jvmLanguage, requireRuntimeService } from "./jvm-common";
+import { callJvm, jvmLanguage } from "./jvm-common";
+import { enforcePlanModeWrite } from "./plan-mode-guard";
 
 const jvmJarSchema = type({
 	action: type("'create' | 'inspect'").describe("create or inspect"),
@@ -19,7 +21,7 @@ const jvmJarSchema = type({
 
 export type JvmJarToolParams = typeof jvmJarSchema.infer;
 
-export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResult> {
+export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResult | RuntimeErrorDetails> {
 	readonly name = "jvm_jar";
 	readonly approval = "exec" as const;
 	readonly label = "JVM Jar";
@@ -40,14 +42,28 @@ export class JvmJarTool implements AgentTool<typeof jvmJarSchema, RuntimeJvmResu
 		_toolCallId: string,
 		params: JvmJarToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeJvmResult>> {
+	): Promise<AgentToolResult<RuntimeJvmResult | RuntimeErrorDetails>> {
 		const { action, ...rest } = params;
+		// `create` lands a JAR in the working tree, so it is a write and plan mode
+		// owns the decision — same guard `write`/`edit` call, because the runtime
+		// service on the far side of this call has no idea the session is planning.
+		// `inspect` only lists an existing archive and is left alone.
+		//
+		// Resolved first, deliberately. `output` is documented cwd-relative and the
+		// transport treats it that way (`resolveOutputDest` is a bare
+		// `path.resolve(cwd, output)`), so it understands no URL scheme: handing the
+		// guard the raw string would let `local://app.jar` claim the sandbox
+		// exemption and then be written to `<cwd>/local:/app.jar`, inside the very
+		// working tree plan mode protects. Guarding the path the transport will
+		// actually write closes that, and loses no legitimate target — a
+		// cwd-relative field cannot name the sandbox in the first place.
+		if (action === "create" && rest.output) {
+			enforcePlanModeWrite(this.session, path.resolve(this.session.cwd, rest.output), { op: "create" });
+		}
 		// The protocol's `action` is the flow selector (`jar`); create/inspect is its `mode`.
-		const result = await requireRuntimeService(this.session).jvm(
-			{ action: "jar", mode: action, ...rest, cwd: this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
-		);
+		const call = await callJvm(this.session, { action: "jar", mode: action, ...rest, cwd: this.session.cwd }, signal);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		if (result.exitCode !== 0 || result.killed) {
 			return {
 				content: [{ type: "text", text: formatExecResult(result) }],

@@ -425,26 +425,23 @@ function wrapWorker<Request, Response>(worker: Worker): EmbeddedWorkerHandle<Req
 	};
 }
 
-export function spawnEmbeddedExecutionWorker(): EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse> {
+/** Re-enters the CLI host under `hostArg` when one is active, else loads `entry` under `directArg`. */
+function spawnEmbeddedWorker<Req, Res>(hostArg: string, directArg: string, entry: URL): EmbeddedWorkerHandle<Req, Res> {
 	const hostEntry = workerHostEntry();
 	const worker = hostEntry
-		? new Worker(hostEntry, { type: "module", argv: [EMBEDDED_EXECUTION_WORKER_ARG] })
-		: new Worker(new URL("./worker-entry.ts", import.meta.url).href, {
-				type: "module",
-				argv: [EMBEDDED_DIRECT_EXECUTION_WORKER_ARG],
-			});
+		? new Worker(hostEntry, { type: "module", argv: [hostArg] })
+		: new Worker(entry.href, { type: "module", argv: [directArg] });
 	return wrapWorker(worker);
 }
 
+export function spawnEmbeddedExecutionWorker(): EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse> {
+	const entry = new URL("./worker-entry.ts", import.meta.url);
+	return spawnEmbeddedWorker(EMBEDDED_EXECUTION_WORKER_ARG, EMBEDDED_DIRECT_EXECUTION_WORKER_ARG, entry);
+}
+
 export function spawnEmbeddedControlWorker(): EmbeddedWorkerHandle<ControlWorkerRequest, ControlWorkerResponse> {
-	const hostEntry = workerHostEntry();
-	const worker = hostEntry
-		? new Worker(hostEntry, { type: "module", argv: [EMBEDDED_CONTROL_WORKER_ARG] })
-		: new Worker(new URL("./control-worker-entry.ts", import.meta.url).href, {
-				type: "module",
-				argv: [EMBEDDED_DIRECT_CONTROL_WORKER_ARG],
-			});
-	return wrapWorker(worker);
+	const entry = new URL("./control-worker-entry.ts", import.meta.url);
+	return spawnEmbeddedWorker(EMBEDDED_CONTROL_WORKER_ARG, EMBEDDED_DIRECT_CONTROL_WORKER_ARG, entry);
 }
 
 export type EmbeddedCancellationOutcome = { kind: "matched" } | { kind: "late" };
@@ -490,12 +487,88 @@ const DEFAULT_WORKER_FACTORIES: EmbeddedWorkerFactories = {
 	createControlWorker: spawnEmbeddedControlWorker,
 };
 
-export class EmbeddedWorkerHost {
-	readonly #execution: EmbeddedWorkerHandle<ExecutionWorkerRequest, ExecutionWorkerResponse>;
-	readonly #control: EmbeddedWorkerHandle<ControlWorkerRequest, ControlWorkerResponse>;
-	readonly #executionPending = new Map<number, PendingResponse<ExecutionWorkerResponse>>();
-	readonly #controlPending = new Map<number, PendingResponse<ControlWorkerResponse>>();
+/** The one response shape both worker protocols share; a channel settles it as a rejection. */
+type WorkerErrorResponse = { id: number; type: "error"; error: EmbeddedWorkerError };
+
+function isWorkerErrorResponse(response: { id: number; type: string }): response is WorkerErrorResponse {
+	return response.type === "error";
+}
+
+interface WorkerChannelHandlers<Response> {
+	/** Runs for a response that matched a pending request, just before that request settles. */
+	settled?(response: Response): void;
+	/** The worker raised an error event. */
+	failed(error: Error): void;
+	/** The worker exited, expectedly or not — the owner decides which. */
+	exited(): void;
+}
+
+/**
+ * One worker handle plus the requests awaiting its responses.
+ *
+ * Its owner mints the request ids — they stay unique across every channel the owner holds
+ * — and keeps all failure policy: a channel decides nothing, it only routes a response back
+ * to the request that asked for it and hands every worker event to the owner's handlers.
+ */
+class WorkerRequestChannel<Request extends { id: number }, Response extends { id: number; type: string }> {
+	readonly #worker: EmbeddedWorkerHandle<Request, Response>;
+	readonly #pending = new Map<number, PendingResponse<Response>>();
 	readonly #unsubscribers: Array<() => void> = [];
+
+	constructor(worker: EmbeddedWorkerHandle<Request, Response>) {
+		this.#worker = worker;
+	}
+
+	/** Subscribes to every event this worker raises. Call once, before the first send. */
+	listen(handlers: WorkerChannelHandlers<Response>): void {
+		this.#unsubscribers.push(
+			this.#worker.onMessage(response => this.#settle(response, handlers)),
+			this.#worker.onError(error => handlers.failed(error)),
+			this.#worker.onExit(() => handlers.exited()),
+		);
+	}
+
+	/** Records `message` as pending and hands it to the worker; a throwing send leaves nothing pending. */
+	send(message: Request, transfer: Bun.Transferable[] = []): Promise<Response> {
+		const pending = Promise.withResolvers<Response>();
+		this.#pending.set(message.id, pending);
+		try {
+			this.#worker.send(message, transfer);
+		} catch (error) {
+			this.#pending.delete(message.id);
+			throw error;
+		}
+		return pending.promise;
+	}
+
+	/** Rejects every pending request; responses arriving afterwards find nothing to settle. */
+	failAll(error: unknown): void {
+		for (const pending of this.#pending.values()) pending.reject(error);
+		this.#pending.clear();
+	}
+
+	/** Drops every subscription `listen` installed. */
+	dispose(): void {
+		for (const unsubscribe of this.#unsubscribers.splice(0)) unsubscribe();
+	}
+
+	terminate(): Promise<void> {
+		return this.#worker.terminate();
+	}
+
+	#settle(response: Response, handlers: WorkerChannelHandlers<Response>): void {
+		const pending = this.#pending.get(response.id);
+		if (!pending) return;
+		this.#pending.delete(response.id);
+		handlers.settled?.(response);
+		if (isWorkerErrorResponse(response)) pending.reject(restoredError(response.error));
+		else pending.resolve(response);
+	}
+}
+
+export class EmbeddedWorkerHost {
+	readonly #execution: WorkerRequestChannel<ExecutionWorkerRequest, ExecutionWorkerResponse>;
+	readonly #control: WorkerRequestChannel<ControlWorkerRequest, ControlWorkerResponse>;
 	readonly #lifecycleOperations = new Set<Promise<void>>();
 	#nextId = 0;
 	#handle: bigint | undefined;
@@ -510,25 +583,29 @@ export class EmbeddedWorkerHost {
 	#expectedControlExit = false;
 
 	constructor(factories: EmbeddedWorkerFactories = DEFAULT_WORKER_FACTORIES) {
-		this.#execution = factories.createExecutionWorker();
+		this.#execution = new WorkerRequestChannel(factories.createExecutionWorker());
 		try {
-			this.#control = factories.createControlWorker();
+			this.#control = new WorkerRequestChannel(factories.createControlWorker());
 		} catch (error) {
 			void this.#execution.terminate();
 			throw error;
 		}
-		this.#unsubscribers.push(
-			this.#execution.onMessage(message => this.#settleExecution(message)),
-			this.#control.onMessage(message => this.#settleControl(message)),
-			this.#execution.onError(error => this.#workerFailed("execution worker failed", error)),
-			this.#control.onError(error => this.#workerFailed("control worker failed", error)),
-			this.#execution.onExit(() => {
+		this.#execution.listen({
+			failed: error => this.#workerFailed("execution worker failed", error),
+			exited: () => {
 				if (!this.#terminating) this.#workerFailed("execution worker exited");
-			}),
-			this.#control.onExit(() => {
+			},
+		});
+		this.#control.listen({
+			// An acknowledged shutdown makes the control worker's exit expected, not a crash.
+			settled: response => {
+				if (response.type === "shutdown-complete") this.#expectedControlExit = true;
+			},
+			failed: error => this.#workerFailed("control worker failed", error),
+			exited: () => {
 				if (!this.#terminating && !this.#expectedControlExit) this.#workerFailed("control worker exited");
-			}),
-		);
+			},
+		});
 	}
 
 	async probe(): Promise<void> {
@@ -811,48 +888,27 @@ export class EmbeddedWorkerHost {
 		message: ExecutionWorkerRequest,
 		transfer: Bun.Transferable[] = [],
 	): Promise<ExecutionWorkerResponse> {
-		if (this.#failure) return Promise.reject(this.#hostFailure());
-		const pending = Promise.withResolvers<ExecutionWorkerResponse>();
-		this.#executionPending.set(message.id, pending);
-		try {
-			this.#execution.send(message, transfer);
-		} catch (error) {
-			this.#executionPending.delete(message.id);
-			this.#workerFailed("execution worker send failed", error);
-			pending.reject(this.#hostFailure());
-		}
-		return pending.promise;
+		return this.#send(this.#execution, "execution worker", message, transfer);
 	}
 
 	#sendControl(message: ControlWorkerRequest, transfer: Bun.Transferable[] = []): Promise<ControlWorkerResponse> {
+		return this.#send(this.#control, "control worker", message, transfer);
+	}
+
+	/** Refuses new work once the host has failed, and treats a throwing send as a worker fault. */
+	#send<Request extends { id: number }, Response extends { id: number; type: string }>(
+		channel: WorkerRequestChannel<Request, Response>,
+		label: string,
+		message: Request,
+		transfer: Bun.Transferable[],
+	): Promise<Response> {
 		if (this.#failure) return Promise.reject(this.#hostFailure());
-		const pending = Promise.withResolvers<ControlWorkerResponse>();
-		this.#controlPending.set(message.id, pending);
 		try {
-			this.#control.send(message, transfer);
+			return channel.send(message, transfer);
 		} catch (error) {
-			this.#controlPending.delete(message.id);
-			this.#workerFailed("control worker send failed", error);
-			pending.reject(this.#hostFailure());
+			this.#workerFailed(`${label} send failed`, error);
+			return Promise.reject(this.#hostFailure());
 		}
-		return pending.promise;
-	}
-
-	#settleExecution(response: ExecutionWorkerResponse): void {
-		const pending = this.#executionPending.get(response.id);
-		if (!pending) return;
-		this.#executionPending.delete(response.id);
-		if (response.type === "error") pending.reject(restoredError(response.error));
-		else pending.resolve(response);
-	}
-
-	#settleControl(response: ControlWorkerResponse): void {
-		const pending = this.#controlPending.get(response.id);
-		if (!pending) return;
-		this.#controlPending.delete(response.id);
-		if (response.type === "shutdown-complete") this.#expectedControlExit = true;
-		if (response.type === "error") pending.reject(restoredError(response.error));
-		else pending.resolve(response);
 	}
 
 	#workerFailed(message: string, cause?: unknown): void {
@@ -864,10 +920,8 @@ export class EmbeddedWorkerHost {
 		this.#handle = undefined;
 		this.#loadedLibraryPath = undefined;
 		const rejection = this.#failure;
-		for (const pending of this.#executionPending.values()) pending.reject(rejection);
-		for (const pending of this.#controlPending.values()) pending.reject(rejection);
-		this.#executionPending.clear();
-		this.#controlPending.clear();
+		this.#execution.failAll(rejection);
+		this.#control.failAll(rejection);
 		void this.#terminateWorkers();
 	}
 
@@ -913,11 +967,10 @@ export class EmbeddedWorkerHost {
 		this.#terminating = true;
 		const rejection =
 			this.#failure ?? new RuntimeRpcError("internal", "Embedded runtime worker host terminated during shutdown.");
-		for (const pending of this.#executionPending.values()) pending.reject(rejection);
-		for (const pending of this.#controlPending.values()) pending.reject(rejection);
-		this.#executionPending.clear();
-		this.#controlPending.clear();
-		for (const unsubscribe of this.#unsubscribers.splice(0)) unsubscribe();
+		this.#execution.failAll(rejection);
+		this.#control.failAll(rejection);
+		this.#execution.dispose();
+		this.#control.dispose();
 		const terminated = Promise.withResolvers<void>();
 		this.#terminationPromise = terminated.promise;
 		void (async () => {

@@ -1,6 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+	EMBEDDED_RUNTIME_ABI_VERSION,
+	EMBEDDED_RUNTIME_SCHEMA_SHA256,
+} from "../../coding-agent/src/runtime/embedded/schema";
+import { SOURCE_SRC_MOUNT } from "./runner";
 
 export type RuntimeCapabilityGroup = "execution" | "project" | "debugging" | "profiling" | "jvm";
 
@@ -270,7 +275,29 @@ async function installBenchmarkBun(environmentPath: string): Promise<void> {
 	await fs.chmod(destination, 0o555);
 }
 
-async function runDocker(args: string[]): Promise<string> {
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+
+/**
+ * Container path of a repository artifact under the `--install=source` bind
+ * mount. Injected runtime artifacts must live inside the repository because
+ * that read-only mount is all a task container sees of the host.
+ */
+export function sourceMountedRuntimePath(hostPath: string): string {
+	const relative = path.relative(REPO_ROOT, path.resolve(hostPath));
+	if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+		throw new Error(`Runtime benchmark artifact must be inside the source-mounted repository: ${hostPath}`);
+	}
+	return path.posix.join(SOURCE_SRC_MOUNT, ...relative.split(path.sep));
+}
+
+/** Raw docker outcome. The runtime-arm preflight inspects failures rather than only throwing on them. */
+export interface DockerRunResult {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}
+
+export async function spawnDocker(args: string[]): Promise<DockerRunResult> {
 	const proc = Bun.spawn(["docker", ...args], {
 		stdout: "pipe",
 		stderr: "pipe",
@@ -280,6 +307,11 @@ async function runDocker(args: string[]): Promise<string> {
 		new Response(proc.stderr).text(),
 		proc.exited,
 	]);
+	return { exitCode, stdout, stderr };
+}
+
+async function runDocker(args: string[]): Promise<string> {
+	const { exitCode, stdout, stderr } = await spawnDocker(args);
 	if (exitCode !== 0) {
 		throw new Error(`docker ${args[0]} failed (${exitCode}): ${stderr.trim() || stdout.trim()}`);
 	}
@@ -319,6 +351,178 @@ export async function smokeTypeScriptTaskVerifier(root: string): Promise<void> {
 	} finally {
 		if (image !== "") await runDocker(["image", "rm", "--force", image]).catch(() => undefined);
 		await fs.rm(smokeRoot, { recursive: true, force: true });
+	}
+}
+
+// ── runtime arm preflight ────────────────────────────────────────────────────
+// A campaign whose runtime artifacts never reached the task containers once
+// measured plain bash and reported 100% pass (docs/aura/ACTIONS_CONSOLIDATE.md).
+// This probe is the gate that makes that failure loud: it executes a language
+// the fallback cannot serve, through the very artifacts the runtime arm injects,
+// inside the very image the tasks run in.
+
+/**
+ * What the probe must print. Deliberately distinctive: no shell fallback, and no
+ * runtime error path, produces this string by accident. Keep in sync with
+ * {@link RUNTIME_ARM_PROBE_SOURCE} — `6 * 7` is the `:42` suffix.
+ */
+export const RUNTIME_ARM_PROBE_SENTINEL = "aura-runtime-arm-probe:42";
+
+/**
+ * Python, never TypeScript: TS/JS route to the Bun adapter and succeed even when
+ * the packaged runtime is entirely absent (pinned by the adapter-selection matrix
+ * in `packages/coding-agent/test/runtime-embedded-endpoint.test.ts`), so a TS probe
+ * cannot distinguish an injected runtime from a missing one. Python only executes
+ * through Elide, which is exactly the artifact under test.
+ *
+ * Single-quote free so it embeds in the single-quoted shell literal below.
+ */
+const RUNTIME_ARM_PROBE_SOURCE = `print("aura-runtime-arm-probe:" + str(6 * 7))`;
+
+const RUNTIME_ARM_PROBE_GUEST_FILE = "/tmp/aura-runtime-arm-probe.py";
+
+export interface RuntimeArmProbeOptions {
+	/** Root of the materialized task tree; the probe reuses the `python-execution` task image. */
+	taskRoot: string;
+	/** Host path of the packaged process binary injected as `AURA_RUNTIME_BIN`. */
+	runtimeBinary?: string;
+	/** Host path of the packaged embedded library injected as `AURA_RUNTIME_EMBEDDED_LIB`. */
+	embeddedLib?: string;
+	/** Injected so the decision logic is testable without a docker daemon. */
+	runDocker: (args: string[]) => Promise<DockerRunResult>;
+	/** `--allow-missing-runtime`: report the failure instead of aborting the campaign. */
+	allowMissingRuntime?: boolean;
+	warn?: (message: string) => void;
+}
+
+/**
+ * A `test` that says what it was looking for: an anonymous failed `test` would
+ * tell the operator only that something, somewhere, was missing.
+ */
+function probeGuard(check: "-x" | "-r", artifactPath: string, missing: string): string {
+	return `test ${check} '${artifactPath}' || { echo "${missing}: ${artifactPath}" >&2; exit 1; }`;
+}
+
+/**
+ * dlopen the embedded library and check the fingerprints the FFI bindings check
+ * (`packages/coding-agent/src/runtime/embedded/abi.ts:176-182` and `:358-366`).
+ *
+ * Readability is not enough. The runtime arm launches with
+ * `AURA_RUNTIME_ADAPTER=auto`, and under auto a *present but incompatible* library
+ * is still routed to the embedded endpoint: `transport/selected.ts` picks embedded
+ * whenever `embeddedLibraryPath` is set, and `transport/embedded.ts` sets it in the
+ * broken branch too (`available: false`). So an ABI or schema-hash mismatch would
+ * fail every runtime call and drop the agent onto bash with `test -r` still green —
+ * the exact failure class this gate exists to prevent.
+ *
+ * CPython is only the dlopen harness here (the task image already installs it);
+ * guest execution is still proved by Elide itself in the step below.
+ */
+function probeEmbeddedLoad(libraryPath: string): string {
+	const load = [
+		"import ctypes",
+		`lib = ctypes.CDLL('${libraryPath}')`,
+		"lib.elide_embed_abi_version.restype = ctypes.c_uint32",
+		"lib.elide_embed_schema_hash.restype = ctypes.c_char_p",
+		`assert lib.elide_embed_abi_version() == ${EMBEDDED_RUNTIME_ABI_VERSION}, 'abi ' + str(lib.elide_embed_abi_version())`,
+		`assert lib.elide_embed_schema_hash().decode() == '${EMBEDDED_RUNTIME_SCHEMA_SHA256}', 'schema ' + lib.elide_embed_schema_hash().decode()`,
+	].join("; ");
+	const missing = `embedded library did not load as ABI v${EMBEDDED_RUNTIME_ABI_VERSION} with the expected request schema`;
+	return `python3 -c "${load}" || { echo "${missing}: ${libraryPath}" >&2; exit 1; }`;
+}
+
+/** The command the probe runs inside the task container. Mirrors the process adapter's own run argv. */
+function runtimeArmProbeScript(binaryPath: string, libraryPath: string | undefined): string {
+	const guards = [probeGuard("-x", binaryPath, "missing or non-executable process binary")];
+	if (libraryPath !== undefined) {
+		guards.push(probeGuard("-r", libraryPath, "missing or unreadable embedded library"));
+		guards.push(probeEmbeddedLoad(libraryPath));
+	}
+	return [
+		"set -eu",
+		...guards,
+		`printf '%s\\n' '${RUNTIME_ARM_PROBE_SOURCE}' > '${RUNTIME_ARM_PROBE_GUEST_FILE}'`,
+		`'${binaryPath}' run --error-format=plain --no-color -l python '${RUNTIME_ARM_PROBE_GUEST_FILE}'`,
+	].join("\n");
+}
+
+/**
+ * Prove the runtime arm can actually run guest code before spending a campaign on
+ * it: build the standard task image, mount the repository the way `--install=source`
+ * does, and execute Python through the injected artifacts at their container paths.
+ *
+ * No-ops when no artifacts are injected — a baseline-only run has no runtime arm to
+ * verify. Any other outcome (build failure aside) names the artifact paths involved,
+ * and aborts unless `allowMissingRuntime` downgrades it to a warning.
+ */
+export async function smokeRuntimeArmExecution(opts: RuntimeArmProbeOptions): Promise<void> {
+	if (!opts.runtimeBinary && !opts.embeddedLib) return;
+	const warn = opts.warn ?? ((message: string) => void process.stderr.write(`warning: ${message}\n`));
+	const binaryPath = opts.runtimeBinary === undefined ? undefined : sourceMountedRuntimePath(opts.runtimeBinary);
+	const libraryPath = opts.embeddedLib === undefined ? undefined : sourceMountedRuntimePath(opts.embeddedLib);
+	const artifacts = [
+		binaryPath === undefined ? "process binary (none supplied)" : `process binary ${binaryPath}`,
+		libraryPath === undefined ? "embedded library (none supplied)" : `embedded library ${libraryPath}`,
+	].join(", ");
+	const fail = (detail: string): void => {
+		const message = `Runtime arm preflight failed: ${detail} [${artifacts}]. The runtime arm would measure bash fallback; pass --allow-missing-runtime only if that is what you intend to measure.`;
+		if (opts.allowMissingRuntime) {
+			warn(message);
+			return;
+		}
+		throw new Error(message);
+	};
+	if (binaryPath === undefined) {
+		fail("no packaged process binary accompanies the injected embedded library");
+		return;
+	}
+
+	const environment = path.join(opts.taskRoot, "python-execution", "environment");
+	const built = await opts.runDocker(["build", "--quiet", environment]);
+	if (built.exitCode !== 0) {
+		throw new Error(
+			`Runtime arm preflight could not build the task image from ${environment}: ${built.stderr.trim() || built.stdout.trim()}`,
+		);
+	}
+	const image = built.stdout.trim().split("\n").at(-1) ?? "";
+	if (image === "") throw new Error("Runtime arm preflight: docker build returned no image identifier");
+	try {
+		const probe = await opts.runDocker([
+			"run",
+			"--rm",
+			// A benchmark must never reach the network to acquire its own subject:
+			// the probe passes only if the artifacts already mounted below can run.
+			"--network",
+			"none",
+			"--user",
+			`${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
+			// That uid has no passwd entry in the image, so name a writable home
+			// rather than leaving HOME unset for whatever the runtime caches.
+			"--env",
+			"HOME=/tmp",
+			"--volume",
+			`${REPO_ROOT}:${SOURCE_SRC_MOUNT}:ro`,
+			image,
+			"bash",
+			"-c",
+			runtimeArmProbeScript(binaryPath, libraryPath),
+		]);
+		if (probe.exitCode !== 0) {
+			fail(
+				`the injected runtime could not execute Python inside the task container (exit ${probe.exitCode}): ${probe.stderr.trim() || probe.stdout.trim()}`,
+			);
+			return;
+		}
+		// `includes`, not equality: a runtime banner on stdout must not fail a working
+		// runtime, and nothing in the fallback path can produce the sentinel at all.
+		const printed = probe.stdout.trim();
+		if (!printed.includes(RUNTIME_ARM_PROBE_SENTINEL)) {
+			fail(
+				`the Python probe printed ${JSON.stringify(printed)} instead of ${JSON.stringify(RUNTIME_ARM_PROBE_SENTINEL)}`,
+			);
+		}
+	} finally {
+		await opts.runDocker(["image", "rm", "--force", image]).catch(() => undefined);
 	}
 }
 

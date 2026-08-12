@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { isEmbeddedPythonEnabled } from "../config/settings";
 import runtimeInsightsDescriptionTemplate from "../prompts/tools/runtime-insights.md" with { type: "text" };
-import { execResultFailed, formatExecResult } from "../runtime/format";
+import { callRuntime, execResultFailed, formatExecResult, type RuntimeErrorDetails } from "../runtime/format";
 import { type RuntimeExecResult, RuntimeRpcError, resolveRunTarget } from "../runtime/protocol";
 import type { ToolSession } from ".";
 
@@ -33,7 +33,9 @@ const runtimeInsightsSchemaWithoutPython = type({
 
 export type RuntimeInsightsToolParams = typeof runtimeInsightsSchema.infer;
 
-export class RuntimeInsightsTool implements AgentTool<typeof runtimeInsightsSchema, RuntimeExecResult> {
+export class RuntimeInsightsTool
+	implements AgentTool<typeof runtimeInsightsSchema, RuntimeExecResult | RuntimeErrorDetails>
+{
 	readonly name = "insights";
 	readonly approval = "exec" as const;
 	readonly label = "Insights";
@@ -62,7 +64,7 @@ export class RuntimeInsightsTool implements AgentTool<typeof runtimeInsightsSche
 		_toolCallId: string,
 		params: RuntimeInsightsToolParams,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<RuntimeExecResult>> {
+	): Promise<AgentToolResult<RuntimeExecResult | RuntimeErrorDetails>> {
 		const service = this.session.getRuntimeService?.();
 		if (!service)
 			throw new Error(
@@ -75,11 +77,17 @@ export class RuntimeInsightsTool implements AgentTool<typeof runtimeInsightsSche
 				"Python runtime instrumentation is disabled (python.enabled = false or python.embedded = false).",
 			);
 		}
-		const result = await service.insights(
-			{ ...params, cwd: params.cwd ?? this.session.cwd },
-			signal,
-			this.session.getSessionId?.() ?? undefined,
+		const call = await callRuntime(
+			() =>
+				service.insights(
+					{ ...params, cwd: params.cwd ?? this.session.cwd },
+					signal,
+					this.session.getSessionId?.() ?? undefined,
+				),
+			{ root: this.session.cwd, service, scope: this.session.runtimeServiceScope },
 		);
+		if (!call.ok) return call.result;
+		const result = call.value;
 		return {
 			content: [{ type: "text", text: formatExecResult(result) }],
 			details: result,

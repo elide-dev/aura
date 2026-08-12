@@ -8,7 +8,7 @@ import { EMBEDDED_RUNTIME_ABI_VERSION, EMBEDDED_RUNTIME_SCHEMA_SHA256 } from "..
 import { RuntimeService } from "../src/runtime/service";
 import { SelectedRuntimeEndpoint } from "../src/runtime/transport/selected";
 import type { ToolSession } from "../src/tools";
-import { RuntimeRunTool } from "../src/tools/runtime-run";
+import { RuntimeProfileTool } from "../src/tools/runtime-profile";
 
 const embeddedLib = process.env.AURA_RUNTIME_EMBEDDED_LIB;
 const applicable = embeddedLib !== undefined;
@@ -114,7 +114,7 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 		expect(python).toMatchObject({ exitCode: 0, stdout: "inline-python\n", stderr: "", killed: false });
 	}, 120_000);
 
-	test("runs through the source run tool with isolated embedded settings", async () => {
+	test("runs through a source runtime tool with isolated embedded settings", async () => {
 		const settings = Settings.isolated({
 			"runtime.enabled": true,
 			"runtime.adapter": "embedded",
@@ -122,18 +122,19 @@ describe.skipIf(!applicable).serial("runtime integration (real embedded library)
 			"runtime.path": processPath,
 			"runtime.autoDownload": false,
 		});
-		const tool = RuntimeRunTool.createIf({
+		const tool = RuntimeProfileTool.createIf({
 			cwd: process.cwd(),
 			settings,
 			getRuntimeService: () => service,
 		} as unknown as ToolSession);
-		if (!tool) throw new Error("runtime run tool was disabled by isolated settings");
+		if (!tool) throw new Error("runtime profile tool was disabled by isolated settings");
 		const result = await tool.execute(
 			"task-5-source-tool-smoke",
-			{ code: "console.log('source-tool-smoke')", language: "js" },
+			{ mode: "cpusampling", code: "console.log('source-tool-smoke')", language: "js" },
 			new AbortController().signal,
 		);
-		expect(result.content).toEqual([{ type: "text", text: "source-tool-smoke" }]);
+		const text = result.content.find(block => block.type === "text")?.text ?? "";
+		expect(text).toContain("source-tool-smoke");
 		expect(result.details).toMatchObject({ exitCode: 0, killed: false });
 	}, 120_000);
 

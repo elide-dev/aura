@@ -11,8 +11,10 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { Container, type TUI } from "@oh-my-pi/pi-tui";
 import { CONFIG_DIR_NAME, removeWithRetries } from "@oh-my-pi/pi-utils";
 
-const PROJECT_OPTION = "This project (.omp/rules)";
-const GLOBAL_OPTION = "Global — all projects (~/.omp/agent/rules)";
+// Branded, matching the controller: the label must name the directory the save
+// actually writes to (`CONFIG_DIR_NAME`), not the pre-rebrand one.
+const PROJECT_OPTION = `This project (${CONFIG_DIR_NAME}/rules)`;
+const GLOBAL_OPTION = `Global — all projects (~/${CONFIG_DIR_NAME}/agent/rules)`;
 const AMEND_OPTION = "Amend with feedback…";
 
 const usage: Usage = {

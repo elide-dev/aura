@@ -150,9 +150,7 @@ describe("system prompt tool inventory", () => {
 	it("renders runtime selection as inherent policy only for registered capabilities", async () => {
 		const runtimeTools = new Map(TOOLS);
 		for (const name of [
-			"run",
 			"eval",
-			"check",
 			"insights",
 			"profile",
 			"serve",
@@ -183,16 +181,16 @@ describe("system prompt tool inventory", () => {
 		};
 
 		const inherent = await renderWith(runtimeTools);
-		const coreTools = new Map(
-			[...runtimeTools].filter(([name]) => ["read", "bash", "run", "eval", "check"].includes(name)),
-		);
+		const coreTools = new Map([...runtimeTools].filter(([name]) => ["read", "bash", "eval"].includes(name)));
 		const core = await renderWith(coreTools);
 		const shellOnly = await renderWith(TOOLS);
 
 		expect(inherent).toContain("INHERENT CAPABILITIES");
-		expect(inherent).toContain("Direct program execution");
-		expect(inherent).toContain("Persistent exploration");
-		expect(inherent).toContain("Validation without artifacts");
+		expect(inherent).toContain("Program execution and persistent exploration across calls");
+		// `run` and `check` are retired: `eval` and `bash` carry execution, and no
+		// tool advertises artifact-free validation any more.
+		expect(inherent).not.toContain("Direct program execution");
+		expect(inherent).not.toContain("Validation without artifacts");
 		expect(inherent).not.toContain("Artifact production");
 		expect(inherent).not.toContain("Project-declared build/run guidance");
 		expect(inherent).toContain("JVM bytecode disassembly");

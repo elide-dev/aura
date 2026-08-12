@@ -1232,7 +1232,7 @@ export class CommandController {
 		this.ctx.ui.requestRender();
 
 		try {
-			const result = await this.ctx.session.executePythonShell(
+			const result = await this.ctx.session.executePython(
 				code,
 				chunk => {
 					if (this.ctx.pythonComponent) {

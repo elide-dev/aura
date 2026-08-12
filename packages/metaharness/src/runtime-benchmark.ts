@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	EmbeddedRuntimeEndpoint,
+	type LocalEndpointOptions,
 	LocalRuntimeEndpoint,
 	type RuntimeExecResult,
 	RuntimeRpcError,
@@ -11,21 +12,22 @@ import {
 	RuntimeService,
 } from "../../coding-agent/src/runtime";
 import { isRegularFile as isRuntimeRegularFile, runtimeBinaryNames } from "../../coding-agent/src/runtime/resolve";
-import { type JobInfo, readJobResult, readTrials, SOURCE_SRC_MOUNT, type TrialStatus } from "./runner";
+import { type JobInfo, readJobResult, readTrials, type TrialStatus } from "./runner";
 import {
 	BENCHMARK_BUN_VERSION,
 	materializeRuntimeTasks,
 	RUNTIME_TASKS,
 	type RuntimeCapabilityGroup,
+	smokeRuntimeArmExecution,
 	smokeTypeScriptTaskVerifier,
+	sourceMountedRuntimePath,
+	spawnDocker,
 } from "./runtime-benchmark-suite";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 const RUNTIME_TOOL_NAMES: Record<string, true> = {
-	run: true,
-	check: true,
 	insights: true,
 	profile: true,
 	serve: true,
@@ -36,7 +38,6 @@ const RUNTIME_TOOL_NAMES: Record<string, true> = {
 };
 
 export const BASELINE_TOOLS = ["read", "write", "edit", "bash", "grep", "glob"];
-export const ESSENTIAL_RUNTIME_TOOLS = [...BASELINE_TOOLS, "run", "check"];
 
 export type BenchmarkArm = "baseline" | "runtime" | "historical";
 
@@ -114,7 +115,10 @@ export interface RuntimeComparisonAnalysis {
 	durationRatio: ConfidenceInterval;
 	tokenRatio: ConfidenceInterval;
 	adoptionOverall: number;
-	adoptionByGroup: Record<RuntimeCapabilityGroup, number>;
+	/** Only the groups with at least one adoption-measurable task — see {@link measuresRuntimeAdoption}. */
+	adoptionByGroup: Partial<Record<RuntimeCapabilityGroup, number>>;
+	/** Trials the adoption rates are computed over. Zero means the campaign says nothing about adoption. */
+	adoptionMeasuredTrials: number;
 	verdict: "pass" | "fail" | "inconclusive";
 	reasons: string[];
 }
@@ -197,20 +201,20 @@ export interface RuntimeBenchmarkCliOptions {
 	historicalRevision: string | undefined;
 	historicalBinary: string | undefined;
 	resume: boolean;
+	/** Report an unreachable runtime arm instead of aborting the campaign. */
+	allowMissingRuntime: boolean;
 }
 
-function sourceMountedRuntimePath(hostPath: string): string {
-	const relative = path.relative(REPO_ROOT, path.resolve(hostPath));
-	if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-		throw new Error(`Runtime benchmark artifact must be inside the source-mounted repository: ${hostPath}`);
-	}
-	return path.posix.join(SOURCE_SRC_MOUNT, ...relative.split(path.sep));
-}
-
+/**
+ * The runtime arm's tool set: the baseline plus whatever discoverable runtime
+ * tool the task is actually about. `run` and `check` used to ride along in every
+ * runtime arm; with those retired, a task that names no runtime tool now differs
+ * from its baseline only in the binary under test.
+ */
 export function runtimeToolsForTask(taskId: string): string[] {
 	const task = RUNTIME_TASKS.find(candidate => candidate.id === taskId);
 	if (!task) throw new Error(`unknown runtime task: ${taskId}`);
-	return [...ESSENTIAL_RUNTIME_TOOLS, ...task.runtimeTools];
+	return [...BASELINE_TOOLS, ...task.runtimeTools];
 }
 
 export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
@@ -234,6 +238,13 @@ export function buildArmLaunches(opts: ArmLaunchOptions): ArmLaunch[] {
 				"--agent-arg=--tools",
 				`--agent-arg=${tools.join(",")}`,
 			];
+			// Categorical, artifacts or not: a benchmark never reaches for the network
+			// to acquire its own subject. A download that succeeds silently swaps the
+			// subject; one that fails (no `xz` in the task image) turns every runtime
+			// call into an error — 163 of them on one task. Without artifacts the arm
+			// then reports runtime-missing immediately instead of burning the campaign
+			// on a fetch that cannot work.
+			args.push("--env=AURA_RUNTIME_AUTO_DOWNLOAD=false");
 			if (opts.runtimeBinary || opts.embeddedLib) {
 				if (!opts.runtimeBinary || !opts.embeddedLib) {
 					throw new Error("Runtime benchmark agent launches require both process and embedded runtime artifacts.");
@@ -561,28 +572,44 @@ function bootstrapComparisons(comparisons: readonly TaskComparison[]): {
 	};
 }
 
+/**
+ * Whether a task can produce adoption evidence at all — i.e. whether its runtime
+ * arm mounts a runtime tool for the agent to adopt.
+ *
+ * With `run`/`check` retired, six of the twelve tasks mount none: their runtime
+ * arm is the baseline tool set. Counting those trials would peg the execution
+ * and project groups at 0% and cap overall adoption at 50%, so both gates would
+ * fire on every campaign no matter what the runtime arm did — a permanently
+ * "inconclusive" verdict that measures the tool inventory, not the runtime. A
+ * task with no runtime tool to adopt is absence of evidence, so it is excluded
+ * from the denominators rather than scored zero.
+ */
+export function measuresRuntimeAdoption(taskId: string): boolean {
+	return (RUNTIME_TASKS.find(candidate => candidate.id === taskId)?.runtimeTools.length ?? 0) > 0;
+}
+
 function runtimeAdoption(runtime: ArmSummary): {
 	overall: number;
-	byGroup: Record<RuntimeCapabilityGroup, number>;
+	byGroup: Partial<Record<RuntimeCapabilityGroup, number>>;
+	measuredTrials: number;
 } {
-	const counts: Record<RuntimeCapabilityGroup, { completed: number; used: number }> = {
-		execution: { completed: 0, used: 0 },
-		project: { completed: 0, used: 0 },
-		debugging: { completed: 0, used: 0 },
-		profiling: { completed: 0, used: 0 },
-		jvm: { completed: 0, used: 0 },
-	};
+	const counts = new Map<RuntimeCapabilityGroup, { completed: number; used: number }>();
+	let completed = 0;
+	let used = 0;
 	for (const task of runtime.taskMeasurements) {
-		counts[task.group].completed += task.trials.length;
-		counts[task.group].used += task.trials.filter(trial => trial.runtimeUsed).length;
+		if (!measuresRuntimeAdoption(task.taskId)) continue;
+		const count = counts.get(task.group) ?? { completed: 0, used: 0 };
+		const taskUsed = task.trials.filter(trial => trial.runtimeUsed).length;
+		count.completed += task.trials.length;
+		count.used += taskUsed;
+		counts.set(task.group, count);
+		completed += task.trials.length;
+		used += taskUsed;
 	}
 	const byGroup = Object.fromEntries(
-		Object.entries(counts).map(([group, count]) => [group, count.completed === 0 ? 0 : count.used / count.completed]),
-	) as Record<RuntimeCapabilityGroup, number>;
-	return {
-		overall: runtime.completedTrials === 0 ? 0 : runtime.runtimeTrials / runtime.completedTrials,
-		byGroup,
-	};
+		[...counts].map(([group, count]) => [group, count.completed === 0 ? 0 : count.used / count.completed]),
+	) as Partial<Record<RuntimeCapabilityGroup, number>>;
+	return { overall: completed === 0 ? 0 : used / completed, byGroup, measuredTrials: completed };
 }
 
 function newSystematicErrors(baseline: ArmSummary, runtime: ArmSummary): string[] {
@@ -644,7 +671,9 @@ export function analyzeRuntimeComparison(baseline: ArmSummary, runtime: ArmSumma
 		reasons.push(`new systematic runtime errors: ${systematicErrors.join(", ")}`);
 		establishedFailure = true;
 	}
-	if (adoption.overall < MIN_OVERALL_ADOPTION) {
+	// No adoption-measurable task in the campaign means no adoption claim either
+	// way; scoring that as 0% would report a failure the run never tested for.
+	if (adoption.measuredTrials > 0 && adoption.overall < MIN_OVERALL_ADOPTION) {
 		reasons.push(`runtime adoption ${(adoption.overall * 100).toFixed(1)}% is below 80%`);
 		unresolved = true;
 	}
@@ -661,6 +690,7 @@ export function analyzeRuntimeComparison(baseline: ArmSummary, runtime: ArmSumma
 		tokenRatio: bootstrapped.tokens,
 		adoptionOverall: adoption.overall,
 		adoptionByGroup: adoption.byGroup,
+		adoptionMeasuredTrials: adoption.measuredTrials,
 		verdict: establishedFailure ? "fail" : unresolved ? "inconclusive" : "pass",
 		reasons,
 	};
@@ -747,7 +777,7 @@ export function formatComparison(
 		`| Runtime/Bash duration | ${formatConfidenceInterval(analysis.durationRatio, "×")} |`,
 		`| Runtime/Bash tokens | ${formatConfidenceInterval(analysis.tokenRatio, "×")} |`,
 		"",
-		`Runtime adoption: ${(analysis.adoptionOverall * 100).toFixed(1)}% overall.`,
+		`Runtime adoption: ${(analysis.adoptionOverall * 100).toFixed(1)}% overall, over ${analysis.adoptionMeasuredTrials} trial(s) of tasks that mount a runtime tool.`,
 		"",
 		...Object.entries(analysis.adoptionByGroup).map(([group, rate]) => `- ${group}: ${(rate * 100).toFixed(1)}%`),
 		"",
@@ -946,9 +976,21 @@ async function runProcess(command: string[], cwd?: string): Promise<void> {
 		throw new Error(`${command.join(" ")} exited ${exitCode}: ${await new Response(proc.stderr).text()}`);
 }
 
-export async function runMicrobenchmarks(iterations: number): Promise<MicroResult[]> {
+/**
+ * Endpoint options for the host-side micro suite. It runs outside every
+ * container guard, so it carries the same policy in its own right: never fetch
+ * the subject (a downloaded release would report numbers for a *different*
+ * binary than the agent arms measure), and prefer the packaged binary under
+ * test over whatever PATH resolution turns up. Mirrors the adapter suite's
+ * process endpoint (`DEFAULT_ADAPTER_DEPENDENCIES`).
+ */
+export function microRuntimeEndpointOptions(processBinaryPath?: string): LocalEndpointOptions {
+	return { autoDownload: false, ...(processBinaryPath === undefined ? {} : { explicitPath: processBinaryPath }) };
+}
+
+export async function runMicrobenchmarks(iterations: number, processBinaryPath?: string): Promise<MicroResult[]> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-runtime-micro-"));
-	const service = new RuntimeService(new LocalRuntimeEndpoint({ autoDownload: true }));
+	const service = new RuntimeService(new LocalRuntimeEndpoint(microRuntimeEndpointOptions(processBinaryPath)));
 	try {
 		const python = Bun.which("python3");
 		const bun = Bun.which("bun");
@@ -1361,6 +1403,10 @@ export async function writeRuntimeBenchmarkManifest(
 				microIterations: opts.microIterations,
 				mode: opts.mode,
 				embeddedLib: opts.embeddedLib,
+				// Provenance for the runtime-arm gate: a campaign that bypassed it must not
+				// read as one that passed it. The flag, not an outcome — this function also
+				// runs for `--micro-only`, where no probe happens at all.
+				allowMissingRuntime: opts.allowMissingRuntime,
 				runtimeEnvironment,
 				bunVersion: Bun.version,
 				verifierBun: {
@@ -1401,6 +1447,7 @@ export function parseRuntimeBenchmarkCli(
 		historicalRevision: undefined,
 		historicalBinary: undefined,
 		resume: false,
+		allowMissingRuntime: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const [flag, inline] = argv[i].split("=", 2);
@@ -1451,6 +1498,11 @@ export function parseRuntimeBenchmarkCli(
 			case "--resume":
 				opts.resume = true;
 				break;
+			// Turns the runtime-arm preflight into a warning. Only for runs that
+			// deliberately measure the fallback: the numbers are not runtime numbers.
+			case "--allow-missing-runtime":
+				opts.allowMissingRuntime = true;
+				break;
 			case "--agent-only":
 				opts.mode = "agent";
 				break;
@@ -1489,9 +1541,22 @@ async function main(): Promise<void> {
 		process.stdout.write("Verifying generated TypeScript task image...\n");
 		await smokeTypeScriptTaskVerifier(taskRoot);
 		process.stdout.write("TypeScript task verifier smoke: passed\n");
+		const runtimeBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
+		if (runtimeBinary || opts.embeddedLib) {
+			process.stdout.write("Probing the injected runtime arm (Python) inside a task container...\n");
+			await smokeRuntimeArmExecution({
+				taskRoot,
+				runtimeBinary,
+				embeddedLib: opts.embeddedLib,
+				runDocker: spawnDocker,
+				allowMissingRuntime: opts.allowMissingRuntime,
+			});
+			process.stdout.write("Runtime arm preflight: complete\n");
+		} else {
+			process.stdout.write("Runtime arm preflight: skipped (no runtime artifacts injected)\n");
+		}
 		if (!opts.resume || !fs.existsSync(manifestPath)) await writeRuntimeBenchmarkManifest(opts, startedAt);
 		process.stdout.write(`Runtime benchmark manifest: ${manifestPath}\n`);
-		const runtimeBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
 		const launches = buildArmLaunches({ ...opts, taskRoot, runtimeBinary });
 		for (const [index, launch] of launches.entries()) {
 			const runnerArgs = armRunnerArgs(launch, opts.jobsDir, opts.resume);
@@ -1517,7 +1582,12 @@ async function main(): Promise<void> {
 		const manifestPath = await writeRuntimeBenchmarkManifest(opts, startedAt);
 		process.stdout.write(`Runtime benchmark manifest: ${manifestPath}\n`);
 	}
-	if (opts.mode !== "agent") micro = await runMicrobenchmarks(opts.microIterations);
+	if (opts.mode !== "agent") {
+		// Same derivation the adapter suite below uses, so both micro suites and the
+		// agent arms all measure the one binary the campaign is about.
+		const microBinary = opts.embeddedLib ? await packagedRuntimeBinaryForLibrary(opts.embeddedLib) : undefined;
+		micro = await runMicrobenchmarks(opts.microIterations, microBinary);
+	}
 	let adapter: AdapterMicrobenchmarkOutcome = { kind: "skipped", message: ADAPTER_MICROBENCHMARK_SKIPPED };
 	if (opts.embeddedLib && opts.mode === "agent") {
 		adapter = { kind: "skipped", message: "Adapter comparison skipped: --agent-only disables microbenchmarks." };

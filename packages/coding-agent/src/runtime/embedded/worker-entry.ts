@@ -1,31 +1,17 @@
 import { parentPort } from "node:worker_threads";
-import { consumeWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { ExecutionWorkerCore } from "./worker-core";
 import {
 	EMBEDDED_DIRECT_EXECUTION_WORKER_ARG,
-	type EmbeddedWorkerTransport,
 	type ExecutionWorkerRequest,
 	type ExecutionWorkerResponse,
 } from "./worker-protocol";
+import { createParentPortWorkerTransport } from "./worker-transport";
 
 export function startEmbeddedExecutionWorker(): void {
-	if (!parentPort) throw new Error("embedded-runtime-execution-worker: missing parentPort");
-	const port = parentPort;
-	const inbox = consumeWorkerInbox();
-	const transport: EmbeddedWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse> = {
-		send(message, transfer) {
-			port.postMessage(message, transfer ?? []);
-		},
-		onMessage(handler) {
-			if (inbox) return inbox.bind(message => handler(message as ExecutionWorkerRequest));
-			const listener = (message: unknown): void => handler(message as ExecutionWorkerRequest);
-			port.on("message", listener);
-			return () => port.off("message", listener);
-		},
-		close() {
-			port.close();
-		},
-	};
+	const transport = createParentPortWorkerTransport<ExecutionWorkerRequest, ExecutionWorkerResponse>(
+		parentPort,
+		"embedded-runtime-execution-worker",
+	);
 	new ExecutionWorkerCore(transport);
 }
 

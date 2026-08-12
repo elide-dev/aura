@@ -4,6 +4,7 @@ import {
 	type RuntimeSettingsValues,
 	resolveRuntimeEndpointOptions,
 	runtimeAdapterFromEnvironment,
+	runtimeAutoDownloadFromEnvironment,
 } from "../src/runtime";
 
 describe("runtime settings wiring", () => {
@@ -33,6 +34,35 @@ describe("runtime settings wiring", () => {
 		expect(runtimeAdapterFromEnvironment("process", { AURA_RUNTIME_ADAPTER: "" })).toBe("process");
 		expect(() => runtimeAdapterFromEnvironment("process", { AURA_RUNTIME_ADAPTER: "invalid" })).toThrow(
 			"AURA_RUNTIME_ADAPTER",
+		);
+	});
+
+	test("AURA_RUNTIME_AUTO_DOWNLOAD forces the download policy for one process", () => {
+		expect(runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: " false " })).toBe(false);
+		expect(runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: "OFF" })).toBe(false);
+		expect(runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: "0" })).toBe(false);
+		expect(runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: "no" })).toBe(false);
+		expect(runtimeAutoDownloadFromEnvironment(false, { AURA_RUNTIME_AUTO_DOWNLOAD: "true" })).toBe(true);
+		expect(runtimeAutoDownloadFromEnvironment(false, { AURA_RUNTIME_AUTO_DOWNLOAD: "1" })).toBe(true);
+		expect(runtimeAutoDownloadFromEnvironment(false, { AURA_RUNTIME_AUTO_DOWNLOAD: "Yes" })).toBe(true);
+		expect(runtimeAutoDownloadFromEnvironment(false, { AURA_RUNTIME_AUTO_DOWNLOAD: "on" })).toBe(true);
+	});
+
+	test("an unset, empty, or whitespace AURA_RUNTIME_AUTO_DOWNLOAD defers to the setting", () => {
+		expect(runtimeAutoDownloadFromEnvironment(true, {})).toBe(true);
+		expect(runtimeAutoDownloadFromEnvironment(false, {})).toBe(false);
+		expect(runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: "" })).toBe(true);
+		expect(runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: " \t " })).toBe(true);
+	});
+
+	test("an unrecognized AURA_RUNTIME_AUTO_DOWNLOAD fails loudly instead of guessing", () => {
+		expect(() => runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: "maybe" })).toThrow(
+			"AURA_RUNTIME_AUTO_DOWNLOAD",
+		);
+		// Silent coercion of a near-miss is what would let a benchmark download its
+		// own subject anyway, so the value is reported verbatim.
+		expect(() => runtimeAutoDownloadFromEnvironment(true, { AURA_RUNTIME_AUTO_DOWNLOAD: "falsey" })).toThrow(
+			'"falsey"',
 		);
 	});
 

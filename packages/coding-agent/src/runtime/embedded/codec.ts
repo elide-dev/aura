@@ -145,6 +145,12 @@ export function encodeRunRequest(requestId: bigint, invocation: EmbeddedRunInvoc
 		variable.value = entry[1];
 	}
 
+	// EngineConfig.shared / .caching / .flags are intentionally left at their
+	// capnp defaults: the embedded runtime's codec (WHIPLASH EmbeddedCodec.kt)
+	// reads engineConfig only for directories.workingDir — the other fields are
+	// never consulted, and a 4-cell shared×caching sweep measured no effect
+	// (2026-08-10, docs/aura/ACTIONS_CONSOLIDATE.md "Phase 0.5"). Do not wire
+	// them to env/settings again without a WHIPLASH-side change that reads them.
 	wireInvocation
 		._initMeta()
 		._initEngineConfig()

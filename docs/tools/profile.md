@@ -41,7 +41,7 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 ## Modes / Variants
 - **`cputracing`**: exact call tracing. Highest fidelity, highest overhead; best for short programs and precise call counts.
 - **`cpusampling`**: statistical sampling. Lower overhead; prefer it for longer runs.
-- Program source may be inline (`code`) or an existing file (`path`), as in `run`.
+- Program source may be inline (`code`) or an existing file (`path`), as in `insights`.
 
 ## Side Effects
 - Filesystem: creates and removes a temp dir for inline code; the profiled program itself may write anywhere it is permitted to.
@@ -62,4 +62,4 @@ A single text block plus `details` carrying the raw `RuntimeExecResult`.
 
 ## Notes
 - `loadMode = "discoverable"`, so `profile` is not top-level — it is reached through tool discovery rather than the always-on schema.
-- `mode` is the only required field; unlike `run`, there is no default profiler.
+- `mode` is the only required field: there is no default profiler.

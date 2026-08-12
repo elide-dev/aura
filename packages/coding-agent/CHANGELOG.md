@@ -4,38 +4,44 @@
 
 ### Breaking Changes
 
-- Removed the public `jvm_run` tool; execute Java and Kotlin through the unified `run` tool with `language`, optional `mainClass`, and the existing args/stdin/cwd controls.
+- Removed the `run` and `check` tools; `eval` and `bash` are the execution surface, and the local `$`/`$$` action now runs in the same shared CPython kernel as `eval`'s Python backend, so a `$` cell and an `eval` Python cell see the same names. `insights`, `profile`, `serve`, and the four `jvm_*` tools are unaffected. One-shot Java/Kotlin execution and managed project validation have no direct tool until the runtime eval backends land.
+- Removed the public `jvm_run` tool; `jvm_disassemble`, `jvm_format`, `jvm_jar`, and `jvm_deps` cover the JVM flows that remain.
 - Removed the `runtime_debug` tool and CDP/DAP launch protocol; use Aura's interactive `debug` tool until runtime-backed debugging is integrated there.
 
 ### Added
 
 - Added a repeatable Linux x64/glibc relocatable bundle builder that packages standalone Aura with the complete Elide process and embedded runtimes, verifies the staged and extracted layouts, and emits a tarball plus SHA-256.
-- Added explicit `engine` selection and resolved engine/language result metadata to `run`, with JavaScript, TypeScript, Python, Java, and Kotlin supported through one contract.
+- Added the `eval.jsEngine` setting, choosing which engine runs `eval`'s JavaScript cells: `bun` (default, in-process) or `runtime` (the managed runtime). No runtime JS kernel ships yet, so `runtime` currently falls back to Bun and says so in the result. `AURA_EVAL_JS_ENGINE` overrides it for one process; an unrecognized value is an error.
+- Added `aura setup runtime`, so the managed runtime can be installed on purpose instead of only downloading implicitly inside the first tool call that needs it. `--check`/`--json` are `aura runtime status` exactly — the same read-only probe, renderer, and exit code, including adapter, ABI, and schema — while the bare command installs the pinned runtime when it is missing and then re-probes to report the result. The install honors `runtime.autoDownload`, `runtime.path`, and an off-pin `runtime.version` identically to first use, because it drives the same endpoint, and it prints that endpoint's own guidance when it declines.
 
 ### Changed
 
 - Changed the default Auto-QA grievance collector to the Elide-operated `qa.elide.dev` endpoint while preserving explicit endpoint overrides.
 - Changed Aura's compact prompt and terminal-title brand mark from `π` to `☉`, with `o` retained for explicit ASCII-only symbol mode.
-- Clarified that managed `check` validates supported runtime project builds but does not replace project-declared TypeScript static typechecking.
-- Changed JavaScript and TypeScript `run` calls to use an isolated Bun child by default while keeping the embedded engine selectable; Python, Java, and Kotlin use the embedded engine.
 - Reduced persistent system and runtime tool prompt text while preserving tool-selection and safety contracts.
-- Promoted managed runtime selection and core Superpowers workflows into inherent system policy; removed their implicit skill/UI surface; kept only `run` and `check` essential; moved insights, profiling, serving, and four JVM operations behind discovery; removed redundant runtime build/advice/Javadoc tools; and added bounded per-call telemetry plus a two-task adoption/prompt-efficiency benchmark.
+- Promoted managed runtime selection and core Superpowers workflows into inherent system policy; removed their implicit skill/UI surface; moved insights, profiling, serving, and four JVM operations behind discovery; removed redundant runtime build/advice/Javadoc tools; and added bounded per-call telemetry plus a two-task adoption/prompt-efficiency benchmark.
 - Clarified that `insights` instrumentation is a plain JavaScript script using the injected `insight.on(...)` API, and added compact TypeScript reference types for its events, contexts, filters, and handlers.
-- Split Python capability controls into a semantic hierarchy: `python.enabled` gates every Python surface, `python.embedded` gates Python in managed runtime tools, and default-off `python.shell` gates the local `$`/`$$` snake action, routes it through `run`, and controls its user-facing guidance.
+- Split Python capability controls into a semantic hierarchy: `python.enabled` gates every Python surface, `python.embedded` gates Python in the managed `insights` and `profile` tools, and `python.shell` additionally offers the local `$`/`$$` snake action on hosts without the embedded runtime. Either child key offers the action and both run it in the shared CPython kernel; only `python.enabled` withdraws it, and the guidance in welcome and hotkeys follows.
 
 ### Fixed
 
-- Fixed transient internal runtime failures poisoning the session-wide service cache permanently; the failed service is now retired so the next explicit run gets a fresh embedded worker host without retrying the failed guest execution.
+- Fixed `jvm_jar` and `jvm_deps` writing to the working tree while plan mode was active. Building a JAR, and writing a `jvm_deps` report to an `output` path, now hit the same plan-mode guard `write` and `edit` do; inspecting an archive and reporting dependencies to the transcript are unaffected.
+- Fixed `serve` ignoring `launch.enabled`. It starts a supervised background job through the same broker `hub` uses, so disabling process supervision now withholds the tool instead of leaving a second way in, and `aura doctor` reports which of its two gates turned it off.
+- Fixed `bash`'s guidance still ordering services, watchers, and REPLs into `hub` when `launch.enabled` is off and `hub` would refuse them.
+- Fixed `--help` advertising tools that do not exist: the removed `run` tool is replaced by `eval` in the "Available Tools" list, and the `notebook` row is gone (notebook editing is part of `edit`/`read`).
+- Fixed transient internal runtime failures poisoning the session-wide service cache permanently. An embedded worker latches its failure and is never rebuilt, so one crash used to strand every later runtime call; the implicated service is now retired inside the shared runtime call path, meaning `insights`, `profile`, and the four `jvm_*` tools all get a fresh worker host on the next call without retrying the failed guest execution.
 - Fixed relocatable Aura bundles failing to launch when `bin/aura` is installed through a filesystem symlink.
 - Fixed Kotlin runtime execution missing the bundled standard library, and made Auto runtime selection try Java/Kotlin in-process before falling back when the embedded library does not support them yet.
 - Fixed Python path execution through process and embedded runtime adapters omitting `__file__`, script argv identity, and sibling import roots.
 - Fixed isolated and containerized Aura launches ignoring the requested runtime adapter by adding the validated `AURA_RUNTIME_ADAPTER` process override.
 - Fixed duplicated/leftover scrollback rows under Windows Terminal and WSL by defaulting `tui.scrollbackRebuild` on for ConPTY hosts (native Windows and WSL); a scrolled-off live preview otherwise remained in history with the final block appended below. An explicit setting still overrides the per-host default.
 - Fixed the `Tip:` line and other italicized UI (thinking traces, blockquotes, markdown emphasis) rendering as reverse-video highlight blocks under tmux/screen inside Windows Terminal. `theme.italic` now emits plain text when the terminal lacks `sitm` (screen-family terminfo, where the multiplexer substitutes standout for SGR 3), keeping the theme colors readable instead of painting solid inverse bars.
+- Fixed `aura doctor` reporting tool availability from a hand-maintained copy of each tool's registration gate, which drifted silently whenever a tool was added, renamed, or retired. The report now asks the tool registry itself and names the setting actually responsible for each tool it lists as gated off.
 
 ### Removed
 
 - Removed runtime-binary shell interception and its `runtime.allowShell` / `AURA_ALLOW_ELIDE_SHELL` escape hatches; direct runtime commands now follow the ordinary `bashInterceptor.enabled` policy.
+- Removed the Bun one-shot execution arm behind `runtime/run`, orphaned when the `run` tool was retired: the `engine: "bun"` endpoint, its CLI worker-host re-entry, and the routing that sent default JavaScript/TypeScript to Bun ahead of adapter selection. Every language now resolves to the Elide engine and takes the ordinary process/embedded path; isolated one-shot JS/TS belongs to `eval`. A `runtime/run` request that still names `engine: "bun"` is refused with `invalid-params` rather than silently run elsewhere.
 ## [17.2.12] - 2026-08-08
 
 ### Fixed

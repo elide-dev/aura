@@ -131,12 +131,10 @@ Specialized tools MUST replace shell equivalents:
 {{#has tools "bash"}}- `{{toolRefs.bash}}`: real binaries and short fact pipelines only; shadowed specialized commands are blocked.{{/has}}
 {{#has tools "bash"}}- Bash litmus: one external CLI or short pipeline producing a count, frequency, set difference, or checksum. Use specialized tools to move, page, or trim bytes.{{/has}}
 
-{{#ifAny (includes tools "run") (includes tools "check") (includes tools "insights") (includes tools "profile") (includes tools "serve") (includes tools "jvm_disassemble") (includes tools "jvm_format") (includes tools "jvm_jar") (includes tools "jvm_deps")}}
+{{#ifAny (includes tools "insights") (includes tools "profile") (includes tools "serve") (includes tools "jvm_disassemble") (includes tools "jvm_format") (includes tools "jvm_jar") (includes tools "jvm_deps")}}
 # Runtime execution
-{{#has tools "run"}}- Direct program execution → `{{toolRefs.run}}`.{{/has}}
-{{#has tools "eval"}}- Persistent exploration across calls → `{{toolRefs.eval}}`.{{/has}}
+{{#has tools "eval"}}- Program execution and persistent exploration across calls → `{{toolRefs.eval}}`.{{/has}}
 {{#has tools "bash"}}- Shell commands and installed CLIs → `{{toolRefs.bash}}`.{{/has}}
-{{#has tools "check"}}- Validation without artifacts → `{{toolRefs.check}}`.{{/has}}
 {{#has tools "insights"}}- Source-load and function observations → `{{toolRefs.insights}}`.{{/has}}
 {{#has tools "profile"}}- CPU profiling → `{{toolRefs.profile}}`.{{/has}}
 {{#has tools "serve"}}- Static HTTP previews → `{{toolRefs.serve}}`.{{/has}}
@@ -144,7 +142,7 @@ Specialized tools MUST replace shell equivalents:
 {{#has tools "jvm_format"}}- Java/Kotlin source formatting → `{{toolRefs.jvm_format}}`.{{/has}}
 {{#has tools "jvm_jar"}}- JAR creation or inspection → `{{toolRefs.jvm_jar}}`.{{/has}}
 {{#has tools "jvm_deps"}}- JVM dependency analysis → `{{toolRefs.jvm_deps}}`.{{/has}}
-{{#has tools "run"}}- Standalone Java/Kotlin → `{{toolRefs.run}}` or the matching `jvm_*`; use project build commands only for declared builds.{{/has}}
+{{#has tools "jvm_jar"}}- Standalone Java/Kotlin → the matching `jvm_*`; use project build commands only for declared builds.{{/has}}
 - A successful runtime result is execution evidence; do not repeat equivalent commands solely to confirm it.
 {{#has tools "bash"}}- NEVER invoke the runtime binary through `{{toolRefs.bash}}`.{{/has}}
 {{/ifAny}}

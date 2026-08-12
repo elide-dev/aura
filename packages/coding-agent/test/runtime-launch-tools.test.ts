@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { DaemonSnapshot, DaemonState } from "../src/launch/protocol";
 import type { RuntimeLaunchDescriptor } from "../src/runtime/protocol";
-import type { ToolSession } from "../src/tools";
+import { BUILTIN_TOOLS, type ToolSession } from "../src/tools";
 import type { LaunchParams, LaunchToolDetails } from "../src/tools/hub/launch";
 import { matchRuntimeEndpoint, resolveWaitSeconds } from "../src/tools/runtime-launch";
 import { RuntimeServeTool } from "../src/tools/runtime-serve";
@@ -82,10 +82,27 @@ function fakeHub(opts: { logs: string; state?: DaemonState; readySees?: string }
 	};
 }
 
-function sessionWith(spawn: (params: unknown) => Promise<RuntimeLaunchDescriptor>, enabled = true): ToolSession {
+interface SessionGates {
+	/** `runtime.enabled`: the fork's own gate on every runtime tool. */
+	runtime?: boolean;
+	/** `launch.enabled`: upstream's kill switch for process supervision. */
+	launch?: boolean;
+}
+
+function sessionWith(
+	spawn: (params: unknown) => Promise<RuntimeLaunchDescriptor>,
+	gates: SessionGates = {},
+): ToolSession {
+	const { runtime = true, launch = true } = gates;
 	return {
 		cwd: "/proj",
-		settings: { get: (key: string) => (key === "runtime.enabled" ? enabled : undefined) },
+		settings: {
+			get: (key: string) => {
+				if (key === "runtime.enabled") return runtime;
+				if (key === "launch.enabled") return launch;
+				return undefined;
+			},
+		},
 		getRuntimeService: () => ({ spawn }) as never,
 	} as unknown as ToolSession;
 }
@@ -144,11 +161,42 @@ describe("resolveWaitSeconds", () => {
 
 describe("serve", () => {
 	test("is discoverable, exec-approved, and gated on runtime.enabled", () => {
-		expect(RuntimeServeTool.createIf(sessionWith(async () => descriptorFor(), false))).toBeNull();
+		expect(RuntimeServeTool.createIf(sessionWith(async () => descriptorFor(), { runtime: false }))).toBeNull();
 		const tool = RuntimeServeTool.createIf(sessionWith(async () => descriptorFor()));
 		expect(tool!.name).toBe("serve");
 		expect(tool!.loadMode).toBe("discoverable");
 		expect(tool!.approval).toBe("exec");
+	});
+
+	/**
+	 * `launch.enabled=false` is upstream's kill switch for process supervision, and
+	 * hub honors it (`tools/hub/index.ts`). serve starts a hub job through the same
+	 * broker, so a session that disabled supervision must not get a second door to
+	 * it — the gate belongs on the tool's existence, not on an error at call time.
+	 */
+	test("is withheld entirely when launch.enabled is false", () => {
+		const session = sessionWith(async () => descriptorFor(), { launch: false });
+		expect(RuntimeServeTool.createIf(session)).toBeNull();
+		// Through the registry the session actually builds from, not just the factory.
+		expect(BUILTIN_TOOLS.serve(session)).toBeNull();
+	});
+
+	/**
+	 * The guidance serve prints names the tool that reads and stops the job. With
+	 * supervision disabled, `hub` refuses every launch op, so pointing the model at
+	 * `hub {op:"logs"}` is a dead end — the hub-less branch is the honest one.
+	 */
+	test("never advertises hub when supervision is disabled", async () => {
+		const hub = fakeHub({ logs: "Serving static files on 127.0.0.1:8080" });
+		const tool = new RuntimeServeTool(
+			sessionWith(async () => descriptorFor(), { launch: false }),
+			hub.launch,
+		);
+		const result = await tool.execute("id", { directory: "public" });
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("Serving /proj/public at http://127.0.0.1:8080");
+		expect(text).not.toContain("hub {op:");
+		expect(text).toContain("hub is not reachable in this session");
 	});
 
 	test("forwards directory/port/host and reports the scraped URL with the job handle", async () => {

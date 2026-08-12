@@ -3,21 +3,25 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	buildDoctorReport,
+	createToolGateProbe,
 	DEFAULT_TOOL_GATE_SETTINGS,
 	type DoctorInput,
 	type DoctorReport,
 	formatCheckLine,
 	formatDoctorReport,
 	gatherDoctorInput,
+	PERMISSIVE_TOOL_GATE_SETTINGS,
 	resolveToolGating,
 	runDoctorCommand,
 	SESSION_GATED_TOOL_NAMES,
-	SETTINGS_GATED_TOOL_NAMES,
+	type ToolGateProbe,
 	type ToolGateSettings,
+	UNPROBED_TOOL_NAMES,
 } from "../src/cli/doctor-cli";
 import { RuntimeService } from "../src/runtime";
 import { okResponse, RUNTIME_PROTOCOL_VERSION, RuntimeRpcError } from "../src/runtime/protocol";
 import { BUILTIN_TOOL_NAMES } from "../src/tools/builtin-names";
+import type { Tool, ToolFactory, ToolSession } from "../src/tools/index";
 
 /**
  * A fully healthy fabricated input. Every branch test starts here and perturbs
@@ -52,7 +56,12 @@ function healthyInput(overrides: Partial<DoctorInput> = {}): DoctorInput {
 			},
 		},
 		natives: { loaded: true, version: "17.1.3", target: "linux-x64-modern" },
-		tools: { available: ["read", "bash", "run"], active: ["read", "bash", "run"], gatedOff: [], sessionGated: [] },
+		tools: {
+			available: ["read", "bash", "insights"],
+			active: ["read", "bash", "insights"],
+			gatedOff: [],
+			sessionGated: [],
+		},
 		plugins: { checks: [{ name: "plugins_directory", status: "ok", message: "Found at /x" }] },
 		terminal: {
 			detectedId: "wezterm",
@@ -383,11 +392,11 @@ describe("buildDoctorReport", () => {
 		const report = buildDoctorReport(
 			healthyInput({
 				tools: {
-					available: ["read", "bash", "run", "check"],
+					available: ["read", "bash", "insights", "profile"],
 					active: ["read", "bash"],
 					gatedOff: [
-						{ name: "run", reason: "runtime.enabled = false" },
-						{ name: "check", reason: "runtime.enabled = false" },
+						{ name: "insights", reason: "runtime.enabled = false" },
+						{ name: "profile", reason: "runtime.enabled = false" },
 					],
 					sessionGated: [],
 				},
@@ -397,7 +406,7 @@ describe("buildDoctorReport", () => {
 		expect(entries.map(e => e.detail).join(" ")).toContain("2/4");
 		// The gated-off names are named, with the reason, so a missing tool is diagnosable.
 		const gated = entries.find(e => e.label === "gated off");
-		expect(gated?.detail).toContain("run, check");
+		expect(gated?.detail).toContain("insights, profile");
 		expect(gated?.detail).toContain("runtime.enabled = false");
 	});
 
@@ -495,84 +504,110 @@ describe("buildDoctorReport", () => {
 	});
 });
 
+/**
+ * Machinery tests for the derivation, driven by fabricated gates. The real
+ * registry's gates are asserted in `doctor-tool-gate-drift.test.ts`; here the
+ * question is only whether doctor reads a factory's answer correctly and
+ * attributes it to the right setting.
+ */
 describe("resolveToolGating", () => {
-	const ALL_ON: ToolGateSettings = {
-		runtimeEnabled: true,
-		debugEnabled: true,
-		memoryBackend: "mnemopi",
-		autolearnEnabled: true,
-	};
-	const MEMORY_TOOLS = ["retain", "recall", "reflect", "memory_edit"];
-	const RUNTIME_TOOLS = [
-		"run",
-		"check",
-		"insights",
-		"profile",
-		"jvm_disassemble",
-		"jvm_format",
-		"jvm_jar",
-		"jvm_deps",
-	];
+	const ALL_ON = PERMISSIVE_TOOL_GATE_SETTINGS;
 
-	test("everything on registers every name", () => {
-		const result = resolveToolGating(
-			[...RUNTIME_TOOLS, ...MEMORY_TOOLS, "debug", "learn", "manage_skill", "read"],
+	/** A probe over fabricated `createIf` predicates; unlisted names always register. */
+	function probeOver(gates: Record<string, (s: ToolGateSettings) => boolean>): ToolGateProbe {
+		return (name, gateSettings) => (gates[name] ?? (() => true))(gateSettings);
+	}
+
+	const RUNTIME_GATE = (s: ToolGateSettings) => s.runtimeEnabled;
+	const MNEMOPI_GATE = (s: ToolGateSettings) => s.memoryBackend === "mnemopi";
+
+	test("a factory that returns a tool is active, one that returns null is gated off", async () => {
+		const result = await resolveToolGating(
+			["run", "read"],
+			{ ...ALL_ON, runtimeEnabled: false },
+			probeOver({ run: RUNTIME_GATE }),
+		);
+		expect(result.active).toEqual(["read"]);
+		expect(result.gatedOff).toEqual([{ name: "run", reason: "runtime.enabled = false" }]);
+		expect(result.available).toEqual(["run", "read"]);
+	});
+
+	test("nothing is gated off when every gate passes", async () => {
+		const result = await resolveToolGating(
+			["run", "memory_edit"],
 			ALL_ON,
+			probeOver({ run: RUNTIME_GATE, memory_edit: MNEMOPI_GATE }),
 		);
 		expect(result.gatedOff).toEqual([]);
-		expect(result.active).toHaveLength(RUNTIME_TOOLS.length + MEMORY_TOOLS.length + 4);
+		expect(result.active).toEqual(["run", "memory_edit"]);
 	});
 
-	// The bug this pins: on a default install (`memory.backend: off`) doctor used
-	// to print retain/recall/reflect/memory_edit as registered while the memory
-	// section of the SAME report said no backend was configured.
-	test("memory.backend = off gates off every memory tool", () => {
-		const result = resolveToolGating([...MEMORY_TOOLS, "read"], { ...ALL_ON, memoryBackend: "off" });
-		for (const name of MEMORY_TOOLS) {
-			expect(result.active).not.toContain(name);
-			expect(result.gatedOff.find(g => g.name === name)?.reason).toContain("memory.backend = off");
-		}
-		expect(result.active).toEqual(["read"]);
+	test("the reason quotes the setting's configured value, not a boolean", async () => {
+		const result = await resolveToolGating(
+			["memory_edit"],
+			{ ...ALL_ON, memoryBackend: "hindsight" },
+			probeOver({ memory_edit: MNEMOPI_GATE }),
+		);
+		expect(result.gatedOff).toEqual([{ name: "memory_edit", reason: "memory.backend = hindsight" }]);
 	});
 
-	test("memory_edit needs mnemopi specifically, the rest accept hindsight", () => {
-		const result = resolveToolGating(MEMORY_TOOLS, { ...ALL_ON, memoryBackend: "hindsight" });
-		expect(result.active).toEqual(["retain", "recall", "reflect"]);
-		expect(result.gatedOff.map(g => g.name)).toEqual(["memory_edit"]);
+	// Attribution, not enumeration: two settings are away from their permissive
+	// value, but only one of them is why this tool declines to register.
+	test("a restrictive setting the gate does not read is never blamed", async () => {
+		const result = await resolveToolGating(
+			["run"],
+			{ ...ALL_ON, runtimeEnabled: false, memoryBackend: "off" },
+			probeOver({ run: RUNTIME_GATE }),
+		);
+		expect(result.gatedOff).toEqual([{ name: "run", reason: "runtime.enabled = false" }]);
 	});
 
-	test("runtime.enabled = false gates off exactly the runtime and jvm tools", () => {
-		const result = resolveToolGating([...RUNTIME_TOOLS, "read", "retain"], { ...ALL_ON, runtimeEnabled: false });
-		expect(result.gatedOff.map(g => g.name).sort()).toEqual([...RUNTIME_TOOLS].sort());
-		expect(result.gatedOff.every(g => g.reason === "runtime.enabled = false")).toBe(true);
-		expect(result.active).toEqual(["read", "retain"]);
+	test("a gate blocked by two settings at once names both", async () => {
+		const result = await resolveToolGating(
+			["learn"],
+			{ ...ALL_ON, autolearnEnabled: false, memoryBackend: "off" },
+			probeOver({ learn: s => s.autolearnEnabled && s.memoryBackend !== "off" }),
+		);
+		const reason = result.gatedOff[0]?.reason ?? "";
+		expect(reason).toContain("autolearn.enabled = false");
+		expect(reason).toContain("memory.backend = off");
 	});
 
-	test("debug.enabled = false gates off debug only", () => {
-		const result = resolveToolGating(["debug", "read"], { ...ALL_ON, debugEnabled: false });
-		expect(result.gatedOff).toEqual([{ name: "debug", reason: "debug.enabled = false" }]);
+	// The honest answer when a gate reads something outside doctor's vector: say
+	// so, rather than blame whichever setting happens to be off.
+	test("a gate doctor cannot attribute is reported as unattributed", async () => {
+		const result = await resolveToolGating(["mystery"], ALL_ON, probeOver({ mystery: () => false }));
+		expect(result.gatedOff[0]?.name).toBe("mystery");
+		expect(result.gatedOff[0]?.reason).toContain("runtime.enabled");
+		expect(result.gatedOff[0]?.reason).not.toBe("runtime.enabled = false");
 	});
 
-	test("autolearn.enabled = false gates off learn and manage_skill", () => {
-		const result = resolveToolGating(["learn", "manage_skill", "read"], { ...ALL_ON, autolearnEnabled: false });
-		expect(result.gatedOff.map(g => g.name)).toEqual(["learn", "manage_skill"]);
-		expect(result.gatedOff.every(g => g.reason === "autolearn.enabled = false")).toBe(true);
-	});
-
-	test("learn accepts the local backend where the memory tools do not", () => {
-		const result = resolveToolGating(["learn", "retain"], { ...ALL_ON, memoryBackend: "local" });
-		expect(result.active).toEqual(["learn"]);
-		expect(result.gatedOff.map(g => g.name)).toEqual(["retain"]);
-	});
-
-	test("session-gated names are reported but stay active", () => {
-		const result = resolveToolGating([...SESSION_GATED_TOOL_NAMES, "read"], ALL_ON);
+	test("session-gated names are never probed and stay active", async () => {
+		const probe: ToolGateProbe = name => {
+			if (SESSION_GATED_TOOL_NAMES.includes(name)) throw new Error(`probed the session-gated ${name}`);
+			return true;
+		};
+		const result = await resolveToolGating([...SESSION_GATED_TOOL_NAMES, "read"], ALL_ON, probe);
 		expect(result.sessionGated).toEqual([...SESSION_GATED_TOOL_NAMES]);
 		for (const name of SESSION_GATED_TOOL_NAMES) expect(result.active).toContain(name);
 	});
 
-	test("sessionGated never lists a name that is not available", () => {
-		expect(resolveToolGating(["read"], ALL_ON).sessionGated).toEqual([]);
+	test("sessionGated never lists a name that is not available", async () => {
+		expect((await resolveToolGating(["read"], ALL_ON, probeOver({}))).sessionGated).toEqual([]);
+	});
+
+	// `task` builds its tool by discovering agents across project/user/extension
+	// dirs: a readiness report must not pay for that, and must not report it as
+	// session-gated either, since nothing about it depends on the session.
+	test("expensive-to-construct names are never probed, stay active, and are not called session-gated", async () => {
+		const probe: ToolGateProbe = name => {
+			if (UNPROBED_TOOL_NAMES.includes(name)) throw new Error(`constructed the unprobed ${name}`);
+			return true;
+		};
+		const result = await resolveToolGating([...UNPROBED_TOOL_NAMES, "read"], ALL_ON, probe);
+		expect(result.active).toEqual([...UNPROBED_TOOL_NAMES, "read"]);
+		expect(result.gatedOff).toEqual([]);
+		expect(result.sessionGated).toEqual([]);
 	});
 
 	test("the unreadable-settings fallback matches the settings-schema defaults", async () => {
@@ -583,11 +618,63 @@ describe("resolveToolGating", () => {
 		expect(DEFAULT_TOOL_GATE_SETTINGS.memoryBackend).toBe(SETTINGS_SCHEMA["memory.backend"].default);
 	});
 
-	test("every gated name is a real builtin tool name", () => {
+	test("every session-gated name is a real builtin tool name", () => {
 		const builtin = new Set<string>(BUILTIN_TOOL_NAMES);
-		for (const name of [...SETTINGS_GATED_TOOL_NAMES, ...SESSION_GATED_TOOL_NAMES]) {
-			expect(builtin.has(name)).toBe(true);
-		}
+		for (const name of SESSION_GATED_TOOL_NAMES) expect(builtin.has(name)).toBe(true);
+	});
+});
+
+describe("createToolGateProbe", () => {
+	const TOOL = {} as Tool;
+	const factories = (map: Record<string, ToolFactory>) => createToolGateProbe(map);
+
+	test("a null return is the gate; a tool is registration", async () => {
+		const probe = factories({ off: () => null, on: () => TOOL });
+		expect(await probe("off", PERMISSIVE_TOOL_GATE_SETTINGS)).toBe(false);
+		expect(await probe("on", PERMISSIVE_TOOL_GATE_SETTINGS)).toBe(true);
+	});
+
+	test("an async factory is awaited before it is read", async () => {
+		const probe = factories({ slow: async () => null });
+		expect(await probe("slow", PERMISSIVE_TOOL_GATE_SETTINGS)).toBe(false);
+	});
+
+	// A throw is a bug or a stub-session gap, not a gate: it happens under every
+	// vector, so counting it as registering keeps the report stable.
+	test("a factory that throws counts as registering", async () => {
+		const probe = factories({
+			broken: () => {
+				throw new Error("no session file");
+			},
+		});
+		expect(await probe("broken", PERMISSIVE_TOOL_GATE_SETTINGS)).toBe(true);
+	});
+
+	test("a name the registry does not know counts as registering", async () => {
+		expect(await factories({})("ghost", PERMISSIVE_TOOL_GATE_SETTINGS)).toBe(true);
+	});
+
+	test("the stub session answers settings.get for exactly the gate keys", async () => {
+		let seen: ToolSession | undefined;
+		const probe = factories({
+			spy: session => {
+				seen = session;
+				return TOOL;
+			},
+		});
+		await probe("spy", {
+			runtimeEnabled: false,
+			launchEnabled: true,
+			debugEnabled: true,
+			memoryBackend: "hindsight",
+			autolearnEnabled: false,
+		});
+		expect(seen?.settings.get("runtime.enabled")).toBe(false);
+		expect(seen?.settings.get("launch.enabled")).toBe(true);
+		expect(seen?.settings.get("debug.enabled")).toBe(true);
+		expect(seen?.settings.get("memory.backend")).toBe("hindsight");
+		expect(seen?.settings.get("autolearn.enabled")).toBe(false);
+		expect(seen?.hasUI).toBe(false);
 	});
 });
 

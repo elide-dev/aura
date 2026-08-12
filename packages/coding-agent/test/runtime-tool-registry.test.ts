@@ -4,16 +4,26 @@ import { BUILTIN_TOOLS, type ToolSession } from "../src/tools";
 import { BUILTIN_TOOL_NAMES, normalizeToolName } from "../src/tools/builtin-names";
 import { ESSENTIAL_BUILTIN_TOOL_NAMES } from "../src/tools/essential-tools";
 
-const RUNTIME_TOOLS = ["run", "check", "insights", "profile", "serve"] as const;
+const RUNTIME_TOOLS = ["insights", "profile", "serve"] as const;
 
 /** The long-running flow supervised by hub rather than by the runtime layer. */
 const LAUNCH_TOOLS = ["serve"] as const;
 
 const JVM_TOOLS = ["jvm_disassemble", "jvm_format", "jvm_jar", "jvm_deps"] as const;
 
-function stubSession(enabled: boolean): ToolSession {
+/**
+ * `launch.enabled` defaults on, as the schema does: it is a second gate only
+ * `serve` reads, so every other case here wants it out of the way.
+ */
+function stubSession(enabled: boolean, launchEnabled = true): ToolSession {
 	return {
-		settings: { get: (key: string) => (key === "runtime.enabled" ? enabled : undefined) },
+		settings: {
+			get: (key: string) => {
+				if (key === "runtime.enabled") return enabled;
+				if (key === "launch.enabled") return launchEnabled;
+				return undefined;
+			},
+		},
 		getRuntimeService: () => undefined,
 	} as unknown as ToolSession;
 }
@@ -38,9 +48,15 @@ describe("runtime tool registry", () => {
 		for (const name of RUNTIME_TOOLS) expect(normalizeToolName(name)).toBe(name);
 	});
 
-	test("run/check are essential; removed runtime surfaces stay absent", () => {
-		expect(ESSENTIAL_BUILTIN_TOOL_NAMES.run).toBe(true);
-		expect(ESSENTIAL_BUILTIN_TOOL_NAMES.check).toBe(true);
+	test("no runtime tool is essential; removed runtime surfaces stay absent", () => {
+		// `run` and `check` were the fork's parallel execution surface. `eval` and
+		// `bash` own execution now, so nothing in the runtime family is top-level.
+		expect(BUILTIN_TOOL_NAMES).not.toContain("run");
+		expect(BUILTIN_TOOL_NAMES).not.toContain("check");
+		expect("run" in BUILTIN_TOOLS).toBe(false);
+		expect("check" in BUILTIN_TOOLS).toBe(false);
+		expect("run" in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
+		expect("check" in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
 		expect(BUILTIN_TOOL_NAMES).not.toContain("build");
 		expect(BUILTIN_TOOL_NAMES).not.toContain("project_advice");
 		expect("build" in BUILTIN_TOOLS).toBe(false);
@@ -49,12 +65,11 @@ describe("runtime tool registry", () => {
 		expect("jvm_javadoc" in BUILTIN_TOOLS).toBe(false);
 		expect(BUILTIN_TOOL_NAMES).not.toContain("runtime_debug");
 		expect("runtime_debug" in BUILTIN_TOOLS).toBe(false);
-		for (const name of ["insights", "profile", ...LAUNCH_TOOLS]) {
+		for (const name of [...RUNTIME_TOOLS]) {
 			expect(name in ESSENTIAL_BUILTIN_TOOL_NAMES).toBe(false);
 		}
 	});
 	test("keeps inherent runtime provider payloads compact", async () => {
-		expect(await providerPayloadBytes(["run", "check"])).toBeLessThanOrEqual(1_800);
 		expect(await providerPayloadBytes([...RUNTIME_TOOLS, ...JVM_TOOLS])).toBeLessThanOrEqual(8_500);
 	});
 
@@ -87,6 +102,21 @@ describe("runtime tool registry", () => {
 			const tool = await BUILTIN_TOOLS[name](stubSession(true));
 			expect(tool).not.toBeNull();
 			expect(tool?.name).toBe(name);
+		}
+	});
+
+	/**
+	 * The launch family starts hub jobs, so it also answers to upstream's
+	 * process-supervision kill switch — a session that turned supervision off must
+	 * not be handed a second door to the broker.
+	 */
+	test("launch tools additionally gate on launch.enabled", async () => {
+		for (const name of LAUNCH_TOOLS) {
+			expect(await BUILTIN_TOOLS[name](stubSession(true, false))).toBeNull();
+		}
+		// The rest of the runtime family has no business with process supervision.
+		for (const name of RUNTIME_TOOLS.filter(n => !LAUNCH_TOOLS.includes(n as never))) {
+			expect(await BUILTIN_TOOLS[name](stubSession(true, false))).not.toBeNull();
 		}
 	});
 });
