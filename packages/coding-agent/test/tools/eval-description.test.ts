@@ -64,6 +64,60 @@ describe("eval tool description", () => {
 	});
 });
 
+describe("eval tool description JS engine", () => {
+	const savedEngineEnv = Bun.env.AURA_EVAL_JS_ENGINE;
+
+	afterEach(() => {
+		if (savedEngineEnv === undefined) delete Bun.env.AURA_EVAL_JS_ENGINE;
+		else Bun.env.AURA_EVAL_JS_ENGINE = savedEngineEnv;
+	});
+
+	it("promises Bun globals by default", () => {
+		const text = getEvalToolDescription({ py: true, js: true });
+		expect(text).toContain("JS runs under **Bun**");
+		expect(text).toContain("Bun.$");
+		expect(text).not.toContain("managed runtime");
+	});
+
+	it("promises only what survives a fallback when the runtime engine is selected", () => {
+		const text = getEvalToolDescription({ py: true, js: true, jsEngine: "elide" });
+		expect(text).toContain("JS runs on the **managed runtime**");
+		expect(text).not.toContain("JS runs under **Bun**");
+		// Every claim on this line has to hold on BOTH engines: the description is
+		// assembled long before any cell runs, and a session that asks for the
+		// runtime engine still lands on Bun when no library resolves. `Bun.$` is the
+		// one Bun-only global, so it is the one that goes.
+		expect(text).not.toContain("Bun.$");
+		expect(text).toContain("Bun.file");
+		expect(text).toContain("top-level `await`/`return` work");
+	});
+
+	it("says nothing about either engine when JS is disabled", () => {
+		const text = getEvalToolDescription({ py: true, js: false, jsEngine: "elide" });
+		expect(text).not.toContain("managed runtime");
+		expect(text).not.toContain("JS runs under **Bun**");
+	});
+
+	it("EvalTool follows the session's engine setting", () => {
+		const session = makeSession({ backends: {} });
+		session.settings.set("eval.jsEngine" as never, "elide" as never);
+		expect(new EvalTool(session).description).toContain("JS runs on the **managed runtime**");
+	});
+
+	it("degrades to the Bun line instead of throwing on a malformed engine", () => {
+		// A bad engine value is reported as a ToolError when a cell actually runs.
+		// A getter that assembles the tool's description is the wrong place to raise
+		// it: throwing here takes the whole tool listing down over a typo.
+		Bun.env.AURA_EVAL_JS_ENGINE = "not-an-engine";
+		const session = makeSession({ backends: {} });
+		let description = "";
+		expect(() => {
+			description = new EvalTool(session).description;
+		}).not.toThrow();
+		expect(description).toContain("JS runs under **Bun**");
+	});
+});
+
 describe("eval tool dynamic schema", () => {
 	// resolveEvalBackends lets PI_* env flags override settings; neutralize them per-test
 	// so the schema is driven purely by the isolated settings (and restore to avoid leaks).

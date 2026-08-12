@@ -503,6 +503,47 @@ describe.skipIf(!embeddedPath).serial("Elide engine parity (real embedded kernel
 	);
 
 	it(
+		"keeps the tool bridge working after a cell unwinds without answering",
+		async () => {
+			using tempDir = TempDir.createSync("@omp-elide-real-bridge-");
+			const calls: unknown[] = [];
+			const echo = createTool("parity_echo", async (_toolCallId, args) => {
+				calls.push(args);
+				return { content: [{ type: "text", text: "echo:after-unwind" }] } as AgentToolResult;
+			});
+			const session = makeSession(tempDir.path(), [echo]);
+			const run = makeRunner(session, tempDir.path(), namespaceSessionId(`real-bridge:${crypto.randomUUID()}`));
+
+			// Every cell that unwinds mid-run leaves the guest holding a timer handle
+			// the runtime already discarded. If the next run deferred to that dead
+			// handle instead of restarting the poll, the guest would never read its
+			// spool again — the host would keep executing tools whose replies the cell
+			// can never see, and the model's natural response (retry) would execute
+			// them again, and again.
+			const exited = await run("console.log('exiting'); process.exit(3);");
+			expect(exited.output).toContain("exit status 3");
+
+			const afterExit = await run("return await tool.parity_echo({ value: 'after-exit' });");
+			expect(afterExit.exitCode).toBe(0);
+			expect(afterExit.output.trim()).toBe("echo:after-unwind");
+
+			// The same, after the other unwind path.
+			const spinning = run("while (true) {}");
+			const kernelSession = factory.sessions[factory.sessions.length - 1];
+			await Bun.sleep(500);
+			await withTimeout(kernelSession?.interrupt() ?? Promise.resolve(), CELL_TIMEOUT_MS, "interrupt never settled");
+			await spinning;
+
+			const afterInterrupt = await run("return await tool.parity_echo({ value: 'after-interrupt' });");
+			expect(afterInterrupt.exitCode).toBe(0);
+			expect(afterInterrupt.output.trim()).toBe("echo:after-unwind");
+			// Each cell called the tool exactly once: no silent re-execution.
+			expect(calls).toHaveLength(2);
+		},
+		CASE_TIMEOUT_MS,
+	);
+
+	it(
 		"interrupts a cell that is genuinely in flight and keeps the context",
 		async () => {
 			using tempDir = TempDir.createSync("@omp-elide-real-interrupt-");

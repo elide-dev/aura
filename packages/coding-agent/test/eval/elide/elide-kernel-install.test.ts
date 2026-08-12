@@ -85,6 +85,44 @@ describe("Elide kernel install site", () => {
 		expect(getElideJsKernelFactory()).toBeUndefined();
 	});
 
+	it("retries after a failure, so a runtime installed mid-session is picked up", async () => {
+		expect(await kernelEmbedded.ensureElideJsKernelFactory({ embeddedPath: "/nonexistent/missing.so" })).toBe(false);
+		// "No runtime library on this machine" is a fact with a shelf life — this
+		// repo installs one on demand — so only SUCCESS may be permanent. A memoized
+		// negative would hold the session on the Bun fallback until restart.
+		expect(await kernelEmbedded.ensureElideJsKernelFactory({ embeddedPath: resolvableLibrary })).toBe(true);
+		const installed = getElideJsKernelFactory();
+		expect(installed).toBeDefined();
+
+		// …and success still is permanent: a later failing ask cannot unseat it.
+		expect(await kernelEmbedded.ensureElideJsKernelFactory({ embeddedPath: "/nonexistent/missing.so" })).toBe(true);
+		expect(getElideJsKernelFactory()).toBe(installed);
+	});
+
+	it("refuses to install in a compiled binary, where there is no source to bundle from", async () => {
+		// `guest-bundle.ts` builds the guest entry from `src/` at first use, and
+		// `guest-entry.ts` is statically imported by nothing so it is not in the
+		// compiled graph either. Reporting "no kernel" here is what turns that into
+		// the documented fallback-to-Bun-with-a-notice, instead of a first cell that
+		// dies with a bundler error after `isAvailable()` promised otherwise.
+		expect(
+			await kernelEmbedded.ensureElideJsKernelFactory({
+				embeddedPath: resolvableLibrary,
+				env: { PI_COMPILED: "true" },
+			}),
+		).toBe(false);
+		expect(getElideJsKernelFactory()).toBeUndefined();
+	});
+
+	it("lets a factory installed mid-resolve keep the slot", async () => {
+		// The post-await re-check. `resolveEmbeddedRuntimeLibrary` does real fs work,
+		// so installing synchronously after the call lands inside its window.
+		const pending = kernelEmbedded.ensureElideJsKernelFactory({ embeddedPath: resolvableLibrary });
+		setElideJsKernelFactory(inertFactory);
+		expect(await pending).toBe(true);
+		expect(getElideJsKernelFactory()).toBe(inertFactory);
+	});
+
 	it("never overwrites a factory that is already installed", async () => {
 		setElideJsKernelFactory(inertFactory);
 		expect(await kernelEmbedded.ensureElideJsKernelFactory({ embeddedPath: resolvableLibrary })).toBe(true);

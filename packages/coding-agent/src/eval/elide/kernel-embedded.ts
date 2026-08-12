@@ -30,7 +30,7 @@
  * pending run as a *value*; none of them tears the context down.
  */
 
-import { appendFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { withTimeout } from "@oh-my-pi/pi-utils";
@@ -57,6 +57,8 @@ import {
 	setElideJsKernelFactory,
 } from "./kernel";
 
+/** Spools carry whole tool results, so they are owner-only however the umask feels about it. */
+const SPOOL_FILE_MODE = 0o600;
 /** Ceiling on one `poll-output` batch. The pump parks; this only bounds a single hop. */
 const MAX_POLL_BYTES = 262_144;
 /** How long a control op may take before it is treated as a wedged kernel. */
@@ -159,6 +161,17 @@ class EmbeddedElideKernelSession implements ElideJsKernelSession {
 	readonly #stderr = new LineReader();
 	/** Serializes everything that needs the execution thread. `tool-reply` deliberately skips it. */
 	#tail: Promise<void> = Promise.resolve();
+	/**
+	 * Serializes writes to the spool, which the execution tail does NOT cover.
+	 *
+	 * A cell running `parallel(thunks)` — which the eval prompt actively encourages
+	 * — can have several tool calls outstanding, and their replies arrive whenever
+	 * the host finishes each one. `appendFile` loops on short writes, so two large
+	 * replies racing can interleave into a line that is not JSON; the guest drops
+	 * an unparseable line, and the cell then fails through the settle backstop with
+	 * no sign of why.
+	 */
+	#spoolTail: Promise<void> = Promise.resolve();
 	#bootstrapped = false;
 	#initialized = false;
 	#snapshot: SessionSnapshot | undefined;
@@ -219,8 +232,14 @@ class EmbeddedElideKernelSession implements ElideJsKernelSession {
 		this.#initialized = false;
 		this.#pendingRun = undefined;
 		// The guest restarts its spool at offset 0, so leaving old replies in place
-		// would replay them into the next run.
-		await writeFile(this.#options.inboxPath, "").catch(() => undefined);
+		// would replay them into the next run. Queued behind the spool tail: a
+		// truncate that interleaved with an in-flight append would leave a partial
+		// line at offset 0 for the fresh guest to choke on.
+		const truncate = async (): Promise<void> => {
+			await writeFile(this.#options.inboxPath, "", { mode: SPOOL_FILE_MODE }).catch(() => undefined);
+		};
+		this.#spoolTail = this.#spoolTail.then(truncate, truncate);
+		await this.#spoolTail;
 	}
 
 	async close(): Promise<void> {
@@ -242,19 +261,24 @@ class EmbeddedElideKernelSession implements ElideJsKernelSession {
 		for (const listener of [...this.#errorListeners]) listener(error);
 	}
 
-	async #spool(msg: WorkerInbound): Promise<void> {
-		try {
-			await appendFile(this.#options.inboxPath, `${JSON.stringify(msg)}\n`);
-		} catch (error) {
-			this.#fault(
-				new Error(
-					`Runtime JS kernel ${this.#options.label} could not deliver a ${msg.type}: ${asError(error).message}`,
-					{
-						cause: error,
-					},
-				),
-			);
-		}
+	/** Queue one spool write behind every earlier one. Never rejects. */
+	#spool(msg: WorkerInbound): Promise<void> {
+		const step = async (): Promise<void> => {
+			try {
+				await appendFile(this.#options.inboxPath, `${JSON.stringify(msg)}\n`, { mode: SPOOL_FILE_MODE });
+			} catch (error) {
+				this.#fault(
+					new Error(
+						`Runtime JS kernel ${this.#options.label} could not deliver a ${msg.type}: ${asError(error).message}`,
+						{
+							cause: error,
+						},
+					),
+				);
+			}
+		};
+		this.#spoolTail = this.#spoolTail.then(step, step);
+		return this.#spoolTail;
 	}
 
 	async #process(msg: Exclude<WorkerInbound, { type: "tool-reply" }>): Promise<void> {
@@ -309,10 +333,11 @@ class EmbeddedElideKernelSession implements ElideJsKernelSession {
 	/**
 	 * Run one eval and drain its output concurrently.
 	 *
-	 * The pump owns its own park bound, gets the RAW eval promise (it projects
-	 * that internally, so the rejection stays ours to observe), and gets an
-	 * `isEvalSettled` that flips on BOTH arms — a settle flag that ignored the
-	 * rejection would leave a failing eval's drain looping at poll cadence.
+	 * The pump owns its own park bound. Its `evalSettlement` is a bare projection
+	 * of this eval — no defensive catch, because the pump does that itself and a
+	 * catch here would swallow the rejection the caller still has to see on its own
+	 * reference. `isEvalSettled` flips on BOTH arms: a flag that ignored the
+	 * rejection would leave a failing eval's drain looping at poll cadence forever.
 	 */
 	async #evaluate(code: string, sourceName: string): Promise<void> {
 		let settled = false;
@@ -545,9 +570,24 @@ export interface ElideEmbeddedKernelFactory extends ElideJsKernelFactory {
 export function createElideEmbeddedKernelFactory(
 	options: ElideEmbeddedKernelFactoryOptions,
 ): ElideEmbeddedKernelFactory {
-	const spoolDirectory = options.spoolDirectory ?? os.tmpdir();
+	const spoolBase = options.spoolDirectory ?? os.tmpdir();
 	const renderBootstrap = options.renderBootstrap ?? renderElideGuestBootstrap;
 	let transportPromise: Promise<ElideEmbeddedContextTransport> | undefined;
+	let spoolDirectoryPromise: Promise<string> | undefined;
+
+	/**
+	 * A private directory for this factory's spools, created 0700 by `mkdtemp`.
+	 *
+	 * The spools carry whole tool results — file contents, command output — and
+	 * they are append-only for a context's lifetime, so a world-readable file in
+	 * the shared temp directory would disclose them to every local user, and would
+	 * outlive a crash that skipped `close()`. The directory mode is the real
+	 * barrier; the 0600 on each file is the belt to its braces.
+	 */
+	const openSpoolDirectory = (): Promise<string> => {
+		spoolDirectoryPromise ??= mkdtemp(path.join(spoolBase, "omp-elide-spool-"));
+		return spoolDirectoryPromise;
+	};
 
 	const openTransport = (): Promise<ElideEmbeddedContextTransport> => {
 		transportPromise ??= (async () => {
@@ -568,7 +608,7 @@ export function createElideEmbeddedKernelFactory(
 
 	return {
 		async open(opts: ElideJsKernelOpenOptions): Promise<ElideJsKernelSession> {
-			const transport = await openTransport();
+			const [transport, spoolDirectory] = await Promise.all([openTransport(), openSpoolDirectory()]);
 			const response = await transport.control({
 				type: "open",
 				spec: {
@@ -585,19 +625,31 @@ export function createElideEmbeddedKernelFactory(
 				const detail = response.type === "failure" ? `${response.code}: ${response.message}` : response.type;
 				throw new Error(`The embedded runtime refused a JS context (${detail}).`);
 			}
+			const inboxPath = path.join(
+				spoolDirectory,
+				`omp-elide-inbox-${response.contextId}-${crypto.randomUUID()}.jsonl`,
+			);
+			// Pre-created with an explicit mode: the first write must not be the one
+			// that decides the file's permissions under the caller's umask.
+			await writeFile(inboxPath, "", { mode: SPOOL_FILE_MODE });
 			return new EmbeddedElideKernelSession({
 				transport,
 				contextId: response.contextId,
-				inboxPath: path.join(spoolDirectory, `omp-elide-inbox-${response.contextId}-${crypto.randomUUID()}.jsonl`),
+				inboxPath,
 				label: opts.sessionId,
 				renderBootstrap,
 			});
 		},
 		async dispose(): Promise<void> {
 			const pending = transportPromise;
+			const spools = spoolDirectoryPromise;
 			transportPromise = undefined;
-			if (!pending) return;
-			await pending.then(transport => transport.dispose()).catch(() => undefined);
+			spoolDirectoryPromise = undefined;
+			if (pending) await pending.then(transport => transport.dispose()).catch(() => undefined);
+			// Each session removes its own spool on close; this reaps the directory
+			// and anything a session that never closed left in it.
+			if (spools)
+				await spools.then(directory => rm(directory, { recursive: true, force: true })).catch(() => undefined);
 		},
 	};
 }
@@ -618,21 +670,34 @@ export function createElideEmbeddedKernelFactory(
  * A factory already in the slot always wins — that is what keeps a test's fake
  * from being replaced by a real kernel that happens to be resolvable on the
  * machine running the suite.
+ *
+ * Only SUCCESS is permanent. A failed attempt is forgotten, because "no runtime
+ * library on this machine" is a fact with a shelf life: this repo can install one
+ * on demand mid-session, and a memoized `false` would hold that session on the
+ * Bun fallback until restart. None of the three failure modes this site exists to
+ * avoid require caching the negative — they are all about the slot's contents.
  */
 let installation: Promise<boolean> | undefined;
 
 export interface EnsureElideJsKernelOptions {
 	/** `runtime.embeddedPath`; a nonblank value is binding. */
 	embeddedPath?: string;
+	env?: NodeJS.ProcessEnv;
 }
 
 /**
  * Install the embedded kernel factory if one is resolvable, and report whether a
- * factory is installed. Idempotent: the first call decides for the process.
+ * factory is installed.
  */
 export function ensureElideJsKernelFactory(options: EnsureElideJsKernelOptions = {}): Promise<boolean> {
 	installation ??= (async () => {
 		if (getElideJsKernelFactory() !== undefined) return true;
+		// A compiled binary has no `src/` to bundle the guest entry from, and
+		// `guest-entry.ts` is statically imported by nothing, so it is not in the
+		// compiled graph either. Refusing here is what makes that a documented
+		// fallback-to-Bun-with-a-notice instead of a cell that dies on its first
+		// run with a bundler error. See ELIDE_ALIGNMENT gap #4.
+		if ((options.env ?? process.env).PI_COMPILED === "true") return false;
 		const resolved = await resolveEmbeddedRuntimeLibrary({ embeddedPath: options.embeddedPath });
 		if (!resolved) return false;
 		// Re-checked after the await: an installer that raced us — in practice a
@@ -642,7 +707,17 @@ export function ensureElideJsKernelFactory(options: EnsureElideJsKernelOptions =
 		setElideJsKernelFactory(createElideEmbeddedKernelFactory({ libraryPath: resolved.libraryPath }));
 		return true;
 	})();
-	return installation;
+	const attempt = installation;
+	const forgetFailure = (installed: boolean): boolean => {
+		// Guarded on identity so a later attempt's memo is never dropped by an
+		// earlier one settling late.
+		if (!installed && installation === attempt) installation = undefined;
+		return installed;
+	};
+	return attempt.then(forgetFailure, error => {
+		if (installation === attempt) installation = undefined;
+		throw error;
+	});
 }
 
 /** Test-only: forget the memoized install attempt. Never call this outside tests. */

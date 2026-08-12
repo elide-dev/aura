@@ -17,7 +17,7 @@ import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { withTimeout } from "@oh-my-pi/pi-utils";
 import elideBackend from "../../../src/eval/elide";
 import { type ElideJsKernelFactory, setElideJsKernelFactory } from "../../../src/eval/elide/kernel";
-import { ensureElideJsKernelFactory, resetElideJsKernelInstallForTests } from "../../../src/eval/elide/kernel-embedded";
+import { resetElideJsKernelInstallForTests } from "../../../src/eval/elide/kernel-embedded";
 import { createFakeElideJsKernelFactory } from "./fake-kernel";
 
 /** Bounds every real await so a wedged kernel fails loudly, under Bun's 5s default. */
@@ -43,7 +43,16 @@ function restoreEnv(name: EnvName, value: string | undefined): void {
 	Bun.env[name] = value;
 }
 
+/** A path that exists nowhere, so library resolution stops rather than looking further. */
+const NO_RUNTIME_LIBRARY = "/nonexistent/no-kernel-for-dispatch-tests.so";
+
 function makeSession(settings = Settings.isolated()): ToolSession {
+	// `isAvailable()` is also the kernel's install site, and a nonblank configured
+	// path is BINDING — resolution stops there instead of consulting the managed
+	// install or `AURA_RUNTIME_EMBEDDED_LIB`. Stamping it on every session is what
+	// keeps this file meaning "no kernel is installed" on a machine that has one,
+	// which is exactly how it is run against the artifact.
+	settings.set("runtime.embeddedPath" as never, NO_RUNTIME_LIBRARY as never);
 	return {
 		// A real directory: the fake kernel runs cells in a real JS runtime that
 		// enters the session cwd.
@@ -69,20 +78,16 @@ const mockResult = {
 };
 
 describe("EvalTool JS engine dispatch", () => {
-	beforeEach(async () => {
+	beforeEach(() => {
 		for (const name of ["PI_JS", "AURA_EVAL_JS_ENGINE"] as const) {
 			savedEnv.set(name, Bun.env[name]);
 			delete Bun.env[name];
 		}
 		// Production installs no kernel factory; start every case from that state.
 		restoreFactory = setElideJsKernelFactory(undefined);
-		// `isAvailable()` is also the kernel's install site, so an empty slot is only
-		// half the setup: pin the process-wide install attempt to "no library found"
-		// as well. A nonblank configured path is BINDING, so this holds on a machine
-		// that has a real runtime library installed or `AURA_RUNTIME_EMBEDDED_LIB`
-		// exported — which is exactly how this file is run against the artifact.
+		// `isAvailable()` is also the kernel's install site; `makeSession` pins every
+		// session to an unresolvable library so no case here can install a real one.
 		resetElideJsKernelInstallForTests();
-		await ensureElideJsKernelFactory({ embeddedPath: "/nonexistent/no-kernel-for-dispatch-tests.so" });
 	});
 
 	afterEach(async () => {

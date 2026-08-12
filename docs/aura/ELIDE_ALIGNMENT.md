@@ -530,13 +530,21 @@ Naming these so the wiring diff stays reviewable:
    polls (`ELIDE_GUEST_INBOX_POLL_MILLIS`, 4 ms) while a run is in flight. It
    costs no listening socket, no URL, and no shared secret, and that same poll
    timer is what keeps the guest event loop — and so the host's `contextCall` —
-   alive across the wait. `hostCallPoll`/`hostCallResolve` (v2) remain the
+   alive across the wait. The spool lives in a per-factory `mkdtemp` directory
+   (0700) with 0600 files, because its payloads are whole tool results and it is
+   append-only for the context's lifetime. `hostCallPoll`/`hostCallResolve` (v2) remain the
    endgame once `capabilities.hostCalls` is true; the switch stays inside
    `guest-entry.ts`'s `Transport`, as intended.
 4. **The guest bundle is built at runtime from `src/`.** `guest-bundle.ts` calls
-   `Bun.build` on first use, which needs the TypeScript sources on disk. Fine
-   while the engine is opt-in and gated on a locally resolved library; a shipped
-   default needs a build-time artifact instead.
+   `Bun.build` on first use, which needs the TypeScript sources on disk — and
+   `guest-entry.ts` is statically imported by nothing, so it is not in a compiled
+   binary's module graph either. Left ungated, `isAvailable()` would return true
+   in a compiled build, the eval tool would NOT take the documented Bun fallback,
+   and the session's first cell would die with a bundler error.
+   **Gated (Task 25):** `ensureElideJsKernelFactory` reports no kernel when
+   `PI_COMPILED === "true"`, so a compiled build gets the documented
+   falls-back-to-Bun-with-a-notice. Lifting the gate is part of the default-flip
+   milestone and wants a build-time artifact, not a runtime `Bun.build`.
 5. **TypeScript cells are not stripped in the guest.** `rewrite-imports.ts`
    constructs a `Bun.Transpiler` at module scope, and the guest's `Bun` shim
    answers `transformSync` with the identity — the same fallback the real
@@ -554,7 +562,15 @@ Naming these so the wiring diff stays reviewable:
    while one run at a time occupies a context — which Tier 2's FIFO guarantees. If
    context-level eval concurrency ever lands, this becomes wrong and wants a real
    async-context implementation in the runtime.
-7. **`interrupt` does not unwind a cell parked in the guest event loop.** It
+7. **A run that never reaches its `result` frame leaves a dead timer handle in
+   the guest.** `exit()`, an interrupt, and a blown output budget all unwind the
+   eval mid-run, taking its pending timers with it. The guest's inbox poll is
+   therefore restarted unconditionally per run rather than reference-counted: an
+   earlier version deferred to the stale handle and left every later run of that
+   context polling nothing, so tool replies sat unread in the spool forever while
+   the host kept executing the tools. Pinned by the real-kernel case
+   `keeps the tool bridge working after a cell unwinds without answering`.
+8. **`interrupt` does not unwind a cell parked in the guest event loop.** It
    unwinds running guest code (a spinning cell, pinned in the parity suite), but a
    cell awaiting a host tool has no guest frame to interrupt and the eval runs on.
    Rung 1 covers running code; the host's existing cancel path — terminate the

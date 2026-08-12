@@ -50,8 +50,6 @@ export function startElideGuest(settings: ElideGuestBootstrapConfig): void {
 	const writeFrameLine = process.stdout.write.bind(process.stdout) as (chunk: string) => boolean;
 
 	const listeners = new Set<(msg: WorkerInbound) => void>();
-	/** Runs the guest has been handed and not yet answered with a `result`. */
-	let activeRuns = 0;
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Bytes of the spool already consumed. Only ever advanced past a complete line. */
 	let inboxOffset = 0;
@@ -104,13 +102,19 @@ export function startElideGuest(settings: ElideGuestBootstrapConfig): void {
 	};
 
 	const stopPolling = (): void => {
-		if (!pollTimer) return;
-		clearTimeout(pollTimer);
+		const timer = pollTimer;
 		pollTimer = undefined;
+		if (!timer) return;
+		try {
+			clearTimeout(timer);
+		} catch {
+			// The handle can outlive the timer it named — an unwound eval takes its
+			// pending timers with it. Clearing a dead handle must not throw into the
+			// run that is starting.
+		}
 	};
 
 	const startPolling = (): void => {
-		if (pollTimer) return;
 		const step = (): void => {
 			// Rescheduled first: a throwing drain must not silently end the poll and
 			// strand every later reply.
@@ -123,11 +127,9 @@ export function startElideGuest(settings: ElideGuestBootstrapConfig): void {
 	const transport: Transport = {
 		send: (msg: WorkerOutbound) => {
 			writeFrameLine(`${settings.framePrefix}${JSON.stringify(msg)}\n`);
-			if (msg.type !== "result") return;
-			activeRuns = Math.max(0, activeRuns - 1);
-			// The last run is answered: drop the timer so the event loop can drain
+			// The run is answered: drop the timer so the guest event loop can drain
 			// and the host's `contextCall` settles.
-			if (activeRuns === 0) stopPolling();
+			if (msg.type === "result") stopPolling();
 		},
 		onMessage: handler => {
 			listeners.add(handler);
@@ -144,7 +146,16 @@ export function startElideGuest(settings: ElideGuestBootstrapConfig): void {
 
 	(globalThis as unknown as Record<string, unknown>).__omp_guest_deliver__ = (msg: WorkerInbound): void => {
 		if (msg.type === "run") {
-			activeRuns += 1;
+			// A RESTART, not a reference count. `contextCall` is FIFO on the one
+			// execution thread, so exactly one run occupies this guest at a time —
+			// and a run that never reaches its `result` frame is the normal case, not
+			// the exotic one: `exit()`, an interrupt, and a blown output budget all
+			// unwind the eval mid-run. Each of those takes its pending timers with it
+			// while leaving `pollTimer` holding the dead handle, so a start that
+			// deferred to a "still polling" timer would leave every later run polling
+			// nothing — every tool reply unread in the spool, forever, on a context
+			// deliberately kept alive. Restarting unconditionally cannot get stuck.
+			stopPolling();
 			startPolling();
 		}
 		deliver(msg);

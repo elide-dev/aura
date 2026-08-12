@@ -15,7 +15,7 @@
  * left open here is a hung eval tool.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 import type { ElideJsKernelSession } from "../../../src/eval/elide/kernel";
@@ -297,7 +297,7 @@ describe("embedded Elide kernel inbound ordering", () => {
 		const spoolPath = await withTimeout(
 			(async () => {
 				while (true) {
-					const entries = await Array.fromAsync(new Bun.Glob("*.jsonl").scan({ cwd: tempDir.path() }));
+					const entries = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan({ cwd: tempDir.path() }));
 					const found = entries[0];
 					if (found) {
 						const contents = await readFile(path.join(tempDir.path(), found), "utf8");
@@ -315,6 +315,75 @@ describe("embedded Elide kernel inbound ordering", () => {
 		const echoed = messages.find(msg => msg.type === "text");
 		expect(echoed?.type === "text" ? echoed.chunk : "").toContain('"type":"tool-reply"');
 		expect(echoed?.type === "text" ? echoed.chunk : "").toContain('"value":"pong"');
+	});
+});
+
+describe("embedded Elide kernel spool", () => {
+	it("keeps spool writes owner-only, in a private directory", async () => {
+		const { session } = await openSession();
+		session.send({ type: "tool-reply", id: "tc-1", reply: { ok: true, value: "secret" } });
+		await Bun.sleep(20);
+
+		const entries = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan({ cwd: tempDir.path() }));
+		const spool = entries[0];
+		if (!spool) throw new Error("no spool file");
+		// Spools carry whole tool results — file contents, command output — and are
+		// append-only for the context's lifetime, so a world-readable file in a
+		// shared temp directory would disclose them to every local user.
+		expect((await stat(path.join(tempDir.path(), spool))).mode & 0o777).toBe(0o600);
+		expect((await stat(path.dirname(path.join(tempDir.path(), spool)))).mode & 0o777).toBe(0o700);
+		// Not directly in the base directory: the factory keeps its own.
+		expect(path.dirname(spool)).not.toBe(".");
+	});
+
+	it("writes concurrent replies as whole lines, in the order they were sent", async () => {
+		const { session } = await openSession();
+		// `parallel(thunks)` is in the eval prompt, so several tool calls really can
+		// be outstanding at once and their replies arrive whenever the host finishes
+		// each one. Queued behind one tail, the spool is a faithful transcript: whole
+		// lines, in send order.
+		//
+		// Honest about what this pins: on Linux + Bun 1.3.14 the unserialized version
+		// passes it too — `appendFile` was probed with 8 concurrent appenders at
+		// 80 KB / 1 MB / 4 MB / 16 MB and neither interleaved nor reordered. The tail
+		// is hardening for the platforms where Node guarantees neither (it documents
+		// no atomicity against concurrent appenders, and a short write followed by a
+		// second write is exactly where a co-appender gets in); this case is the
+		// regression guard on the contract, not a reproduction of the failure.
+		const replies = Array.from({ length: 24 }, (_, index) => ({
+			id: `tc-${index}`,
+			value: String.fromCharCode(97 + (index % 26)).repeat(120_000),
+		}));
+		for (const reply of replies) {
+			session.send({ type: "tool-reply", id: reply.id, reply: { ok: true, value: reply.value } });
+		}
+
+		const spoolPath = async (): Promise<string | undefined> => {
+			const entries = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan({ cwd: tempDir.path() }));
+			return entries[0] ? path.join(tempDir.path(), entries[0]) : undefined;
+		};
+		await withTimeout(
+			(async () => {
+				while (true) {
+					const found = await spoolPath();
+					if (found) {
+						const contents = await readFile(found, "utf8");
+						if (contents.split("\n").filter(Boolean).length === replies.length) return;
+					}
+					await Bun.sleep(5);
+				}
+			})(),
+			WAIT_TIMEOUT_MS,
+			"replies never finished spooling",
+		);
+
+		const found = await spoolPath();
+		if (!found) throw new Error("no spool file");
+		const lines = (await readFile(found, "utf8")).split("\n").filter(Boolean);
+		expect(lines).toHaveLength(replies.length);
+		const parsed = lines.map(line => JSON.parse(line) as { id: string; reply: { value: string } });
+		expect(parsed.map(entry => entry.id)).toEqual(replies.map(reply => reply.id));
+		for (const entry of parsed) expect(entry.reply.value.length).toBe(120_000);
 	});
 });
 
@@ -352,7 +421,7 @@ describe("embedded Elide kernel lifecycle asks", () => {
 		expect(transport.evals.filter(code => code.includes('"type":"init"'))).toHaveLength(2);
 		// A reset guest restarts its spool at offset 0; a reply left there would be
 		// replayed into the next run.
-		const entries = await Array.fromAsync(new Bun.Glob("*.jsonl").scan({ cwd: tempDir.path() }));
+		const entries = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan({ cwd: tempDir.path() }));
 		const spool = entries[0];
 		if (!spool) throw new Error("no spool file");
 		expect(await readFile(path.join(tempDir.path(), spool), "utf8")).toBe("");
@@ -366,6 +435,6 @@ describe("embedded Elide kernel lifecycle asks", () => {
 		await waitFor(seen => seen.some(msg => msg.type === "closed"), "close was never acknowledged");
 
 		expect(transport.controls.filter(op => op.type === "close")).toHaveLength(1);
-		expect(await Array.fromAsync(new Bun.Glob("*.jsonl").scan({ cwd: tempDir.path() }))).toEqual([]);
+		expect(await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan({ cwd: tempDir.path() }))).toEqual([]);
 	});
 });
