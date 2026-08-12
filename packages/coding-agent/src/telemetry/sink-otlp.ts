@@ -122,8 +122,28 @@ function handle(deps: OtlpSinkDeps, event: TelemetryEvent): void {
 					"aura.runtime.exit_code": event.exitCode,
 					"aura.runtime.killed": event.killed,
 					"error.type": event.errorType,
+					"aura.runtime.transport": event.transport,
+					"aura.runtime.fallback_from": event.fallbackFrom,
+					"aura.runtime.failure_code": event.failureCode,
+					"aura.runtime.stdout_bytes": event.stdoutBytes,
+					"aura.runtime.stderr_bytes": event.stderrBytes,
 				}),
 				"aura.runtime.call.completed",
+			);
+			break;
+		case "runtime.embedded.lifecycle":
+			deps.recorder?.recordEmbeddedLifecycle(event);
+			deps.emitLog(
+				event.stage === "open" ? "info" : "warn",
+				`embedded runtime ${event.stage}`,
+				otelAttributes({
+					"aura.runtime.embedded.stage": event.stage,
+					"aura.runtime.embedded.open_duration_ms": event.durationMs,
+					"error.type": event.errorType,
+					"aura.runtime.method": event.method,
+					"aura.runtime.language": event.language,
+				}),
+				"aura.runtime.embedded.lifecycle",
 			);
 			break;
 		case "error.reported":

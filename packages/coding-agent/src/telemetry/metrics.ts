@@ -14,6 +14,7 @@ import type {
 	CompactionCompletedTelemetry,
 	CompactionSavingsTelemetry,
 	RuntimeCallCompletedTelemetry,
+	RuntimeEmbeddedLifecycleTelemetry,
 	SessionEndedTelemetry,
 	UsageLimitSnapshotTelemetry,
 } from "./events";
@@ -60,6 +61,9 @@ export class AuraMetricRecorder {
 	readonly #errors: Counter<Attributes>;
 	readonly #runtimeCalls: Counter<Attributes>;
 	readonly #runtimeDurationMs: Histogram<Attributes>;
+	readonly #runtimeOutputBytes: Histogram<Attributes>;
+	readonly #embeddedLifecycle: Counter<Attributes>;
+	readonly #embeddedOpenDurationMs: Histogram<Attributes>;
 	readonly #sessionDuration: Histogram<Attributes>;
 	readonly #sessionTurns: Histogram<Attributes>;
 	readonly #compactions: Counter<Attributes>;
@@ -119,6 +123,18 @@ export class AuraMetricRecorder {
 		});
 		this.#runtimeDurationMs = meter.createHistogram("aura.runtime.duration", {
 			description: "Managed runtime call wall-clock latency.",
+			unit: "ms",
+		});
+		this.#runtimeOutputBytes = meter.createHistogram("aura.runtime.output.bytes", {
+			description: "Combined stdout+stderr bytes returned by a runtime call.",
+			unit: "By",
+		});
+		this.#embeddedLifecycle = meter.createCounter("aura.runtime.embedded.lifecycle", {
+			description: "Embedded runtime lifecycle transitions (open, poisoned, fallback).",
+			unit: "{event}",
+		});
+		this.#embeddedOpenDurationMs = meter.createHistogram("aura.runtime.embedded.open.duration", {
+			description: "Embedded runtime open latency (library load plus engine boot).",
 			unit: "ms",
 		});
 		this.#sessionDuration = meter.createHistogram("aura.session.duration", {
@@ -224,9 +240,28 @@ export class AuraMetricRecorder {
 			"aura.runtime.action": event.action,
 			"aura.runtime.language": event.language,
 			"aura.runtime.outcome": event.outcome,
+			"aura.runtime.transport": event.transport,
+			"aura.runtime.fallback_from": event.fallbackFrom,
+			"aura.runtime.failure_code": event.failureCode,
 		});
 		this.#runtimeCalls.add(1, attrs);
 		this.#runtimeDurationMs.record(event.durationMs, attrs);
+		if (event.stdoutBytes !== undefined || event.stderrBytes !== undefined) {
+			this.#runtimeOutputBytes.record((event.stdoutBytes ?? 0) + (event.stderrBytes ?? 0), attrs);
+		}
+	}
+
+	recordEmbeddedLifecycle(event: RuntimeEmbeddedLifecycleTelemetry): void {
+		const attrs = metricAttributes({
+			"aura.runtime.embedded.stage": event.stage,
+			"error.type": event.errorType,
+			"aura.runtime.method": event.method,
+			"aura.runtime.language": event.language,
+		});
+		this.#embeddedLifecycle.add(1, attrs);
+		if (event.stage === "open" && event.durationMs !== undefined) {
+			this.#embeddedOpenDurationMs.record(event.durationMs, attrs);
+		}
 	}
 
 	recordSessionEnd(event: SessionEndedTelemetry): void {

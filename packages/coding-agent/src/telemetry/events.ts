@@ -9,7 +9,13 @@
 import type { AgentRunCoverage, AgentRunSummary, ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { UsageHistoryEntry } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { RuntimeErrorCode, RuntimeJvmAction, RuntimeLanguage, RuntimeMethod } from "../runtime/protocol";
+import type {
+	RuntimeErrorCode,
+	RuntimeJvmAction,
+	RuntimeLanguage,
+	RuntimeMethod,
+	RuntimeTransport,
+} from "../runtime/protocol";
 
 export type SessionMode = "tui" | "acp" | "rpc" | "print" | "sdk";
 export type CompactionTrigger = "threshold" | "overflow" | "idle" | "incomplete" | "manual";
@@ -38,6 +44,26 @@ export interface RuntimeCallCompletedTelemetry {
 	exitCode?: number;
 	killed?: boolean;
 	errorType?: RuntimeCallErrorType;
+	transport?: RuntimeTransport;
+	fallbackFrom?: "embedded";
+	/** Embedded wire failure code (closed vocabulary), when the failure carried one. */
+	failureCode?: string;
+	stdoutBytes?: number;
+	stderrBytes?: number;
+}
+
+export type RuntimeEmbeddedLifecycleStage = "open" | "poisoned" | "fallback";
+
+/** Embedded-runtime lifecycle transitions: engine open, poisoning, and process fallback. */
+export interface RuntimeEmbeddedLifecycleTelemetry {
+	type: "runtime.embedded.lifecycle";
+	stage: RuntimeEmbeddedLifecycleStage;
+	/** Open latency (dlopen + engine boot); only for stage "open". */
+	durationMs?: number;
+	/** Failure code or RPC error code that caused a poison/fallback. */
+	errorType?: string;
+	method?: RuntimeMethod;
+	language?: RuntimeLanguage;
 }
 
 export interface SessionStartedTelemetry {
@@ -119,6 +145,7 @@ export type TelemetryEvent =
 	| CompactionCompletedTelemetry
 	| CompactionSavingsTelemetry
 	| RuntimeCallCompletedTelemetry
+	| RuntimeEmbeddedLifecycleTelemetry
 	| UsageLimitSnapshotTelemetry;
 
 export type TelemetrySubscriber = (event: TelemetryEvent) => void;

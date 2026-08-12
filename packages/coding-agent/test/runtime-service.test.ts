@@ -106,6 +106,64 @@ describe("RuntimeService", () => {
 		expect(attributes["aura.runtime.duration_ms"]).toBeNumber();
 	});
 
+	test("publishes transport provenance and output byte counts, never the streams", async () => {
+		const events: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(event => events.push(event));
+		const service = new RuntimeService({
+			async request(req) {
+				return okResponse(req.id, {
+					exitCode: 0,
+					stdout: "ok!",
+					stderr: "é",
+					durationMs: 4,
+					killed: false,
+					transport: "process",
+					fallbackFrom: "embedded",
+				});
+			},
+		});
+		try {
+			await service.run({ code: "print(1)", language: "python" });
+		} finally {
+			unsubscribe();
+		}
+		const event = events.find(candidate => candidate.type === "runtime.call.completed");
+		expect(event).toMatchObject({
+			method: "runtime/run",
+			outcome: "ok",
+			transport: "process",
+			fallbackFrom: "embedded",
+			stdoutBytes: 3,
+			stderrBytes: 2,
+		});
+		expect(event).not.toHaveProperty("stdout");
+		expect(event).not.toHaveProperty("stderr");
+	});
+
+	test("carries the embedded wire failure code on protocol failures", async () => {
+		const events: TelemetryEvent[] = [];
+		const unsubscribe = subscribeTelemetry(event => events.push(event));
+		const service = new RuntimeService({
+			async request(req) {
+				return {
+					jsonrpc: "2.0",
+					id: req.id,
+					error: { code: "internal", message: "isolate crashed", data: { failureCode: "internal" } },
+				};
+			},
+		});
+		try {
+			await expect(service.run({ code: "1", language: "python" })).rejects.toMatchObject({
+				name: "RuntimeRpcError",
+				code: "internal",
+			});
+		} finally {
+			unsubscribe();
+		}
+		const event = events.find(candidate => candidate.type === "runtime.call.completed");
+		expect(event).toMatchObject({ outcome: "error", errorType: "internal", failureCode: "internal" });
+	});
+
 	test("classifies runtime protocol failures once without changing the thrown error", async () => {
 		const events: TelemetryEvent[] = [];
 		const unsubscribe = subscribeTelemetry(event => events.push(event));

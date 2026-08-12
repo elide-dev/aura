@@ -13,6 +13,7 @@ import {
 	type RuntimeMethod,
 	RuntimeRpcError,
 	type RuntimeRunParams,
+	type RuntimeTransport,
 	resolveRunTarget,
 } from "./protocol";
 
@@ -38,6 +39,11 @@ interface RuntimeCallClassification {
 	exitCode?: number;
 	killed?: boolean;
 	errorType?: RuntimeCallErrorType;
+	transport?: RuntimeTransport;
+	fallbackFrom?: "embedded";
+	failureCode?: string;
+	stdoutBytes?: number;
+	stderrBytes?: number;
 }
 
 /** Observe one protocol request without changing its result or failure. */
@@ -91,10 +97,16 @@ function classifyRuntimeCall(
 			language,
 			outcome: errorType === "timeout" ? "timeout" : errorType === "cancelled" ? "cancelled" : "error",
 			errorType,
+			failureCode: runtimeFailureCode(failure),
 		};
 	}
+	const served = servedTransport(result);
 	const exec = runtimeExecResult(result);
-	if (!exec) return { action, language, outcome: "ok" };
+	if (!exec) return { action, language, outcome: "ok", ...served };
+	const streams = {
+		stdoutBytes: Buffer.byteLength(exec.stdout, "utf8"),
+		stderrBytes: Buffer.byteLength(exec.stderr, "utf8"),
+	};
 	if (exec.killed) {
 		return {
 			action,
@@ -103,6 +115,8 @@ function classifyRuntimeCall(
 			exitCode: exec.exitCode,
 			killed: true,
 			errorType: "killed",
+			...served,
+			...streams,
 		};
 	}
 	if (exec.exitCode !== 0) {
@@ -113,9 +127,31 @@ function classifyRuntimeCall(
 			exitCode: exec.exitCode,
 			killed: false,
 			errorType: "non_zero_exit",
+			...served,
+			...streams,
 		};
 	}
-	return { action, language, outcome: "ok", exitCode: exec.exitCode, killed: false };
+	return { action, language, outcome: "ok", exitCode: exec.exitCode, killed: false, ...served, ...streams };
+}
+
+/** Transport/fallback provenance stamped on results by the selected endpoint. */
+function servedTransport(result: unknown): Pick<RuntimeCallClassification, "transport" | "fallbackFrom"> {
+	if (!isRecord(result)) return {};
+	const transport = result.transport;
+	const fallbackFrom = result.fallbackFrom;
+	return {
+		...(transport === "embedded" || transport === "process" || transport === "bun" ? { transport } : {}),
+		...(fallbackFrom === "embedded" ? { fallbackFrom } : {}),
+	};
+}
+
+/** Embedded wire failure code carried on a protocol error, when present. */
+function runtimeFailureCode(failure: unknown): string | undefined {
+	if (!(failure instanceof RuntimeRpcError)) return undefined;
+	const data = failure.data;
+	if (data === null || typeof data !== "object") return undefined;
+	const failureCode = (data as Record<string, unknown>).failureCode;
+	return typeof failureCode === "string" ? failureCode : undefined;
 }
 
 function runtimeAction(method: RuntimeMethod, params: unknown): RuntimeJvmAction | undefined {
@@ -173,6 +209,11 @@ function annotateActiveSpan(event: RuntimeCallCompletedTelemetry): void {
 		span.setAttribute("aura.runtime.duration_ms", event.durationMs);
 		if (event.exitCode !== undefined) span.setAttribute("aura.runtime.exit_code", event.exitCode);
 		if (event.killed !== undefined) span.setAttribute("aura.runtime.killed", event.killed);
+		if (event.transport !== undefined) span.setAttribute("aura.runtime.transport", event.transport);
+		if (event.fallbackFrom !== undefined) span.setAttribute("aura.runtime.fallback_from", event.fallbackFrom);
+		if (event.failureCode !== undefined) span.setAttribute("aura.runtime.failure_code", event.failureCode);
+		if (event.stdoutBytes !== undefined) span.setAttribute("aura.runtime.stdout_bytes", event.stdoutBytes);
+		if (event.stderrBytes !== undefined) span.setAttribute("aura.runtime.stderr_bytes", event.stderrBytes);
 	} catch (error) {
 		logger.debug("Failed to annotate runtime telemetry span", { error: String(error) });
 	}

@@ -239,12 +239,18 @@ export interface RuntimeCheckParams {
 	timeoutMs?: number;
 }
 
+/** Endpoint that actually served a call, stamped by the selected endpoint. */
+export type RuntimeTransport = "embedded" | "process" | "bun";
+
 export interface RuntimeExecResult {
 	exitCode: number;
 	stdout: string;
 	stderr: string;
 	durationMs: number;
 	killed: boolean;
+	transport?: RuntimeTransport;
+	/** Set when the embedded runtime failed and the process endpoint served the retry. */
+	fallbackFrom?: "embedded";
 }
 
 export interface RuntimeRunResult extends RuntimeExecResult {
