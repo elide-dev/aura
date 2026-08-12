@@ -10,7 +10,9 @@ import {
 	dispatchReportIssueDevice,
 	flushGrievances,
 	isAutoQaEnabled,
+	recordRuntimeGrievance,
 	reportIssueDeviceUsage,
+	setAutoQaConsentHandler,
 } from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { mockFetch } from "../helpers/fetch-mock";
@@ -466,5 +468,95 @@ describe("dispatchReportIssueDevice", () => {
 		await expect(dispatchReportIssueDevice(session, "just a vague sentence")).rejects.toThrow(
 			reportIssueDeviceUsage(),
 		);
+	});
+});
+
+describe("recordRuntimeGrievance", () => {
+	afterEach(() => {
+		__resetAutoQaConsentForTests();
+		delete Bun.env.PI_AUTO_QA;
+		delete Bun.env.PI_AUTO_QA_PUSH;
+	});
+
+	it("records a sanitized runtime report under the headless push override", async () => {
+		Bun.env.PI_AUTO_QA = "1";
+		Bun.env.PI_AUTO_QA_PUSH = "1";
+		const db = openTempDb();
+		const openSpy = vi.spyOn(reportIssue, "openAutoQaDb").mockReturnValue(db);
+		try {
+			recordRuntimeGrievance(
+				"embedded runtime runtime/run failed (code=internal); fell back to the process runtime",
+			);
+			await __awaitAutoQaRecordPipelineForTests();
+			const row = db.prepare("SELECT model, tool, report FROM grievances").get() as {
+				model: string;
+				tool: string;
+				report: string;
+			};
+			expect(row).toEqual({
+				model: "system",
+				tool: "embedded_runtime",
+				report: "embedded runtime runtime/run failed (code=internal); fell back to the process runtime",
+			});
+		} finally {
+			openSpy.mockRestore();
+			db.close();
+		}
+	});
+
+	it("records when the registered persistent settings carry a consent grant", async () => {
+		const settings = Settings.isolated({
+			"dev.autoqa": true,
+			"dev.autoqaConsent": "granted",
+			"dev.autoqaPush.endpoint": "",
+		});
+		setAutoQaConsentHandler(null, settings);
+		const db = openTempDb();
+		const openSpy = vi.spyOn(reportIssue, "openAutoQaDb").mockReturnValue(db);
+		try {
+			recordRuntimeGrievance("embedded runtime runtime/run failed (code=closed); fell back to the process runtime");
+			await __awaitAutoQaRecordPipelineForTests();
+			expect(selectIds(db)).toHaveLength(1);
+		} finally {
+			setAutoQaConsentHandler(null, null);
+			openSpy.mockRestore();
+			db.close();
+		}
+	});
+
+	it("never records — and never prompts — without a resolved consent grant", async () => {
+		Bun.env.PI_AUTO_QA = "1";
+		let prompted = false;
+		setAutoQaConsentHandler(async () => {
+			prompted = true;
+			return true;
+		});
+		const db = openTempDb();
+		const openSpy = vi.spyOn(reportIssue, "openAutoQaDb").mockReturnValue(db);
+		try {
+			recordRuntimeGrievance("embedded runtime runtime/run failed (code=internal)");
+			await __awaitAutoQaRecordPipelineForTests();
+			expect(selectIds(db)).toHaveLength(0);
+			expect(prompted).toBe(false);
+		} finally {
+			setAutoQaConsentHandler(null, null);
+			openSpy.mockRestore();
+			db.close();
+		}
+	});
+
+	it("is a no-op when auto-QA is disabled", async () => {
+		Bun.env.PI_AUTO_QA = "0";
+		Bun.env.PI_AUTO_QA_PUSH = "1";
+		const db = openTempDb();
+		const openSpy = vi.spyOn(reportIssue, "openAutoQaDb").mockReturnValue(db);
+		try {
+			recordRuntimeGrievance("embedded runtime runtime/run failed (code=internal)");
+			await __awaitAutoQaRecordPipelineForTests();
+			expect(selectIds(db)).toHaveLength(0);
+		} finally {
+			openSpy.mockRestore();
+			db.close();
+		}
 	});
 });

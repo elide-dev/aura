@@ -546,6 +546,34 @@ function recordToolIssue(session: ToolSession, tool: string, report: string): vo
 }
 
 /**
+ * Queue a grievance for an embedded-runtime infrastructure failure.
+ *
+ * Infrastructure path: unlike {@link recordToolIssue} there is no session and no
+ * UI, so consent is read from the process cache / persisted settings only — this
+ * NEVER prompts. Callers must pass an already-sanitized report (failure codes,
+ * method, language, durations; never source, args, environment, or output).
+ */
+export function recordRuntimeGrievance(report: string): void {
+	const settings = persistentConsentSettings ?? undefined;
+	if (!isAutoQaEnabled(settings)) return;
+	lastRecordPipeline = (async () => {
+		try {
+			const consented =
+				$flag("PI_AUTO_QA_PUSH") || cachedConsent === true || readPersistedConsent(settings) === true;
+			if (!consented) return;
+			const db = openAutoQaDb();
+			if (!db) return;
+			db.prepare(
+				"INSERT INTO grievances (model, version, tool, report, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+			).run("system", VERSION, "embedded_runtime", report);
+			await flushGrievances(db, settings);
+		} catch (error) {
+			logger.debug("runtime grievance pipeline failed", { error: String(error) });
+		}
+	})();
+}
+
+/**
  * Execute `write xd://report_issue`. `text` must be either:
  * - `<tool>: <concise description>` on one line, or
  * - tool name on the first line with the report body below.
