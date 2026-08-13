@@ -263,6 +263,28 @@ function trimTrailingNewlines(text: string): string {
 	return text.replace(/\n+$/, "");
 }
 
+/**
+ * Instrumentation used when the caller supplies neither `insight` nor
+ * `insightPath`: source loads, the first call of every root with its location,
+ * and logarithmic hot-function milestones (x10, x100, …). Insight on this
+ * runtime has no end-of-run event (verified against the shipped CLI — a
+ * `close` handler never fires), so the script must print as it observes; the
+ * milestone ladder is what keeps a hot loop from flooding stdout while still
+ * surfacing where the time goes.
+ */
+export const DEFAULT_INSIGHT_SCRIPT = `const counts = new Map();
+insight.on("source", function (src) {
+	print("[insights] load " + src.name + " (" + src.language + ")");
+});
+insight.on("enter", function (ctx) {
+	const key = (ctx.name || "<anonymous>") + " (" + ctx.source.name + ":" + ctx.line + ")";
+	const n = (counts.get(key) || 0) + 1;
+	counts.set(key, n);
+	if (n === 1) print("[insights] call " + key);
+	else if (n === 10 || n === 100 || n === 1000 || n === 10000 || n === 100000) print("[insights] hot  " + key + " x" + n);
+}, { roots: true });
+`;
+
 const MISSING_GUIDANCE =
 	"The runtime is not installed. It downloads automatically on first use when runtime.autoDownload is on; " +
 	"or point AURA_RUNTIME_BIN (or the runtime.path setting) at an existing binary. Requires runtime >= 1.4.";
@@ -384,11 +406,9 @@ export class LocalRuntimeEndpoint implements RuntimeEndpoint {
 	}
 
 	private async execInsights(params: RuntimeInsightsParams, signal?: AbortSignal): Promise<RuntimeExecResult> {
-		if (params.insight === undefined && params.insightPath === undefined) {
-			throw new RuntimeRpcError("invalid-params", "insights requires insight (inline JS) or insightPath.");
-		}
 		return this.withGuestFile(params, signal, async (bin, guestFile, language, wd) => {
-			const insightFile = params.insightPath ?? (await wd.write("insight.js", params.insight ?? ""));
+			const insightFile =
+				params.insightPath ?? (await wd.write("insight.js", params.insight ?? DEFAULT_INSIGHT_SCRIPT));
 			const argv = [
 				bin,
 				"run",

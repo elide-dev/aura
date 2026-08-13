@@ -61,7 +61,7 @@ export interface RuntimeRunParams {
 }
 
 export interface RuntimeInsightsParams extends RuntimeRunParams {
-	/** Inline insight instrumentation script (JS). */
+	/** Inline insight instrumentation script (JS). Omitting both this and `insightPath` runs a default first-call/hot-function trace. */
 	insight?: string;
 	/** Existing insight script path. */
 	insightPath?: string;

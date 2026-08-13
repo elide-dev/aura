@@ -89,6 +89,37 @@ describe("LocalRuntimeEndpoint", () => {
 		expect(out.stdout.slice(insightsAt, langAt)).toContain("insight.js");
 	});
 
+	/** A fake bin that prints the CONTENT of the materialized insight script. */
+	async function makeInsightCattingBin(): Promise<string> {
+		const bin = path.join(dir, "elide-cat-insight");
+		await fs.writeFile(
+			bin,
+			`#!/bin/sh\nif [ "$1" = "--version" ]; then echo "9.9.9-fake"; exit 0; fi\nfor a in "$@"; do case "$a" in --insights=*) cat "\${a#--insights=}";; esac; done\n`,
+			{ mode: 0o755 },
+		);
+		return bin;
+	}
+
+	test("insights without a script materializes the default instrumentation", async () => {
+		const ep = new LocalRuntimeEndpoint({ explicitPath: await makeInsightCattingBin(), autoDownload: false });
+		const out = unwrapResponse<RuntimeExecResult>(
+			await ep.request(createRequest("runtime/insights", { code: "1", language: "js" })),
+		);
+		// No invalid-params: the call ran, with the default trace synthesized.
+		expect(out.stdout).toContain('insight.on("source"');
+		expect(out.stdout).toContain("[insights] call ");
+	});
+
+	test("an explicitly empty inline script is honored, not replaced by the default", async () => {
+		// `insight: ""` is a caller's deliberate no-op script; only ABSENT input
+		// selects the default trace.
+		const ep = new LocalRuntimeEndpoint({ explicitPath: await makeInsightCattingBin(), autoDownload: false });
+		const out = unwrapResponse<RuntimeExecResult>(
+			await ep.request(createRequest("runtime/insights", { code: "1", language: "js", insight: "" })),
+		);
+		expect(out.stdout).not.toContain("[insights]");
+	});
+
 	test("profile places --profiler before -l", async () => {
 		const ep = new LocalRuntimeEndpoint({ explicitPath: fakeBin, autoDownload: false });
 		const out = unwrapResponse<RuntimeExecResult>(

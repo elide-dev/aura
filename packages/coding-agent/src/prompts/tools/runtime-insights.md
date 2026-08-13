@@ -1,5 +1,6 @@
 Observe a JavaScript or TypeScript{{#if python}}, or Python{{/if}} program with instrumentation.
-`code`/`path` selects the program; `insight`/`insightPath` selects a JavaScript Insight script.
+`code`/`path` selects the program; `insight`/`insightPath` optionally selects a JavaScript Insight script.
+With no script, a default trace runs: source loads, each function's first call with its location, and hot-function milestones (x10, x100, …). Supply a script only when you need something the default trace does not show.
 
 The Insight source runs as a plain script with injected `insight` and `print` globals. Call `insight.on(...)` at top level. NEVER use `import`, `export`, or wrap hooks in an object.
 

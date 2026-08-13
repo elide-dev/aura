@@ -10,7 +10,7 @@ import type { ToolSession } from ".";
 const runtimeInsightsSchema = type({
 	"code?": type("string").describe("inline program (exclusive with path)"),
 	"path?": type("string").describe("existing program file"),
-	"insight?": type("string").describe("inline JS instrumentation"),
+	"insight?": type("string").describe("inline JS instrumentation (optional; omit for a default call/hotness trace)"),
 	"insightPath?": type("string").describe("instrumentation file"),
 	"language?": type("'js' | 'ts' | 'python'").describe("inline language (default ts)"),
 	"args?": type("string[]").describe("program arguments"),
@@ -22,7 +22,7 @@ const runtimeInsightsSchema = type({
 const runtimeInsightsSchemaWithoutPython = type({
 	"code?": type("string").describe("inline program (exclusive with path)"),
 	"path?": type("string").describe("existing program file"),
-	"insight?": type("string").describe("inline JS instrumentation"),
+	"insight?": type("string").describe("inline JS instrumentation (optional; omit for a default call/hotness trace)"),
 	"insightPath?": type("string").describe("instrumentation file"),
 	"language?": type("'js' | 'ts'").describe("inline language (default ts)"),
 	"args?": type("string[]").describe("program arguments"),
