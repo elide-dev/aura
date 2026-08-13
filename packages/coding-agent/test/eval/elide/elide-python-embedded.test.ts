@@ -75,6 +75,27 @@ describe.skipIf(!LIBRARY)("Elide Python backend on the embedded runtime", () => 
 		expect(second.output).toContain("42");
 	}, 120_000);
 
+	/**
+	 * Pins a DEFECT the prompt now discloses: unlike the CPython/IPython kernel,
+	 * this engine does not echo a bare trailing expression — the cell succeeds
+	 * with empty output, which a model reads as "the value is empty" unless the
+	 * prompt warns it (eval.md's pyElide line does). The day result capture or
+	 * an echo transform lands (capabilities.captureResultValue, or a host-side
+	 * AST wrap), this test MUST flip to assert the echo and the prompt clause
+	 * MUST come out — that is the point of pinning it.
+	 */
+	it("does not echo a bare trailing expression (print() is required)", async () => {
+		const setup = await run("kept = 7");
+		expect(setup.exitCode).toBe(0);
+		const bare = await run("kept * 6");
+		expect(bare.exitCode).toBe(0);
+		expect(bare.output.trim()).toBe("");
+		// The value exists; only the echo is missing.
+		const printed = await run("print(kept * 6)");
+		expect(printed.exitCode).toBe(0);
+		expect(printed.output).toContain("42");
+	}, 60_000);
+
 	it("reports a raised error as a value, not a throw", async () => {
 		const result = await run("raise ValueError('boom')");
 		expect(result.exitCode).toBe(1);

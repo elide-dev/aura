@@ -151,6 +151,10 @@ describe("eval tool description Python engine", () => {
 		expect(text).toContain(
 			"A Python cell calling a prelude helper (`read`, `write`, `agent`, …) still works, but may run on a separate CPython kernel that does not share variables with your other Python cells",
 		);
+		// The engine does not echo a bare trailing expression (pinned by the
+		// real-kernel suite); the model must be told to print() what it wants
+		// to see, or its inspect-by-trailing-expression habit reads as "empty".
+		expect(text).toContain("A bare trailing expression is NOT echoed on this engine: `print()` any value you want to see.");
 	});
 
 	it("says nothing about either engine when Python is disabled", () => {
