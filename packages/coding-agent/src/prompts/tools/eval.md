@@ -3,7 +3,7 @@ Run one step of code in a persistent kernel. State persists across calls and sub
 Work incrementally: imports → define → test → use, each its own cell. Re-run setup ONLY after `reset`, kernel crash.
 Parallelize *within* a cell with `parallel(thunks)`, not by batching.
 
-{{#if py}}Top-level `await` works; `asyncio.run(…)` raises error.{{/if}}
+{{#if py}}Top-level `await` works; `asyncio.run(…)` raises error.{{/if}}{{#if pyElide}} A Python cell calling a prelude helper (`read`, `write`, `agent`, …) still works, but may run on a separate CPython kernel that does not share variables with your other Python cells — keep helper calls in their own cells.{{/if}}
 {{#if jsBun}}JS runs under **Bun**: globals (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`) available; top-level `await`/`return` work.{{/if}}{{#if jsElide}}JS runs on the **managed runtime**: `fetch`, `Buffer`, node built-ins via `require`, and `Bun.file`/`Bun.write` available; top-level `await`/`return` work. Write cells in JavaScript — type annotations are not stripped.{{/if}}
 
 On error, fix and re-run only the failing step.

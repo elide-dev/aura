@@ -1,14 +1,19 @@
 /**
- * The Elide Python backend against a REAL embedded runtime.
+ * The Elide Python engine against a REAL embedded runtime.
  *
  * Gated on `AURA_RUNTIME_EMBEDDED_LIB`: without an artifact there is nothing to
- * open, and a skipped suite is honest where a mocked one would not be. Cells go
- * through the backend rather than `EvalTool` so the assertions are about the
- * engine, not the tool's cell plumbing.
+ * open, and a skipped suite is honest where a mocked one would not be.
+ *
+ * Two suites, split by what they are about. The first drives the BACKEND
+ * directly, so its assertions are about the engine rather than the tool's cell
+ * plumbing. The second drives `EvalTool` with a session that configures nothing,
+ * because what it pins is the dispatch decision the flipped default produces.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
+import { $which } from "@oh-my-pi/pi-utils";
 import elidePythonBackend from "../../../src/eval/elide/python";
 import { closeElidePythonContextsForTests } from "../../../src/eval/elide/python-executor";
 import {
@@ -112,4 +117,90 @@ describe.skipIf(!LIBRARY)("Elide Python backend on the embedded runtime", () => 
 		expect(wiped.exitCode).toBe(1);
 		expect(wiped.output).toContain("carried");
 	}, 60_000);
+});
+
+const HAS_CPYTHON = Boolean(Bun.env.PYTHON ?? ($which("python3") ? "python3" : $which("python")));
+
+/** The model-visible text of a tool result, with any image parts dropped. */
+function cellText(content: readonly { type: string }[]): string {
+	return content
+		.filter((part): part is { type: "text"; text: string } => part.type === "text")
+		.map(part => part.text)
+		.join("\n");
+}
+
+/**
+ * The default flip, end to end on a real artifact: a session that configures
+ * NOTHING serves plain python cells from a runtime context, and a bridge-using
+ * cell in that same session is rerouted to CPython.
+ *
+ * Cells go through `EvalTool` rather than the backend because the thing under
+ * test is the dispatch decision, not the engine.
+ */
+describe.skipIf(!LIBRARY)("Default-session python dispatch on the embedded runtime", () => {
+	let factory: ElideEmbeddedPythonKernelFactory | undefined;
+	let restore: ElidePythonKernelFactory | undefined;
+	let savedEngineEnv: string | undefined;
+
+	/** Nothing stored, nothing exported: the schema default has to be what picks elide. */
+	function defaultSession(): ToolSession {
+		return {
+			cwd: process.cwd(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => null,
+			getEvalSessionId: () => "elide-python-default-dispatch",
+			settings: Settings.isolated(),
+		} as unknown as ToolSession;
+	}
+
+	beforeAll(() => {
+		savedEngineEnv = Bun.env.AURA_EVAL_PY_ENGINE;
+		delete Bun.env.AURA_EVAL_PY_ENGINE;
+		factory = createElideEmbeddedPythonKernelFactory({ libraryPath: LIBRARY });
+		restore = setElidePythonKernelFactory(factory);
+	});
+
+	afterAll(async () => {
+		await closeElidePythonContextsForTests().catch(() => undefined);
+		await factory?.dispose().catch(() => undefined);
+		setElidePythonKernelFactory(restore);
+		if (savedEngineEnv === undefined) delete Bun.env.AURA_EVAL_PY_ENGINE;
+		else Bun.env.AURA_EVAL_PY_ENGINE = savedEngineEnv;
+	}, 120_000);
+
+	it("serves plain cells from a runtime context, with state across calls and no notice", async () => {
+		const tool = new EvalTool(defaultSession());
+		const first = await tool.execute("default-real-1", { language: "py", code: "kept = 7" });
+		expect(first.details?.notice).toBeUndefined();
+
+		const second = await tool.execute("default-real-2", { language: "py", code: "print(kept * 6)" });
+		expect(cellText(second.content)).toContain("42");
+		expect(second.details?.notice).toBeUndefined();
+		expect(second.details?.language).toBe("python");
+	}, 120_000);
+
+	/**
+	 * The reroute, and the state split it costs. `kept` was set on the runtime
+	 * context by the test above; the CPython kernel this cell lands in has never
+	 * heard of it, which is exactly what the notice warns about.
+	 */
+	it.skipIf(!HAS_CPYTHON)(
+		"routes a bridge-using cell to CPython, into its own state universe",
+		async () => {
+			const tool = new EvalTool(defaultSession());
+			const result = await tool.execute("default-real-bridge", {
+				language: "py",
+				code: "print(len(read('package.json')) > 0)\nprint('kept' in dir())",
+			});
+
+			expect(result.details?.notice).toContain("ran on the CPython engine");
+			expect(result.details?.notice).toContain("does not see variables");
+			const text = cellText(result.content);
+			expect(text).toContain("True");
+			// Two state universes: the runtime context's `kept` is not here.
+			expect(text).toContain("False");
+		},
+		180_000,
+	);
 });

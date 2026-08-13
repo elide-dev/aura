@@ -94,9 +94,15 @@ export async function closeElidePythonContextsForTests(): Promise<void> {
  * `file.read()` and `my_display(...)`. Known over-refusals beyond a
  * user-defined bare `read(...)` call: the names inside comments or string
  * literals (`# write(x) is unused`, `s = "output(1)"`) and a cell DEFINING
- * one (`def read(path):` — the space before `read` matches). Each gets the
- * bridge-gap refusal below rather than a run; acceptable while the engine is
- * opt-in, listed here so the false-positive class is not understated.
+ * one (`def read(path):` — the space before `read` matches). Each is treated as
+ * bridge use rather than run here; the cost of a false positive is now a
+ * REROUTE to CPython (which serves every one of those cells correctly), not a
+ * refusal, so the class is cheaper than it was when the engine was opt-in.
+ *
+ * This function is the DETECTOR the dispatch layer consults: `resolveBackend`
+ * in `tools/eval.ts` calls it before picking a backend and sends a bridge-using
+ * cell to the CPython backend. The refusal below is what is left when there is
+ * no CPython backend to send it to.
  */
 const BRIDGE_NAMES = ["read", "write", "display", "output", "env", "completion", "agent", "parallel", "pipeline"];
 const BRIDGE_CALL = new RegExp(String.raw`(^|[^\w.])(${BRIDGE_NAMES.join("|")})\s*\(`, "m");
@@ -105,9 +111,16 @@ export function findEvalToolBridgeUse(code: string): string | undefined {
 	return BRIDGE_CALL.exec(code)?.[2];
 }
 
+/**
+ * The terminal bridge-gap failure. Reached only when the dispatch layer had no
+ * CPython backend to reroute the cell to, so it may NOT tell the user to switch
+ * `eval.pyEngine` to `cpython`: on a host that lands here, the cpython engine
+ * has no kernel either and the switch would fail the same cell differently.
+ */
 const TOOL_BRIDGE_GAP =
-	"The runtime Python engine has no eval tool bridge yet, so %s() is not defined in this context. " +
-	'Set eval.pyEngine to "cpython" (or unset it) to run cells that call eval tools.';
+	"The runtime Python engine has no eval tool bridge yet, so %s() is not defined in this context, " +
+	"and no CPython kernel is installed to run this cell instead. " +
+	"Install the python kernel to run cells that call eval tool helpers.";
 
 function toResult(summary: Awaited<ReturnType<OutputSink["dump"]>>, exitCode: number | undefined, cancelled: boolean) {
 	return {

@@ -11,15 +11,18 @@
  * session key alone, so a key shared with the CPython backend would let one
  * engine's state answer the other's cells.
  *
- * Reached only through the eval tool's lazy `import()`, so a default (CPython)
- * session never loads the executor or the kernel seam at all.
+ * Reached only through the eval tool's lazy `import()`, so a session pinned to
+ * `cpython` never loads the executor or the kernel seam at all.
  *
  * ## Recorded gaps (deliberately not built)
  *
  * - **No eval tool bridge.** `read()`, `write()`, `agent()` and the rest of the
  *   prelude need a Python-side guest shim over the host spool; there is none.
- *   A cell that calls one gets a clear error value naming the gap and pointing
- *   at the `cpython` engine rather than a bare `NameError`.
+ *   Since this engine is the DEFAULT, `resolveBackend` reroutes a cell that
+ *   calls one to the CPython backend with a notice rather than failing it — at
+ *   the cost of that cell running in the CPython kernel's separate session
+ *   state, which the notice says out loud. Only a host with no CPython kernel
+ *   at all reaches this engine's own bridge-gap error value.
  * - **No mainScript mode**, so no file/args/stdin carriers; no rich display
  *   outputs; no captured result value. Cells communicate through stdout.
  *

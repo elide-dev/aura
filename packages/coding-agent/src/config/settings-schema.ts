@@ -3702,7 +3702,7 @@ export const SETTINGS_SCHEMA = {
 	"eval.pyEngine": {
 		type: "enum",
 		values: ["cpython", "elide"] as const,
-		default: "cpython",
+		default: "elide",
 		ui: {
 			tab: "shell",
 			group: "Eval & Runtimes",
@@ -3718,7 +3718,7 @@ export const SETTINGS_SCHEMA = {
 					value: "elide",
 					label: "Runtime",
 					description:
-						"Execute Python cells on the managed runtime's persistent context (falls back to CPython with a notice when no runtime library is installed). Has no eval tool bridge yet.",
+						"Execute Python cells on the managed runtime's persistent context (falls back to CPython when no runtime library is installed). It has no eval tool bridge yet, so a cell calling read()/write()/agent() is routed to CPython — and sees the CPython kernel's variables, not the runtime context's.",
 				},
 			],
 		},

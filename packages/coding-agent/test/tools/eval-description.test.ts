@@ -118,6 +118,73 @@ describe("eval tool description JS engine", () => {
 	});
 });
 
+/**
+ * The Python engine line exists for ONE reason: the runtime engine has no tool
+ * bridge, so a helper-calling cell is rerouted to CPython and lands in a
+ * different state universe. Nothing in the code the model wrote hints at that.
+ */
+describe("eval tool description Python engine", () => {
+	const savedEngineEnv = Bun.env.AURA_EVAL_PY_ENGINE;
+
+	afterEach(() => {
+		if (savedEngineEnv === undefined) delete Bun.env.AURA_EVAL_PY_ENGINE;
+		else Bun.env.AURA_EVAL_PY_ENGINE = savedEngineEnv;
+	});
+
+	/**
+	 * The CPython rendering is the pre-flip text, byte for byte: a caller that
+	 * names no engine must not be handed a warning about a reroute that cannot
+	 * happen on the engine it is describing.
+	 */
+	it("says nothing about the bridge reroute on the CPython engine", () => {
+		const text = getEvalToolDescription({ py: true, js: true, pyEngine: "cpython" });
+		expect(text).toBe(getEvalToolDescription({ py: true, js: true }));
+		expect(text).not.toContain("separate CPython kernel");
+		expect(text).toContain("Top-level `await` works; `asyncio.run(…)` raises error.\n");
+	});
+
+	it("warns that a helper cell may not share variables when the runtime engine is selected", () => {
+		const text = getEvalToolDescription({ py: true, js: true, pyEngine: "elide" });
+		// "may run on" — not "runs on". The description is assembled long before any
+		// cell runs, and a session on the runtime engine still lands on CPython
+		// wholesale when no library resolves, where helper cells share state normally.
+		expect(text).toContain(
+			"A Python cell calling a prelude helper (`read`, `write`, `agent`, …) still works, but may run on a separate CPython kernel that does not share variables with your other Python cells",
+		);
+	});
+
+	it("says nothing about either engine when Python is disabled", () => {
+		const text = getEvalToolDescription({ py: false, js: true, pyEngine: "elide" });
+		expect(text).toBe(getEvalToolDescription({ py: false, js: true }));
+	});
+
+	/**
+	 * Keyed off SELECTION, not provenance — unlike the fallback notice. The
+	 * reroute bites precisely the default-engine session that HAS a runtime
+	 * library, so suppressing the line for default selections would drop it
+	 * exactly where it is needed.
+	 */
+	it("EvalTool warns on the flipped default with nothing configured", () => {
+		expect(new EvalTool(makeSession({})).description).toContain("separate CPython kernel");
+	});
+
+	it("EvalTool follows a session that pins the CPython engine", () => {
+		const session = makeSession({});
+		session.settings.set("eval.pyEngine" as never, "cpython" as never);
+		expect(new EvalTool(session).description).not.toContain("separate CPython kernel");
+	});
+
+	it("degrades to the CPython line instead of throwing on a malformed engine", () => {
+		Bun.env.AURA_EVAL_PY_ENGINE = "not-an-engine";
+		const session = makeSession({});
+		let description = "";
+		expect(() => {
+			description = new EvalTool(session).description;
+		}).not.toThrow();
+		expect(description).not.toContain("separate CPython kernel");
+	});
+});
+
 describe("eval tool dynamic schema", () => {
 	// resolveEvalBackends lets PI_* env flags override settings; neutralize them per-test
 	// so the schema is driven purely by the isolated settings (and restore to avoid leaks).

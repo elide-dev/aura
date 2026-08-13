@@ -68,10 +68,11 @@ export function resolveJsEvalEngine(session: Pick<ToolSession, "settings">): JsE
 /**
  * Engine that executes Python eval cells.
  *
- * `"cpython"` is the default and names the subprocess kernel every session has
- * always used; `"elide"` serves cells from a persistent guest context on the
- * managed runtime. Same shape as {@link JsEvalEngine}, including the naming
- * rule: these strings are typed into config files and env vars.
+ * `"elide"` is the default and serves cells from a persistent guest context on
+ * the managed runtime; `"cpython"` names the subprocess kernel every session
+ * used before the flip, and is still what a fallback lands on. Same shape as
+ * {@link JsEvalEngine}, including the naming rule: these strings are typed into
+ * config files and env vars.
  */
 export type PyEvalEngine = "cpython" | "elide";
 
@@ -104,16 +105,55 @@ export function pyEvalEngineFromEnvironment(
  */
 function pyEvalEngineFromSetting(configured: string | undefined): PyEvalEngine {
 	const value = configured?.trim();
-	if (!value) return "cpython";
+	if (!value) return "elide";
 	if (isPyEvalEngine(value)) return value;
 	throw new Error(`eval.pyEngine must be cpython or elide; received ${JSON.stringify(value)}.`);
+}
+
+/**
+ * A resolved Python engine plus WHO chose it.
+ *
+ * Provenance exists for one caller: the fallback notice. Now that `elide` is the
+ * default, a host with no runtime library would otherwise stamp "Elide Python
+ * engine unavailable; ran on the CPython engine." on every single python cell —
+ * pure noise for a user who never asked for the runtime engine and whose cells
+ * behave exactly as they always have. A user who typed the setting (or exported
+ * the env var) DID ask, and still gets told their choice was not honored.
+ */
+export interface PyEvalEngineChoice {
+	engine: PyEvalEngine;
+	/**
+	 * `true` when a configured `eval.pyEngine` or a nonblank `AURA_EVAL_PY_ENGINE`
+	 * picked the engine; `false` when it came from the schema default. A blank env
+	 * value is not a choice — it is exactly what the resolver above already
+	 * ignores.
+	 *
+	 * The stored half asks `settings.isConfigured`, NOT `settings.get`: `get`
+	 * substitutes the schema default for an unset key, so every session would read
+	 * as explicit and the notice would never be suppressed.
+	 */
+	explicit: boolean;
 }
 
 /**
  * Resolve the Python eval engine for a session: setting, then env override.
  * The stored value is validated first so a malformed setting is reported even
  * when the override would have replaced it.
+ *
+ * Deliberately a SECOND helper rather than a widened `resolveJsEvalEngine`-shaped
+ * return: the JS resolver has no notice-noise problem to solve, and its callers
+ * should not have to learn a wrapper object to keep working.
  */
+export function resolvePyEvalEngineChoice(
+	session: Pick<ToolSession, "settings">,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): PyEvalEngineChoice {
+	const engine = pyEvalEngineFromEnvironment(pyEvalEngineFromSetting(session.settings.get("eval.pyEngine")), env);
+	const explicit = session.settings.isConfigured("eval.pyEngine") || Boolean(env.AURA_EVAL_PY_ENGINE?.trim());
+	return { engine, explicit };
+}
+
+/** The engine alone, for callers that do not care who chose it. */
 export function resolvePyEvalEngine(session: Pick<ToolSession, "settings">): PyEvalEngine {
-	return pyEvalEngineFromEnvironment(pyEvalEngineFromSetting(session.settings.get("eval.pyEngine")));
+	return resolvePyEvalEngineChoice(session).engine;
 }

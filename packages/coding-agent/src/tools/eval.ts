@@ -7,7 +7,13 @@ import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
 // Engine selection only — a leaf module with no runtime imports, so consulting it
 // here keeps the Elide backend itself out of the default graph (see below).
-import { type JsEvalEngine, type PyEvalEngine, resolveJsEvalEngine, resolvePyEvalEngine } from "../eval/elide/settings";
+import {
+	type JsEvalEngine,
+	type PyEvalEngine,
+	resolveJsEvalEngine,
+	resolvePyEvalEngine,
+	resolvePyEvalEngineChoice,
+} from "../eval/elide/settings";
 import { IdleTimeout } from "../eval/idle-timeout";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
@@ -179,6 +185,22 @@ export interface EvalToolDescriptionOptions {
 	 */
 	jsEngine?: JsEvalEngine;
 	/**
+	 * Engine that will serve `py` cells. Only one line depends on it: the runtime
+	 * engine has no Python tool bridge, so a cell calling a prelude helper is
+	 * rerouted to CPython and lands in a DIFFERENT state universe — a surprise the
+	 * model has to be told about, because nothing in the code it wrote hints at it.
+	 *
+	 * Like {@link jsEngine} the claim has to survive a FALLBACK: this description is
+	 * assembled long before any cell runs, and a session on the runtime engine still
+	 * lands on CPython when no runtime library resolves (where helper cells share
+	 * state normally). So the runtime line says a helper cell MAY run on a separate
+	 * kernel — true on both engines — rather than promising which one served it.
+	 *
+	 * Defaults to `cpython` here rather than to the setting's default so that a
+	 * caller who does not pass an engine gets the pre-flip text verbatim.
+	 */
+	pyEngine?: PyEvalEngine;
+	/**
 	 * Parent spawn policy (`getSessionSpawns`). `true`/omitted means unrestricted,
 	 * `false`/`""` hides `agent()`, and a comma list drives the advertised default.
 	 */
@@ -191,6 +213,7 @@ export function getEvalToolDescription(options: EvalToolDescriptionOptions = {})
 	const rb = options.rb ?? false;
 	const jl = options.jl ?? false;
 	const jsEngine = options.jsEngine ?? "bun";
+	const pyEngine = options.pyEngine ?? "cpython";
 	const spawnPolicy = resolveSpawnPolicy(options.spawns ?? true);
 	return prompt.render(evalDescription, {
 		py,
@@ -199,6 +222,7 @@ export function getEvalToolDescription(options: EvalToolDescriptionOptions = {})
 		jl,
 		jsBun: js && jsEngine === "bun",
 		jsElide: js && jsEngine === "elide",
+		pyElide: py && pyEngine === "elide",
 		spawns: spawnPolicy.enabled,
 		spawnDefaultAgent: spawnPolicy.defaultAgent,
 		spawnAllowedAgentsText: spawnPolicy.allowedPromptText,
@@ -234,7 +258,22 @@ function detailsNotice(cells: ResolvedEvalCell[]): string | undefined {
 	return notices.length > 0 ? notices.join(" ") : undefined;
 }
 
-async function resolveBackend(session: ToolSession, language: EvalLanguage): Promise<ResolvedBackend> {
+/**
+ * Told to the model when a bridge-using cell is rerouted off the runtime engine.
+ *
+ * The second sentence is the important half and is NOT optional: the two engines
+ * hold two independent state universes, so a rerouted cell genuinely cannot see
+ * globals that earlier cells set on the runtime context (and vice versa). See
+ * {@link resolveBackend} for why that is an accepted cost.
+ */
+const PY_BRIDGE_REROUTE_NOTICE =
+	"This cell calls eval tool helpers; the Elide Python engine has no tool bridge yet, so it ran on the CPython engine. " +
+	"It ran in the CPython kernel's own session state, so it does not see variables that earlier cells set on the Elide engine.";
+
+/** Told to the model when the runtime engine was ASKED FOR by name and could not be served. */
+const PY_FALLBACK_NOTICE = "Elide Python engine unavailable; ran on the CPython engine.";
+
+async function resolveBackend(session: ToolSession, language: EvalLanguage, code: string): Promise<ResolvedBackend> {
 	const backends = resolveEvalBackends(session);
 	const allowPy = backends.python;
 	const allowJs = backends.js;
@@ -244,31 +283,74 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	if (language === "python") {
 		if (!allowPy)
 			throw new ToolError("Python backend is disabled (python.enabled = false, eval.py = false, or PI_PY=0).");
-		if (!(await pythonBackend.isAvailable(session))) {
-			const alternatives = [allowJs ? '"js"' : null, allowRb ? '"rb"' : null, allowJl ? '"jl"' : null].filter(
-				Boolean,
-			);
-			throw new ToolError(
-				alternatives.length > 0
-					? `Python backend is unavailable in this session. Pass language: ${alternatives.join(" or ")} or install the python kernel.`
-					: 'Python backend is unavailable in this session. Install the python kernel to use language: "py".',
-			);
-		}
 		let pyEngine: PyEvalEngine;
+		let pyEngineExplicit: boolean;
 		try {
-			pyEngine = resolvePyEvalEngine(session);
+			({ engine: pyEngine, explicit: pyEngineExplicit } = resolvePyEvalEngineChoice(session));
 		} catch (error) {
 			// Host misconfiguration on the same ToolError channel as the cases above.
 			throw new ToolError(error instanceof Error ? error.message : String(error), { cause: error });
 		}
-		if (pyEngine !== "elide") return { backend: pythonBackend };
-		// Lazy on purpose: a CPython session must never load the runtime Python
-		// executor or kernel seam, so the shipped module graph is unchanged.
-		const { default: elidePythonBackend } = await import("../eval/elide/python");
-		if (await elidePythonBackend.isAvailable(session)) return { backend: elidePythonBackend };
-		// The caller asked for a different engine; running on CPython beats failing,
-		// but it is never silent.
-		return { backend: pythonBackend, notice: "Elide Python engine unavailable; ran on the CPython engine." };
+		// Engine selection resolves ABOVE the CPython availability gate. A host that
+		// has the runtime artifact but no CPython interpreter must be able to run
+		// python cells on the engine it selected; checking CPython first would make
+		// the interpreter a prerequisite for an engine that does not use it, which
+		// is exactly backwards now that `elide` is the default.
+		let elideUnavailable = false;
+		if (pyEngine === "elide") {
+			// Lazy on purpose: a CPython session must never load the runtime Python
+			// executor or kernel seam, so its module graph is unchanged.
+			const { default: elidePythonBackend } = await import("../eval/elide/python");
+			if (await elidePythonBackend.isAvailable(session)) {
+				const { findEvalToolBridgeUse } = await import("../eval/elide/python-executor");
+				const bridgeName = findEvalToolBridgeUse(code);
+				if (!bridgeName) return { backend: elidePythonBackend };
+				// The runtime engine has no Python-side tool bridge (a recorded gap), and
+				// with `elide` as the default the model will routinely write cells that
+				// call `read()`/`agent()`/… because this tool's own prelude documents
+				// them. Failing those cells is not an option; running THIS cell on
+				// CPython is.
+				//
+				// ACCEPTED COST, recorded until the python tool bridge lands: the two
+				// engines are two state universes. A rerouted cell executes in the
+				// CPython kernel's session state, so it does NOT see globals set by
+				// cells that ran on the runtime context, and globals it defines are
+				// invisible to the next runtime-engine cell. Nothing here tries to
+				// unify the two — the notice tells the model instead.
+				if (await pythonBackend.isAvailable(session))
+					return { backend: pythonBackend, notice: PY_BRIDGE_REROUTE_NOTICE };
+				// No CPython to reroute to. Hand the cell back to the runtime engine,
+				// whose preflight turns the same detection into a cell-level error VALUE
+				// naming the gap — a failed cell, never a failed tool call.
+				return { backend: elidePythonBackend };
+			}
+			elideUnavailable = true;
+		}
+		if (!(await pythonBackend.isAvailable(session))) {
+			const alternatives = [allowJs ? '"js"' : null, allowRb ? '"rb"' : null, allowJl ? '"jl"' : null].filter(
+				Boolean,
+			);
+			// Both halves, or the message sends the user to install the wrong thing:
+			// a session that selected `elide` got here because NEITHER engine can be
+			// served, and "install the python kernel" alone hides the runtime library.
+			const cause = elideUnavailable
+				? "Python backend is unavailable in this session: no runtime Python kernel is installed for the Elide engine, and no CPython kernel was found."
+				: "Python backend is unavailable in this session.";
+			const remedy = elideUnavailable
+				? "install the python kernel or a runtime library (runtime.embeddedPath / AURA_RUNTIME_EMBEDDED_LIB)"
+				: "install the python kernel";
+			throw new ToolError(
+				alternatives.length > 0
+					? `${cause} Pass language: ${alternatives.join(" or ")} or ${remedy}.`
+					: `${cause} ${remedy.charAt(0).toUpperCase()}${remedy.slice(1)} to use language: "py".`,
+			);
+		}
+		// The caller asked for a different engine BY NAME; running on CPython beats
+		// failing, but it is never silent. When `elide` came from the default instead,
+		// the user never chose an engine and their cells behave exactly as they always
+		// have, so the notice would be pure noise — suppress it.
+		if (elideUnavailable && pyEngineExplicit) return { backend: pythonBackend, notice: PY_FALLBACK_NOTICE };
+		return { backend: pythonBackend };
 	}
 	if (language === "ruby") {
 		if (!allowRb) throw new ToolError("Ruby backend is disabled (PI_RB=0 or eval.rb = false).");
@@ -353,6 +435,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			rb: backends.ruby,
 			jl: backends.julia,
 			jsEngine: this.#describedJsEngine(),
+			pyEngine: this.#describedPyEngine(),
 			spawns: sessionSpawns,
 		});
 	}
@@ -370,6 +453,24 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			return resolveJsEvalEngine(this.session);
 		} catch {
 			return "bun";
+		}
+	}
+	/**
+	 * The Python engine the description should describe. Same contract as
+	 * {@link #describedJsEngine}: a malformed value degrades to the pre-flip text
+	 * instead of taking the tool listing down over a typo.
+	 *
+	 * Deliberately keyed off SELECTION, not provenance — unlike the fallback
+	 * notice. The line warns about the bridge reroute, which bites precisely the
+	 * default-engine session that DOES have a runtime library; suppressing it for
+	 * default selections would drop the warning exactly where it is needed.
+	 */
+	#describedPyEngine(): PyEvalEngine {
+		if (!this.session) return "cpython";
+		try {
+			return resolvePyEvalEngine(this.session);
+		} catch {
+			return "cpython";
 		}
 	}
 	/** All reuse-chain examples; the `examples` getter filters by enabled languages. */
@@ -482,7 +583,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					: params.language === "jl"
 						? "julia"
 						: "js";
-		const resolved = await resolveBackend(session, cellLanguage);
+		// The code is part of the resolution: a python cell that calls an eval tool
+		// helper cannot be served by the runtime engine, so the backend depends on
+		// what the cell says, not only on the session's settings.
+		const resolved = await resolveBackend(session, cellLanguage, params.code);
 		const cells: ResolvedEvalCell[] = [
 			{
 				index: 0,
